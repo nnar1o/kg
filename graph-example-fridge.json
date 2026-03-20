@@ -1,0 +1,479 @@
+{
+  "metadata": {
+    "name": "Smart Refrigerator Knowledge Graph",
+    "version": "1.0",
+    "description": "Przykladowy graf wiedzy dla inteligentnej lodowki (RTV). Zawiera wszystkie typy wezlow i krawedzi.",
+    "node_count": 17,
+    "edge_count": 21
+  },
+  "nodes": [
+    {
+      "id": "concept:refrigerator",
+      "type": "Concept",
+      "name": "Lodowka",
+      "properties": {
+        "description": "Glowne urzadzenie AGD do przechowywania zywnosci w obnizonych temperaturach. Sklada sie z komory chłodzenia i zamrazarki.",
+        "key_facts": [
+          "Standardowy zakres temperatur: 2-8 st C (chłodziarka), -18 do -24 st C (zamrazarka)",
+          "Zasilanie: 230V AC, pobor mocy 100-400W",
+          "Klasa energetyczna: A++ lub wyzsza dla nowych modeli"
+        ],
+        "alias": [
+          "Chlodziarka",
+          "Fridge"
+        ]
+      },
+      "source_files": [
+        "instrukcja_obslugi.md"
+      ]
+    },
+    {
+      "id": "concept:cooling_chamber",
+      "type": "Concept",
+      "name": "Komora Chlodzenia",
+      "properties": {
+        "description": "Glowna przestrzen do przechowywania produktow swiezych. Utrzymuje temperature w zakresie 2-8 st C.",
+        "key_facts": [
+          "Pojemnosc: 200-350 litrow",
+          "Posiada oddzielne strefy temperatur (szuflady, polki drzwiowe)",
+          "Cyrkulacja powietrza przez wentylator lub konwekcje naturalna"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "instrukcja_obslugi.md"
+      ]
+    },
+    {
+      "id": "concept:temperature",
+      "type": "Concept",
+      "name": "Temperatura",
+      "properties": {
+        "description": "Parametr fizyczny mierzony przez czujniki w komorach. Kluczowy wskaznik prawidlowego dzialania urzadzenia.",
+        "key_facts": [
+          "Mierzona co 60 sekund przez czujniki NTC",
+          "Wartosc docelowa ustawiana przez uzytkownika na panelu",
+          "Odchylenie > 5 st C od wartosci docelowej wyzwala alarm"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "instrukcja_obslugi.md"
+      ]
+    },
+    {
+      "id": "process:cooling",
+      "type": "Process",
+      "name": "Proces Chlodzenia",
+      "properties": {
+        "description": "Glowny cykl pracy sprezarki i ukladu chlodniczego. Odpowiada za utrzymanie zadanej temperatury w komorach.",
+        "key_facts": [
+          "Sterowany przez termostat elektroniczny",
+          "Sprezarka inwerterowa reguluje moc plynnie (10-100%)",
+          "Cykl minimalny: 3 minuty pracy, 1 minuta przerwy (ochrona sprezarki)"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "serwis_techniczny.md"
+      ]
+    },
+    {
+      "id": "process:defrost",
+      "type": "Process",
+      "name": "Rozmrazanie Automatyczne",
+      "properties": {
+        "description": "Cykliczny proces topnienia szronu z parownika. Zapobiega zmniejszeniu wydajnosci chlodzenia przez oblodzenie.",
+        "key_facts": [
+          "Uruchamiany co 8-12 godzin lub po przekroczeniu progu oblodzenia",
+          "Trwa 20-40 minut",
+          "W trakcie rozmrazania sprezarka jest wylaczona",
+          "Skropliny odprowadzane do tacy odparowania"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "serwis_techniczny.md"
+      ]
+    },
+    {
+      "id": "process:diagnostics",
+      "type": "Process",
+      "name": "Autodiagnostyka",
+      "properties": {
+        "description": "Cykliczne sprawdzanie bledow i stanu komponentow. Generuje kody bledow wyswietlane na panelu i zapisywane w logu.",
+        "key_facts": [
+          "Uruchamiana co 5 minut i przy kazdym zdarzeniu alarmowym",
+          "Sprawdza: czujniki, sprezarke, wentylatory, grzalke rozmrazania",
+          "Kody bledow: E1 (czujnik komory), E2 (czujnik parownika), E3 (sprezarka)"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "serwis_techniczny.md"
+      ]
+    },
+    {
+      "id": "datastore:temperature_log",
+      "type": "DataStore",
+      "name": "Log Temperatur",
+      "properties": {
+        "description": "Wewnetrzna pamiec EEPROM przechowujaca historyczne odczyty temperatur i zdarzenia alarmowe. Dane dostepne przez interfejs serwisowy.",
+        "key_facts": [
+          "Pojemnosc: ostatnie 72 godziny odczytow co 1 minute",
+          "Przechowuje rowniez kody bledow z datami wystapienia",
+          "Dostepna przez zlacze serwisowe USB-C lub BT"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "serwis_techniczny.md"
+      ]
+    },
+    {
+      "id": "datastore:settings_storage",
+      "type": "DataStore",
+      "name": "Pamiec Ustawien",
+      "properties": {
+        "description": "Nieulotna pamiec EEPROM przechowujaca ustawienia uzytkownika: zadana temperatura, tryb pracy, preferencje alarmow.",
+        "key_facts": [
+          "Przechowuje ustawienia po odlaczeniu zasilania",
+          "Zapisywana przy kazdej zmianie ustawien przez uzytkownika",
+          "Fabryczny reset przywraca domyslne wartosci"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "instrukcja_obslugi.md"
+      ]
+    },
+    {
+      "id": "interface:touch_panel",
+      "type": "Interface",
+      "name": "Panel Dotykowy",
+      "properties": {
+        "description": "Glowny interfejs uzytkownika zamontowany na drzwiach. Umozliwia ustawianie temperatury, wybor trybu pracy i odczyt alarmow.",
+        "key_facts": [
+          "Wyswietlacz LCD 3.5 cala",
+          "Przyciski dotykowe: +/-, tryb, alarm off, child lock",
+          "Podswietlenie automatyczne wygasa po 30 sekundach"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "instrukcja_obslugi.md"
+      ]
+    },
+    {
+      "id": "interface:smart_api",
+      "type": "Interface",
+      "name": "Smart Home API (REST)",
+      "properties": {
+        "description": "REST API przez WiFi do zdalnego sterowania i monitorowania lodowki. Kompatybilne z Google Home i Amazon Alexa.",
+        "key_facts": [
+          "Endpoint: GET /status, POST /settings, GET /logs",
+          "Autentykacja: OAuth2 przez konto producenta",
+          "Push notyfikacje przez WebSocket przy alarmach"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "smart_home_integration.md"
+      ]
+    },
+    {
+      "id": "rule:temperature_alarm_rule",
+      "type": "Rule",
+      "name": "Regula Alarmu Temperatury",
+      "properties": {
+        "description": "Regula biznesowa wyzwalajaca alarm dzwiekowy i wizualny gdy temperatura komory odbiega od zadanej o wiecej niz 5 st C przez ponad 15 minut.",
+        "key_facts": [
+          "Prog: odchylenie > 5 st C przez >= 15 minut",
+          "Wyzwala: alarm dzwiekowy (3x bzyczek co 30 sek) + miganie wyswietlacza",
+          "Alarm wyciszany recznie lub automatycznie gdy temperatura wraca do normy",
+          "Nie wyzwala sie podczas procesu rozmrazania"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "serwis_techniczny.md"
+      ]
+    },
+    {
+      "id": "rule:defrost_schedule_rule",
+      "type": "Rule",
+      "name": "Regula Harmonogramu Rozmrazania",
+      "properties": {
+        "description": "Regula okreslajaca kiedy uruchomic automatyczne rozmrazanie. Bazuje na czasie pracy i poziomie oblodzenia parownika.",
+        "key_facts": [
+          "Uruchom jesli: czas od ostatniego rozmrazania > 12h LUB oblodzenie parownika > 4mm",
+          "Opoznij rozmrazanie jesli: drzwi sa czesto otwierane (> 3x w ciagu ostatnich 10 min)",
+          "Priorytet: noce (22:00-6:00) dla minimalnego wplywu na temperature zywnosci"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "serwis_techniczny.md"
+      ]
+    },
+    {
+      "id": "feature:vacation_mode",
+      "type": "Feature",
+      "name": "Tryb Urlopowy",
+      "properties": {
+        "description": "Specjalny tryb pracy zmniejszajacy zuzycie energii podczas dluzszej nieobecnosci uzytkownika. Utrzymuje minimalna temperature zapobiegajaca pleśni.",
+        "key_facts": [
+          "Temperatura komory chlodzenia: 15 st C (zamiast standardowych 4 st C)",
+          "Zamrazarka: bez zmian (-18 st C)",
+          "Oszczednosc energii: ok. 30% w stosunku do trybu normalnego"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "instrukcja_obslugi.md"
+      ]
+    },
+    {
+      "id": "decision:inverter_compressor",
+      "type": "Decision",
+      "name": "Wybor Sprezarki Inwerterowej",
+      "properties": {
+        "description": "Decyzja projektowa o zastosowaniu sprezarki inwerterowej zamiast tradycyjnej jednostopniowej. Podyktowana wymogami klasy energetycznej A+++ i poziomem halasu.",
+        "key_facts": [
+          "Sprezarka inwerterowa: koszt +40%, oszczednosc energii 20-35%",
+          "Poziom halasu: 32 dB(A) vs 42 dB(A) dla tradycyjnej",
+          "Zywotnosc: szacowana 15-20 lat vs 10-12 lat",
+          "Wymog klasy A+++ niemozliwy do spelnienia bez inwertera"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "dokumentacja_projektowa.md"
+      ]
+    },
+    {
+      "id": "convention:error_code_format",
+      "type": "Convention",
+      "name": "Konwencja Kodow Bledow",
+      "properties": {
+        "description": "Konwencja nazewnictwa kodow bledow w oprogramowaniu sterownika. Format: litera E + cyfra (E1-E9) dla krytycznych, F + cyfra dla ostrzezen.",
+        "key_facts": [
+          "E1-E9: bledy krytyczne (zatrzymuja sprezarke)",
+          "F1-F9: ostrzezenia (urzadzenie pracuje, wymaga uwagi)",
+          "E5: zawsze oznacza blad komunikacji z modułem WiFi",
+          "Kody powyzej E9/F9 zarezerwowane dla przyszlych modeli"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "serwis_techniczny.md"
+      ]
+    },
+    {
+      "id": "note:energy_peak_hours",
+      "type": "Note",
+      "name": "Uwaga: Zuzycie Energii w Godzinach Szczytowych",
+      "properties": {
+        "description": "Obserwacja operacyjna: sprezarka inwerterowa w starszych modelach (firmware < 2.1) nie uwzglednia taryf energetycznych. Aktualizacja firmware 2.1+ dodaje schedulowanie rozmrazania poza godzinami szczytowymi.",
+        "key_facts": [
+          "Firmware < 2.1: rozmrazanie w dowolnej porze",
+          "Firmware >= 2.1: rozmrazanie preferuje godziny 22:00-6:00",
+          "Aktualizacja firmware przez Smart Home API lub serwis"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "serwis_techniczny.md"
+      ]
+    },
+    {
+      "id": "bug:defrost_sensor_false_trigger",
+      "type": "Bug",
+      "name": "Falszywy Alarm Po Rozmrazaniu (firmware 2.0)",
+      "properties": {
+        "description": "Znany blad w firmware 2.0: po zakonczeniu cyklu rozmrazania czujnik parownika przez okolo 5 minut zwraca temperature powyzej progu alarmowego, co wyzwala falszywy alarm temperaturowy.",
+        "key_facts": [
+          "Dotyczy: firmware 2.0 (wersje 2.0.0 - 2.0.7)",
+          "Objaw: alarm E2 przez 3-5 minut po kazdym rozmrazaniu",
+          "Przyczyna: brak 5-minutowego okna ignorowania alarmu po rozmrazaniu",
+          "Rozwiazanie: aktualizacja do firmware 2.1+",
+          "Obejscie: reczne wyciszenie alarmu lub wylaczenie alarmu E2 w ustawieniach"
+        ],
+        "alias": []
+      },
+      "source_files": [
+        "serwis_techniczny.md"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "concept:refrigerator",
+      "relation": "HAS",
+      "target_id": "concept:cooling_chamber",
+      "properties": {
+        "detail": "Lodowka zawiera komore chlodzenia jako glowny komponent"
+      }
+    },
+    {
+      "source_id": "concept:temperature",
+      "relation": "STORED_IN",
+      "target_id": "datastore:temperature_log",
+      "properties": {
+        "detail": "Odczyty temperatury zapisywane w logu co 60 sekund"
+      }
+    },
+    {
+      "source_id": "rule:temperature_alarm_rule",
+      "relation": "TRIGGERS",
+      "target_id": "process:diagnostics",
+      "properties": {
+        "detail": "Przekroczenie progu temperatury wyzwala autodiagnostyke"
+      }
+    },
+    {
+      "source_id": "process:diagnostics",
+      "relation": "CREATED_BY",
+      "target_id": "process:cooling",
+      "properties": {
+        "detail": "Diagnostyka inicjowana przez zdarzenia z procesu chlodzenia"
+      }
+    },
+    {
+      "source_id": "process:cooling",
+      "relation": "AFFECTED_BY",
+      "target_id": "concept:temperature",
+      "properties": {
+        "detail": "Temperatura komory bezposrednio steruje cyklem pracy sprezarki"
+      }
+    },
+    {
+      "source_id": "feature:vacation_mode",
+      "relation": "AVAILABLE_IN",
+      "target_id": "interface:touch_panel",
+      "properties": {
+        "detail": "Tryb urlopowy wlaczany przez panel dotykowy (przytrzymaj 3 sek tryb)"
+      }
+    },
+    {
+      "source_id": "feature:vacation_mode",
+      "relation": "AVAILABLE_IN",
+      "target_id": "interface:smart_api",
+      "properties": {
+        "detail": "Tryb urlopowy dostepny przez REST API (POST /settings {mode: vacation})"
+      }
+    },
+    {
+      "source_id": "concept:refrigerator",
+      "relation": "DOCUMENTED_IN",
+      "target_id": "interface:smart_api",
+      "properties": {
+        "detail": "Specyfikacja API opisana w smart_home_integration.md"
+      }
+    },
+    {
+      "source_id": "process:defrost",
+      "relation": "DEPENDS_ON",
+      "target_id": "rule:defrost_schedule_rule",
+      "properties": {
+        "detail": "Rozmrazanie uruchamiane wylacznie zgodnie z regula harmonogramu"
+      }
+    },
+    {
+      "source_id": "concept:cooling_chamber",
+      "relation": "TRANSITIONS",
+      "target_id": "feature:vacation_mode",
+      "properties": {
+        "detail": "Komora przechodzi z trybu normalnego do urlopowego (temp 4->15 st C)"
+      }
+    },
+    {
+      "source_id": "process:cooling",
+      "relation": "DECIDED_BY",
+      "target_id": "decision:inverter_compressor",
+      "properties": {
+        "detail": "Algorytm chlodzenia zaprojektowany pod sprezarke inwerterowa"
+      }
+    },
+    {
+      "source_id": "process:cooling",
+      "relation": "GOVERNED_BY",
+      "target_id": "rule:temperature_alarm_rule",
+      "properties": {
+        "detail": "Przekroczenie progu alarmu moze wymuszac zwiekszenie mocy chlodzenia"
+      }
+    },
+    {
+      "source_id": "concept:temperature",
+      "relation": "STORED_IN",
+      "target_id": "datastore:settings_storage",
+      "properties": {
+        "detail": "Zadana temperatura uzytkownika zapisana w pamieci ustawien"
+      }
+    },
+    {
+      "source_id": "process:defrost",
+      "relation": "TRIGGERS",
+      "target_id": "bug:defrost_sensor_false_trigger",
+      "properties": {
+        "detail": "Rozmrazanie wyzwala falszywy alarm w firmware 2.0 po zakonczeniu cyklu"
+      }
+    },
+    {
+      "source_id": "bug:defrost_sensor_false_trigger",
+      "relation": "AFFECTED_BY",
+      "target_id": "convention:error_code_format",
+      "properties": {
+        "detail": "Blad manifestuje sie jako kod E2 wg konwencji kodow bledow"
+      }
+    },
+    {
+      "source_id": "datastore:temperature_log",
+      "relation": "AVAILABLE_IN",
+      "target_id": "interface:smart_api",
+      "properties": {
+        "detail": "Historia temperatur dostepna przez GET /logs w Smart Home API"
+      }
+    },
+    {
+      "source_id": "note:energy_peak_hours",
+      "relation": "DEPENDS_ON",
+      "target_id": "process:defrost",
+      "properties": {
+        "detail": "Optymalizacja godzinowa dotyczy harmonogramowania rozmrazania"
+      }
+    },
+    {
+      "source_id": "process:diagnostics",
+      "relation": "GOVERNED_BY",
+      "target_id": "convention:error_code_format",
+      "properties": {
+        "detail": "Kody bledow generowane przez diagnostyke zgodne z konwencja E/F"
+      }
+    },
+    {
+      "source_id": "decision:inverter_compressor",
+      "relation": "DOCUMENTED_IN",
+      "target_id": "interface:touch_panel",
+      "properties": {
+        "detail": "Panel informuje o trybie pracy sprezarki (ikona eco)"
+      }
+    },
+    {
+      "source_id": "concept:refrigerator",
+      "relation": "HAS",
+      "target_id": "concept:temperature",
+      "properties": {
+        "detail": "Lodowka posiada czujniki temperatury we wszystkich komorach"
+      }
+    },
+    {
+      "source_id": "concept:refrigerator",
+      "relation": "USES",
+      "target_id": "interface:smart_api",
+      "properties": {
+        "detail": "Lodowka moze byc sterowana zdalnie przez API"
+      }
+    }
+  ]
+}

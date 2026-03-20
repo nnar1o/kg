@@ -1,0 +1,16 @@
+[package]
+name = "kg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+nucleo-matcher = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+strsim = "0.11"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.15"
