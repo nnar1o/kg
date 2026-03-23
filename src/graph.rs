@@ -1,7 +1,11 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 
 /// Write `data` to `dest` atomically:
@@ -19,6 +23,65 @@ fn atomic_write(dest: &Path, data: &str) -> Result<()> {
     fs::rename(&tmp, dest).with_context(|| format!("failed to rename tmp to {}", dest.display()))
 }
 
+const BACKUP_STALE_SECS: u64 = 60 * 60;
+
+fn backup_graph_if_stale(path: &Path, data: &str) -> Result<()> {
+    let parent = match path.parent() {
+        Some(parent) => parent,
+        None => return Ok(()),
+    };
+    let stem = match path.file_stem().and_then(|s| s.to_str()) {
+        Some(stem) => stem,
+        None => return Ok(()),
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("time went backwards")?
+        .as_secs();
+    if let Some(latest) = latest_backup_ts(parent, stem)? {
+        if now.saturating_sub(latest) < BACKUP_STALE_SECS {
+            return Ok(());
+        }
+    }
+
+    let backup_path = parent.join(format!("{stem}.bck.{now}.gz"));
+    let tmp_path = backup_path.with_extension("tmp");
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data.as_bytes())?;
+    let encoded = encoder.finish()?;
+    fs::write(&tmp_path, encoded)
+        .with_context(|| format!("failed to write tmp: {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, &backup_path)
+        .with_context(|| format!("failed to rename tmp to {}", backup_path.display()))?;
+    Ok(())
+}
+
+fn latest_backup_ts(dir: &Path, stem: &str) -> Result<Option<u64>> {
+    let prefix = format!("{stem}.bck.");
+    let suffix = ".gz";
+    let mut latest = None;
+    for entry in fs::read_dir(dir).with_context(|| format!("read dir: {}", dir.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(&prefix) || !name.ends_with(suffix) {
+            continue;
+        }
+        let ts_part = &name[prefix.len()..name.len() - suffix.len()];
+        if let Ok(ts) = ts_part.parse::<u64>() {
+            match latest {
+                Some(current) => {
+                    if ts > current {
+                        latest = Some(ts);
+                    }
+                }
+                None => latest = Some(ts),
+            }
+        }
+    }
+    Ok(latest)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphFile {
     pub metadata: Metadata,
@@ -26,6 +89,8 @@ pub struct GraphFile {
     pub nodes: Vec<Node>,
     #[serde(default)]
     pub edges: Vec<Edge>,
+    #[serde(default)]
+    pub notes: Vec<Note>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +130,12 @@ pub struct NodeProperties {
     pub key_facts: Vec<String>,
     #[serde(default)]
     pub alias: Vec<String>,
+    #[serde(default)]
+    pub feedback_score: f64,
+    #[serde(default)]
+    pub feedback_count: u64,
+    #[serde(default)]
+    pub feedback_last_ts_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +151,30 @@ pub struct Edge {
 pub struct EdgeProperties {
     #[serde(default)]
     pub detail: String,
+    #[serde(default)]
+    pub feedback_score: f64,
+    #[serde(default)]
+    pub feedback_count: u64,
+    #[serde(default)]
+    pub feedback_last_ts_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Note {
+    pub id: String,
+    pub node_id: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub provenance: String,
+    #[serde(default)]
+    pub source_files: Vec<String>,
 }
 
 impl GraphFile {
@@ -94,6 +189,7 @@ impl GraphFile {
             },
             nodes: Vec::new(),
             edges: Vec::new(),
+            notes: Vec::new(),
         }
     }
 
@@ -110,7 +206,8 @@ impl GraphFile {
         let mut graph = self.clone();
         graph.refresh_counts();
         let raw = serde_json::to_string_pretty(&graph).context("failed to serialize graph")?;
-        atomic_write(path, &raw)
+        atomic_write(path, &raw)?;
+        backup_graph_if_stale(path, &raw)
     }
 
     pub fn refresh_counts(&mut self) {

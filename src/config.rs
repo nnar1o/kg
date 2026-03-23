@@ -8,6 +8,8 @@ use serde::Deserialize;
 #[derive(Debug, Default, Deserialize)]
 pub struct KgConfig {
     #[serde(default)]
+    pub backend: Option<String>,
+    #[serde(default)]
     pub graph_dir: Option<PathBuf>,
     #[serde(default)]
     pub graphs: HashMap<String, PathBuf>,

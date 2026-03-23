@@ -6,13 +6,18 @@ Use this skill when asked to build or extend a knowledge graph from source mater
 
 Read the provided source material and extract entities and relations into a knowledge graph using the `kg` CLI.
 
-## Step 1: understand the domain
+## Step 1: plan before execution
 
 Before adding nodes, briefly answer:
 - What are the main concepts/entities in this material?
 - What processes or data flows exist?
 - What rules, interfaces, or data stores appear?
 - What are the key relationships between them?
+
+Then produce a short plan that includes:
+- Proposed nodes with types and IDs
+- Proposed edges (source -> relation -> target)
+- Any ambiguities or missing info that block accurate extraction
 
 Do not skip this step. Bad node decomposition is the main source of low-quality graphs.
 
@@ -98,7 +103,7 @@ Tips:
 - prefer specific relations (`READS_FROM`, `STORES`) over generic ones (`USES`) where applicable
 - one edge per actual relationship — do not add redundant edges
 
-## Step 5: verify
+## Step 5: verify and validate
 
 ```bash
 kg <graph> check

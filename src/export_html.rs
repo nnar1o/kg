@@ -1,4 +1,4 @@
-use crate::graph::GraphFile;
+use crate::graph::{GraphFile, Note};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
@@ -32,6 +32,25 @@ fn escape_js_string(s: &str) -> String {
         .replace('\t', "\\t")
 }
 
+fn format_note(note: &Note) -> String {
+    let mut out = String::new();
+    if !note.created_at.is_empty() {
+        out.push_str(&note.created_at);
+        out.push(' ');
+    }
+    if !note.author.is_empty() {
+        out.push_str(&note.author);
+        out.push_str(": ");
+    }
+    out.push_str(&note.body);
+    if !note.tags.is_empty() {
+        out.push_str(" [");
+        out.push_str(&note.tags.join(", "));
+        out.push(']');
+    }
+    out
+}
+
 fn node_color(node_type: &str) -> &'static str {
     match node_type {
         "Concept" => "#4A90D9",
@@ -49,6 +68,14 @@ fn node_color(node_type: &str) -> &'static str {
 }
 
 fn render_html(graph: &GraphFile, title: &str) -> String {
+    let mut notes_by_node: HashMap<&str, Vec<String>> = HashMap::new();
+    for note in &graph.notes {
+        notes_by_node
+            .entry(note.node_id.as_str())
+            .or_default()
+            .push(format_note(note));
+    }
+
     let nodes_js = graph
         .nodes
         .iter()
@@ -77,6 +104,16 @@ fn render_html(graph: &GraphFile, title: &str) -> String {
                 .map(|s| format!("\"{}\"", escape_js_string(s)))
                 .collect::<Vec<_>>()
                 .join(",");
+            let notes_js = notes_by_node
+                .get(n.id.as_str())
+                .map(|notes| {
+                    notes
+                        .iter()
+                        .map(|note| format!("\"{}\"", escape_js_string(note)))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default();
             let confidence = n
                 .properties
                 .confidence
@@ -84,7 +121,7 @@ fn render_html(graph: &GraphFile, title: &str) -> String {
                 .unwrap_or_default();
             let color = node_color(&n.r#type);
             format!(
-                r#"{{data:{{id:"{id}",label:"{name}",type:"{ntype}",desc:"{desc}",facts:[{facts_js}],aliases:[{aliases_js}],sources:[{sources_js}],confidence:"{confidence}",color:"{color}"}}}}"#
+                r#"{{data:{{id:"{id}",label:"{name}",type:"{ntype}",desc:"{desc}",facts:[{facts_js}],aliases:[{aliases_js}],sources:[{sources_js}],notes:[{notes_js}],confidence:"{confidence}",color:"{color}"}}}}"#
             )
         })
         .collect::<Vec<_>>()
@@ -249,7 +286,8 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 #detail-content .d-desc{{color:#aaa;margin-bottom:8px;line-height:1.5}}
 #detail-content .d-section{{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#444;margin:8px 0 3px}}
 #detail-content .d-pill{{display:inline-block;padding:2px 6px;border-radius:4px;background:#252833;border:1px solid #3a3d4a;font-size:10px;color:#aaa;margin:2px 2px 2px 0}}
-#detail-content .d-fact{{padding:3px 0;border-bottom:1px solid #1e2030;color:#bbb;font-size:11px}}
+  #detail-content .d-fact{{padding:3px 0;border-bottom:1px solid #1e2030;color:#bbb;font-size:11px}}
+  #detail-content .d-note{{padding:3px 0;border-bottom:1px solid #1e2030;color:#bbb;font-size:11px}}
 #detail-content .d-edge{{display:flex;align-items:flex-start;gap:4px;padding:3px 0;font-size:10px;border-bottom:1px solid #1e2030}}
 #detail-content .d-edge:last-child{{border-bottom:none}}
 .d-edge-dir{{color:#555;font-size:9px;flex-shrink:0;width:12px}}
@@ -551,6 +589,7 @@ function showDetail(node) {{
     : '<span style="color:#444">&#8212;</span>';
   var aliasesHtml = d.aliases.length ? d.aliases.map(function(a) {{ return '<span class="d-pill">' + a + '</span>'; }}).join('') : '';
   var sourcesHtml = d.sources.length ? d.sources.map(function(s) {{ return '<span class="d-pill">' + s + '</span>'; }}).join('') : '';
+  var notesHtml = d.notes.length ? d.notes.map(function(n) {{ return '<div class="d-note">' + n + '</div>'; }}).join('') : '';
   var confHtml = d.confidence ? '<div class="d-conf">Confidence: ' + d.confidence + '</div>' : '';
   var degree = outE.length + inE.length;
 
@@ -562,6 +601,7 @@ function showDetail(node) {{
     confHtml +
     (aliasesHtml ? '<div class="d-section">Aliases</div>' + aliasesHtml : '') +
     '<div class="d-section">Facts (' + d.facts.length + ')</div>' + factsHtml +
+    (notesHtml ? '<div class="d-section">Notes (' + d.notes.length + ')</div>' + notesHtml : '') +
     '<div class="d-section">Connections (' + degree + ')</div>' + (edgesHtml || '<span style="color:#444">&#8212;</span>') +
     (sourcesHtml ? '<div class="d-section">Sources</div>' + sourcesHtml : '');
 }}

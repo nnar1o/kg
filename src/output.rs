@@ -4,17 +4,40 @@ use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use crate::graph::{Edge, GraphFile, Node};
+use crate::index::Bm25Index;
+
+const BM25_K1: f64 = 1.5;
+const BM25_B: f64 = 0.75;
+
+#[derive(Debug, Clone, Copy)]
+pub enum FindMode {
+    Fuzzy,
+    Bm25,
+}
 
 pub fn render_find(
     graph: &GraphFile,
     queries: &[String],
     limit: usize,
     include_features: bool,
+    mode: FindMode,
     full: bool,
+) -> String {
+    render_find_with_index(graph, queries, limit, include_features, mode, full, None)
+}
+
+pub fn render_find_with_index(
+    graph: &GraphFile,
+    queries: &[String],
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    full: bool,
+    index: Option<&Bm25Index>,
 ) -> String {
     let mut sections = Vec::new();
     for query in queries {
-        let matches = find_matches(graph, query, limit, include_features);
+        let matches = find_matches_with_index(graph, query, limit, include_features, mode, index);
         let mut lines = vec![format!("? {query} ({})", matches.len())];
         for node in matches {
             lines.push(render_node_block(graph, node, full));
@@ -22,6 +45,59 @@ pub fn render_find(
         sections.push(lines.join("\n"));
     }
     format!("{}\n", sections.join("\n\n"))
+}
+
+pub fn find_nodes(
+    graph: &GraphFile,
+    query: &str,
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+) -> Vec<Node> {
+    find_matches_with_index(graph, query, limit, include_features, mode, None)
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+pub fn find_nodes_with_index(
+    graph: &GraphFile,
+    query: &str,
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    index: Option<&Bm25Index>,
+) -> Vec<Node> {
+    find_matches_with_index(graph, query, limit, include_features, mode, index)
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+pub fn count_find_results(
+    graph: &GraphFile,
+    queries: &[String],
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+) -> usize {
+    count_find_results_with_index(graph, queries, limit, include_features, mode, None)
+}
+
+pub fn count_find_results_with_index(
+    graph: &GraphFile,
+    queries: &[String],
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    index: Option<&Bm25Index>,
+) -> usize {
+    let mut total = 0;
+    for query in queries {
+        let matches = find_matches_with_index(graph, query, limit, include_features, mode, index);
+        total += matches.len();
+    }
+    total
 }
 
 pub fn render_node(graph: &GraphFile, node: &Node, full: bool) -> String {
@@ -60,6 +136,15 @@ fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
     }
     if node.properties.key_facts.len() > facts_to_show || full {
         lines.push(format!("({} facts total)", node.properties.key_facts.len()));
+    }
+
+    let note_count = graph
+        .notes
+        .iter()
+        .filter(|note| note.node_id == node.id)
+        .count();
+    if full && note_count > 0 {
+        lines.push(format!("notes: {note_count}"));
     }
 
     for edge in outgoing_edges(graph, &node.id, full) {
@@ -129,23 +214,33 @@ fn truncate(value: &str, max_len: usize) -> String {
     format!("{truncated}...")
 }
 
-fn find_matches<'a>(
+fn find_matches_with_index<'a>(
     graph: &'a GraphFile,
     query: &str,
     limit: usize,
     include_features: bool,
+    mode: FindMode,
+    index: Option<&Bm25Index>,
 ) -> Vec<&'a Node> {
-    let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
-    let mut matcher = Matcher::new(Config::DEFAULT);
-    let mut scored: Vec<(u32, Reverse<&str>, &'a Node)> = graph
-        .nodes
-        .iter()
-        .filter(|node| include_features || node.r#type != "Feature")
-        .filter_map(|node| {
-            score_node(node, query, &pattern, &mut matcher)
-                .map(|score| (score, Reverse(node.id.as_str()), node))
-        })
-        .collect();
+    let mut scored: Vec<(i64, Reverse<&str>, &'a Node)> = match mode {
+        FindMode::Fuzzy => {
+            let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+            let mut matcher = Matcher::new(Config::DEFAULT);
+            graph
+                .nodes
+                .iter()
+                .filter(|node| include_features || node.r#type != "Feature")
+                .filter_map(|node| {
+                    score_node(node, query, &pattern, &mut matcher).map(|score| {
+                        let base = score as i64;
+                        let boost = feedback_boost(node);
+                        (base + boost, Reverse(node.id.as_str()), node)
+                    })
+                })
+                .collect()
+        }
+        FindMode::Bm25 => score_bm25(graph, query, include_features, index),
+    };
 
     scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
     scored
@@ -153,6 +248,148 @@ fn find_matches<'a>(
         .take(limit)
         .map(|(_, _, node)| node)
         .collect()
+}
+
+fn feedback_boost(node: &Node) -> i64 {
+    let count = node.properties.feedback_count as f64;
+    if count <= 0.0 {
+        return 0;
+    }
+    let avg = node.properties.feedback_score / count;
+    let confidence = (count.ln_1p() / 3.0).min(1.0);
+    let scaled = avg * 200.0 * confidence;
+    scaled.clamp(-300.0, 300.0).round() as i64
+}
+
+fn score_bm25<'a>(
+    graph: &'a GraphFile,
+    query: &str,
+    include_features: bool,
+    index: Option<&Bm25Index>,
+) -> Vec<(i64, Reverse<&'a str>, &'a Node)> {
+    let terms = tokenize(query);
+    if terms.is_empty() {
+        return Vec::new();
+    }
+
+    if let Some(idx) = index {
+        let results = idx.search(&terms, graph);
+        return results
+            .into_iter()
+            .filter_map(|(node_id, score)| {
+                let node = graph.node_by_id(&node_id)?;
+                if !include_features && node.r#type == "Feature" {
+                    return None;
+                }
+                let boost = feedback_boost(node) as f64;
+                let combined = (score as f64 * 100.0 + boost).round() as i64;
+                Some((combined, Reverse(node.id.as_str()), node))
+            })
+            .collect();
+    }
+
+    let mut docs: Vec<(&'a Node, Vec<String>)> = graph
+        .nodes
+        .iter()
+        .filter(|node| include_features || node.r#type != "Feature")
+        .map(|node| (node, tokenize(&node_document_text(graph, node))))
+        .collect();
+
+    if docs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut df: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for term in &terms {
+        let mut count = 0usize;
+        for (_, tokens) in &docs {
+            if tokens.iter().any(|t| t == term) {
+                count += 1;
+            }
+        }
+        df.insert(term.as_str(), count);
+    }
+
+    let total_docs = docs.len() as f64;
+    let avgdl = docs
+        .iter()
+        .map(|(_, tokens)| tokens.len() as f64)
+        .sum::<f64>()
+        / total_docs;
+
+    let mut scored = Vec::new();
+
+    for (node, tokens) in docs.drain(..) {
+        let dl = tokens.len() as f64;
+        if dl == 0.0 {
+            continue;
+        }
+        let mut score = 0.0f64;
+        for term in &terms {
+            let tf = tokens.iter().filter(|t| *t == term).count() as f64;
+            if tf == 0.0 {
+                continue;
+            }
+            let df_t = *df.get(term.as_str()).unwrap_or(&0) as f64;
+            let idf = (1.0 + (total_docs - df_t + 0.5) / (df_t + 0.5)).ln();
+            let denom = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avgdl));
+            score += idf * (tf * (BM25_K1 + 1.0) / denom);
+        }
+        if score > 0.0 {
+            let boost = feedback_boost(node) as f64;
+            let combined = score * 100.0 + boost;
+            scored.push((combined.round() as i64, Reverse(node.id.as_str()), node));
+        }
+    }
+
+    scored
+}
+
+fn node_document_text(graph: &GraphFile, node: &Node) -> String {
+    let mut out = String::new();
+    push_field(&mut out, &node.id);
+    push_field(&mut out, &node.name);
+    push_field(&mut out, &node.properties.description);
+    for alias in &node.properties.alias {
+        push_field(&mut out, alias);
+    }
+    for fact in &node.properties.key_facts {
+        push_field(&mut out, fact);
+    }
+    for note in graph.notes.iter().filter(|note| note.node_id == node.id) {
+        push_field(&mut out, &note.body);
+        for tag in &note.tags {
+            push_field(&mut out, tag);
+        }
+    }
+    out
+}
+
+fn push_field(target: &mut String, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    if !target.is_empty() {
+        target.push(' ');
+    }
+    target.push_str(value);
+}
+
+fn tokenize(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            current.push(ch.to_ascii_lowercase());
+        } else if !current.is_empty() {
+            tokens.push(current.clone());
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 fn score_node(node: &Node, query: &str, pattern: &Pattern, matcher: &mut Matcher) -> Option<u32> {
@@ -236,7 +473,7 @@ fn textual_bonus(query: &str, value: &str) -> u32 {
         return 200;
     }
 
-    let token_bonus = query
+    query
         .split_whitespace()
         .map(|token| {
             if value.contains(token) {
@@ -247,9 +484,7 @@ fn textual_bonus(query: &str, value: &str) -> u32 {
                 0
             }
         })
-        .sum();
-
-    token_bonus
+        .sum()
 }
 
 fn is_subsequence(needle: &str, haystack: &str) -> bool {

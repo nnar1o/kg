@@ -1,2 +1,6 @@
 /target
 /.opencode
+/docs/competition.md
+*.priv
+*.pub
+!*.pub.reguide

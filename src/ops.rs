@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 
 use crate::graph::{Edge, GraphFile, Node};
 
@@ -135,5 +135,97 @@ pub fn remove_edge(
 pub fn push_unique(items: &mut Vec<String>, value: String) {
     if !items.iter().any(|item| item == &value) {
         items.push(value);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_unique_adds_new_items() {
+        let mut items = vec!["a".to_string(), "b".to_string()];
+        push_unique(&mut items, "c".to_string());
+        assert_eq!(items, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn push_unique_ignores_duplicates() {
+        let mut items = vec!["a".to_string(), "b".to_string()];
+        push_unique(&mut items, "a".to_string());
+        assert_eq!(items, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn add_node_rejects_duplicate_id() {
+        use crate::graph::{GraphFile, Node, NodeProperties};
+        let mut graph = GraphFile::new("test");
+        let node = Node {
+            id: "n1".to_string(),
+            name: "Test Node".to_string(),
+            r#type: "Concept".to_string(),
+            properties: NodeProperties::default(),
+            source_files: vec!["test.rs".to_string()],
+        };
+        add_node(&mut graph, node.clone()).unwrap();
+        let result = add_node(&mut graph, node);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "node already exists: n1");
+    }
+
+    #[test]
+    fn add_node_requires_source() {
+        use crate::graph::{GraphFile, Node, NodeProperties};
+        let mut graph = GraphFile::new("test");
+        let node = Node {
+            id: "n1".to_string(),
+            name: "Test Node".to_string(),
+            r#type: "Concept".to_string(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        };
+        let result = add_node(&mut graph, node);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "at least one --source is required"
+        );
+    }
+
+    #[test]
+    fn remove_node_returns_removed_count() {
+        use crate::graph::{GraphFile, Node, NodeProperties};
+        let mut graph = GraphFile::new("test");
+        let node = Node {
+            id: "n1".to_string(),
+            name: "Test Node".to_string(),
+            r#type: "Concept".to_string(),
+            properties: NodeProperties::default(),
+            source_files: vec!["test.rs".to_string()],
+        };
+        add_node(&mut graph, node).unwrap();
+        let removed = remove_node(&mut graph, "n1").unwrap();
+        assert_eq!(removed, 0);
+        assert!(graph.nodes.is_empty());
+    }
+
+    #[test]
+    fn add_edge_validates_source_exists() {
+        use crate::graph::{Edge, EdgeProperties, GraphFile};
+        let mut graph = GraphFile::new("test");
+        let edge = Edge {
+            source_id: "nonexistent".to_string(),
+            target_id: "n1".to_string(),
+            relation: "connects".to_string(),
+            properties: EdgeProperties::default(),
+        };
+        let result = add_edge(&mut graph, edge);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("source node not found")
+        );
     }
 }
