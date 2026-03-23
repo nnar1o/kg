@@ -22,7 +22,7 @@ A fast CLI for managing JSON knowledge graphs with native MCP server support. Bu
 ### Quick (curl)
 
 ```sh
-curl -sSL https://raw.githubusercontent.com/nnar1o/kg/main/install.sh | sh
+  curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
 ```
 
 ### From source
