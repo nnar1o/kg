@@ -15,6 +15,14 @@ A fast CLI for managing JSON knowledge graphs with native MCP server support. Bu
 
 ## Install
 
+### Quick (curl)
+
+```sh
+curl -sSL https://raw.githubusercontent.com/nnar1o/kg/main/install.sh | sh
+```
+
+### From source
+
 ```sh
 cargo install --path . --locked --root ~/.local
 export PATH="$HOME/.local/bin:$PATH"
