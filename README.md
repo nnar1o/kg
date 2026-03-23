@@ -1,6 +1,8 @@
 # kg — local knowledge graph CLI
 
-A fast, opinionated CLI for managing JSON knowledge graphs. Built for LLM chat workflows: every command outputs deterministic symbolic plain text by default, with `--json` for machine output, and an MCP server is included for tool integrations.
+> **Beta** — This software is in active development. APIs may change.
+
+A fast, opinionated CLI for managing JSON knowledge graphs with **native MCP server support**. Built for LLM chat workflows: every command outputs deterministic symbolic plain text by default, with `--json` for machine output.
 
 ## Installation
 
@@ -305,9 +307,16 @@ OpenCode-compatible skill files for AI-assisted usage:
 
 To use: copy the `skills/` directory to `~/.config/opencode/skills/`.
 
-## MCP server (rmcp)
+## MCP Server — First-class integration
 
-`kg` ships a native MCP stdio server built with [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk).
+`kg` ships a native MCP stdio server built with [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk). This is the **primary way** to integrate with LLMs and AI assistants.
+
+### Why MCP?
+
+- **Tool integration** — expose all kg operations as MCP tools
+- **Structured feedback** — send feedback signals back to the graph
+- **Quality gaps** — query missing descriptions, facts, edge gaps
+- **Graph browsing** — interactive HTML export for visualization
 
 ### Run locally
 
