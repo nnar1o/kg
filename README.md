@@ -1,8 +1,8 @@
 # kg — local knowledge graph CLI
 
-![CI](https://img.shields.io/github/actions/workflow/status/nnar1o/kg/ci.yml?branch=main)
+![CI](https://img.shields.io/github/actions/workflow/status/nnar1o/kg/ci.yml?branch=master)
 ![Release](https://img.shields.io/github/v/release/nnar1o/kg?display_name=tag&sort=semver)
-![License](https://img.shields.io/github/license/nnar1o/kg)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 
 > **Beta** — This software is in active development. APIs may change.
 
