@@ -16,8 +16,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Run sccache
+        uses: mozilla-actions/sccache-action@v0.0.6
+
       - name: Build release
-        run: cargo build --release
+        run: RUSTC_WRAPPER=sccache cargo build --release
 
       - name: Create checksums
         run: |
@@ -26,6 +29,9 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: false
+          body: |
+            Release ${{ github.ref_name }}
           files: |
             target/release/kg
             target/release/kg-mcp

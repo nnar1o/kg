@@ -1,5 +1,9 @@
 # kg — local knowledge graph CLI
 
+![Release](https://img.shields.io/github/v/release/nnar1o/kg?display_name=tag&sort=semver)
+![Release workflow](https://img.shields.io/github/actions/workflow/status/nnar1o/kg/release.yml?branch=main)
+![License](https://img.shields.io/github/license/nnar1o/kg)
+
 > **Beta** — This software is in active development. APIs may change.
 
 A fast CLI for managing JSON knowledge graphs with native MCP server support. Built for LLM chat workflows: plain text by default, `--json` for machines.
