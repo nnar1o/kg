@@ -88,3 +88,27 @@ Detailed guides in [`docs/`](docs/):
 - [`docs/import-markdown.md`](docs/import-markdown.md) — Markdown import
 - [`docs/mcp.md`](docs/mcp.md) — MCP server reference
 - [`docs/decision-backend.md`](docs/decision-backend.md) — backend selection
+
+## Benchmarks (large graphs)
+
+Generate a big synthetic graph JSON:
+
+```sh
+cargo run --release --example generate_large_graph -- --out ./big.json --nodes 100000 --edges-per-node 5
+```
+
+Run criterion benchmarks (sizes configurable via env vars):
+
+```sh
+KG_BENCH_NODES=20000 KG_BENCH_EDGES_PER_NODE=5 cargo bench --bench large_graph
+```
+
+Other benches:
+
+```sh
+# End-to-end CLI benchmarks (spawns `kg`, covers JSON + persisted BM25 index + redb backend)
+KG_BENCH_NODES=20000 KG_BENCH_EDGES_PER_NODE=5 cargo bench --bench cli_e2e
+
+# Persisted BM25 index benchmarks (build/save/load)
+KG_BENCH_NODES=20000 KG_BENCH_EDGES_PER_NODE=5 cargo bench --bench persistence
+```

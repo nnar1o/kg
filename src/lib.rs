@@ -18,14 +18,14 @@ mod validate;
 mod vectors;
 
 // Re-export the core graph types for embedding (e.g. kg-mcp).
-use graph::Note;
-pub use graph::{Edge, EdgeProperties, GraphFile, Metadata, Node, NodeProperties};
+pub use graph::{Edge, EdgeProperties, GraphFile, Metadata, Node, NodeProperties, Note};
 pub use output::FindMode;
+
+// Re-export BM25 index for embedding and benchmarks.
+pub use index::Bm25Index;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-
-use index::Bm25Index;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
