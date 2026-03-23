@@ -1,12 +1,15 @@
 [package]
 name = "kg"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "A knowledge graph CLI tool for managing structured information"
 license = "MIT"
-documentation = "https://github.com/anomalyco/kg"
-homepage = "https://github.com/anomalyco/kg"
-repository = "https://github.com/anomalyco/kg"
+readme = "README.md"
+keywords = ["cli", "knowledge-graph", "mcp", "tui"]
+categories = ["command-line-utilities"]
+documentation = "https://github.com/nnar1o/kg"
+homepage = "https://github.com/nnar1o/kg"
+repository = "https://github.com/nnar1o/kg"
 
 [dependencies]
 anyhow = "1.0"
