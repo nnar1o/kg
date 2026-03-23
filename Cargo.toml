@@ -1,6 +1,6 @@
 [package]
-name = "kg"
-version = "0.1.5"
+name = "kg-cli"
+version = "0.1.6"
 edition = "2024"
 description = "A knowledge graph CLI tool for managing structured information"
 license = "MIT"
@@ -10,6 +10,14 @@ categories = ["command-line-utilities"]
 documentation = "https://github.com/nnar1o/kg"
 homepage = "https://github.com/nnar1o/kg"
 repository = "https://github.com/nnar1o/kg"
+
+[lib]
+name = "kg"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kg"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"

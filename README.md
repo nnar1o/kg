@@ -25,6 +25,12 @@ A fast CLI for managing JSON knowledge graphs with native MCP server support. Bu
   curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
 ```
 
+### From crates.io
+
+```sh
+cargo install kg-cli
+```
+
 ### From source
 
 ```sh
