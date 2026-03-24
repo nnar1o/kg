@@ -1832,8 +1832,27 @@ impl KgMcpServer {
             })
             .collect();
 
+        let schema_text = format!(
+            "## Valid Node Types\n{}\n\n## Valid Relations\n{}\n\n## Type to ID Prefix\n{}\n\n## Edge Rules\n{}",
+            kg::VALID_TYPES.join(", "),
+            kg::VALID_RELATIONS.join(", "),
+            type_to_prefix
+                .iter()
+                .map(|(t, p)| format!("{} -> {}", t, p))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            edge_rules
+                .iter()
+                .map(|r| format!(
+                    "{}: {} -> {}",
+                    r["relation"], r["valid_source_types"], r["valid_target_types"]
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+
         Ok(CallToolResult {
-            content: vec![Content::text("Schema retrieved.\n")],
+            content: vec![Content::text(schema_text)],
             structured_content: Some(json!({
                 "valid_node_types": kg::VALID_TYPES,
                 "valid_relations": kg::VALID_RELATIONS,
