@@ -3,7 +3,7 @@
 ## Format podstawowy
 
 ```
-<kind> <filter> <filter> ... [; sort=<field>] [; limit=<n>]
+<kind> <filter> [filter ...] [limit=N] [sort=field]
 ```
 
 Kinds:
@@ -22,15 +22,15 @@ Kinds:
 node type=Concept name~lodowka
 edge relation=DEPENDS_ON
 note tag=backlog
-node type=Concept ; sort=name ; limit=10
+node type=Concept limit=10 sort=name
 ```
 
 ## Sortowanie i limit
 
 ```
-node type=Concept ; sort=name          # sortowanie rosnące
-node type=Concept ; sort=-name        # sortowanie malejące
-node type=Concept ; limit=5            # tylko 5 wyników
+node type=Concept sort=name          # sortowanie rosnące
+node type=Concept sort=-name        # sortowanie malejące
+node type=Concept limit=5            # tylko 5 wyników
 ```
 
 Pola sortowania dla node: `name`, `type`, `id`
@@ -42,28 +42,28 @@ Pola sortowania dla note: `id`, `node`, `created`
 ### Sąsiedztwo
 
 ```
-neighbors <node_id> [hops=<n>] [out|in|both] [limit=<n>]
+neighbors id=<node_id> [hops=N] [out|in|both] [limit=N]
 ```
 
 Przykłady:
 ```
-neighbors concept:refrigerator              # 1-hop, obie strony
-neighbors concept:refrigerator hops=2       # 2-hop
-neighbors concept:refrigerator out          # tylko wychodzące
-neighbors concept:refrigerator in           # tylko przychodzące
-neighbors concept:refrigerator limit=10     # max 10 wyników
+neighbors id=concept:refrigerator              # 1-hop, obie strony
+neighbors id=concept:refrigerator hops=2       # 2-hop
+neighbors id=concept:refrigerator out          # tylko wychodzące
+neighbors id=concept:refrigerator in           # tylko przychodzące
+neighbors id=concept:refrigerator limit=10     # max 10 wyników
 ```
 
 ### Ścieżka
 
 ```
-path <from_id> <to_id> [hops=<n>]
+path from=<id> to=<id> [hops=N]
 ```
 
 Przykłady:
 ```
-path concept:refrigerator concept:temperature
-path concept:foo concept:bar hops=5
+path from=concept:refrigerator to=concept:temperature
+path from=concept:foo to=concept:bar hops=5
 ```
 
 ## Agregacje

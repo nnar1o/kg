@@ -42,6 +42,9 @@ struct CreateGraphArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct EmptyArgs {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct NodeFindArgs {
     graph: String,
     queries: Vec<String>,
@@ -1813,7 +1816,10 @@ impl KgMcpServer {
         name = "kg_schema",
         description = "Get graph schema: valid node types, relations, ID prefixes, and edge rules. Use this to understand the data model before adding nodes or edges."
     )]
-    fn kg_schema(&self, Parameters(_args): Parameters<()>) -> Result<CallToolResult, McpError> {
+    fn kg_schema(
+        &self,
+        Parameters(_args): Parameters<EmptyArgs>,
+    ) -> Result<CallToolResult, McpError> {
         let type_to_prefix: HashMap<&str, &str> = kg::TYPE_TO_PREFIX.iter().copied().collect();
         let edge_rules: Vec<_> = kg::EDGE_TYPE_RULES
             .iter()

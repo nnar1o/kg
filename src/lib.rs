@@ -33,12 +33,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use cli::{
-    AddEdgeArgs, AddNodeArgs, AsOfArgs, AuditArgs, CheckArgs, Cli, Command, DiffAsOfArgs,
-    EdgeCommand, ExportDotArgs, ExportGraphmlArgs, ExportHtmlArgs, ExportJsonArgs, ExportMdArgs,
-    ExportMermaidArgs, FeedbackLogArgs, FeedbackSummaryArgs, FindMode as CliFindMode, GraphCommand,
-    HistoryArgs, ImportCsvArgs, ImportJsonArgs, ImportMarkdownArgs, KqlArgs, ListNodesArgs,
-    MergeStrategy, ModifyNodeArgs, NodeCommand, NoteAddArgs, NoteCommand, NoteListArgs,
-    QualityCommand, RemoveEdgeArgs, SplitArgs, TemporalSource, TimelineArgs, VectorCommand,
+    AddEdgeArgs, AddEdgeBatchArgs, AddNodeArgs, AsOfArgs, AuditArgs, CheckArgs, Cli, Command,
+    DiffAsOfArgs, EdgeCommand, ExportDotArgs, ExportGraphmlArgs, ExportHtmlArgs, ExportJsonArgs,
+    ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs, FeedbackSummaryArgs, FindMode as CliFindMode,
+    GraphCommand, HistoryArgs, ImportCsvArgs, ImportJsonArgs, ImportMarkdownArgs, KqlArgs,
+    ListNodesArgs, MergeStrategy, ModifyNodeArgs, NodeCommand, NoteAddArgs, NoteCommand,
+    NoteListArgs, QualityCommand, RemoveEdgeArgs, SplitArgs, TemporalSource, TimelineArgs,
+    VectorCommand,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -513,6 +514,78 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                             &graph_file,
                         )?;
                         Ok(format!("+ edge {source_id} {relation} {target_id}\n"))
+                    }
+                    EdgeCommand::AddBatch(AddEdgeBatchArgs { file }) => {
+                        use csv::ReaderBuilder;
+                        use std::fs::File;
+                        use std::io::BufReader;
+
+                        let f = File::open(&file)?;
+                        let mut reader = ReaderBuilder::new()
+                            .has_headers(true)
+                            .from_reader(BufReader::new(f));
+
+                        let mut added = 0;
+                        let mut skipped = 0;
+                        let mut errors = Vec::new();
+
+                        for result in reader.records() {
+                            match result {
+                                Ok(record) => {
+                                    let source_id = record.get(0).unwrap_or("");
+                                    let relation = record.get(1).unwrap_or("");
+                                    let target_id = record.get(2).unwrap_or("");
+                                    let detail = record.get(3).unwrap_or("");
+
+                                    if source_id.is_empty()
+                                        || relation.is_empty()
+                                        || target_id.is_empty()
+                                    {
+                                        errors.push(format!("Invalid row: {:?}", record));
+                                        skipped += 1;
+                                        continue;
+                                    }
+
+                                    add_edge(
+                                        &mut graph_file,
+                                        Edge {
+                                            source_id: source_id.to_string(),
+                                            relation: relation.to_string(),
+                                            target_id: target_id.to_string(),
+                                            properties: EdgeProperties {
+                                                detail: detail.to_string(),
+                                                ..EdgeProperties::default()
+                                            },
+                                        },
+                                    )?;
+                                    added += 1;
+                                }
+                                Err(e) => {
+                                    errors.push(format!("CSV error: {}", e));
+                                    skipped += 1;
+                                }
+                            }
+                        }
+
+                        store.save_graph(&path, &graph_file)?;
+                        append_event_snapshot(
+                            &path,
+                            "edge.add-batch",
+                            Some(format!("file={} added={}", file, added)),
+                            &graph_file,
+                        )?;
+
+                        let mut output = format!("+ edges: {added}\n");
+                        if skipped > 0 {
+                            output.push_str(&format!("~ skipped: {}\n", skipped));
+                        }
+                        if !errors.is_empty() {
+                            output.push_str(&format!("! errors: {}\n", errors.len()));
+                            for e in errors.iter().take(3) {
+                                output.push_str(&format!("  {}\n", e));
+                            }
+                        }
+                        Ok(output)
                     }
                     EdgeCommand::Remove(RemoveEdgeArgs {
                         source_id,

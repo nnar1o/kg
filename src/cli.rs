@@ -201,6 +201,7 @@ pub struct ImportMarkdownArgs {
 
 #[derive(Debug, Args)]
 pub struct KqlArgs {
+    #[arg(help = "KQL query: node type=X, neighbors id=X, path from=X to=Y, count type=X")]
     pub query: String,
     #[arg(long)]
     pub json: bool,
@@ -404,6 +405,8 @@ pub struct ListNodesArgs {
 #[derive(Debug, Subcommand)]
 pub enum EdgeCommand {
     Add(AddEdgeArgs),
+    #[command(name = "add-batch", about = "Add multiple edges from CSV/JSON")]
+    AddBatch(AddEdgeBatchArgs),
     Remove(RemoveEdgeArgs),
 }
 
@@ -607,6 +610,12 @@ pub struct AddEdgeArgs {
     pub target_id: String,
     #[arg(long, default_value = "")]
     pub detail: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AddEdgeBatchArgs {
+    #[arg(help = "CSV file with columns: source_id,relation,target_id,detail")]
+    pub file: String,
 }
 
 #[derive(Debug, Args)]
