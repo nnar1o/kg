@@ -53,6 +53,8 @@ struct NodeFindArgs {
     mode: Option<String>,
     #[serde(default)]
     full: bool,
+    #[serde(default)]
+    skip_feedback: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -129,6 +131,23 @@ struct EdgeAddArgs {
     target_id: String,
     #[serde(default)]
     detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct EdgeAddBatchItem {
+    source_id: String,
+    relation: String,
+    target_id: String,
+    #[serde(default)]
+    detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct EdgeAddBatchArgs {
+    graph: String,
+    edges: Vec<EdgeAddBatchItem>,
+    #[serde(default)]
+    mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -669,6 +688,7 @@ impl KgMcpServer {
     fn handle_node_find(&self, args: NodeFindArgs) -> Result<CallToolResult, McpError> {
         let graph = args.graph.clone();
         let queries = args.queries.clone();
+        let skip_feedback = args.skip_feedback;
         let mut cmd = vec![args.graph, "node".to_owned(), "find".to_owned()];
         cmd.extend(args.queries);
         if let Some(limit) = args.limit {
@@ -686,7 +706,6 @@ impl KgMcpServer {
             cmd.push("--full".to_owned());
         }
 
-        // Custom execution to append a minimal nudge + uid.
         let mut os_args = Vec::with_capacity(cmd.len() + 1);
         os_args.push(OsString::from("kg"));
         os_args.extend(cmd.into_iter().map(OsString::from));
@@ -696,6 +715,24 @@ impl KgMcpServer {
         let mut candidate_ids = parse_find_candidate_ids(&rendered);
         if candidate_ids.len() > 25 {
             candidate_ids.truncate(25);
+        }
+
+        if skip_feedback {
+            let mut output = rendered;
+            if !output.ends_with('\n') {
+                output.push('\n');
+            }
+            return Ok(CallToolResult {
+                content: vec![Content::text(output)],
+                structured_content: Some(json!({
+                    "results": {
+                        "total": total,
+                        "candidates": candidate_ids,
+                    }
+                })),
+                is_error: Some(false),
+                meta: None,
+            });
         }
 
         let uid = self.next_uid()?;
@@ -1157,7 +1194,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_node_find",
-        description = "Find nodes by one or more search queries. Always check structured_content.requires_feedback and send kg_feedback (or kg_feedback_batch) before continuing. Prefer `kg` when issuing multiple commands."
+        description = "Find nodes by one or more search queries. Use skip_feedback=true for lookup-only queries (no feedback required). Otherwise check structured_content.requires_feedback and send kg_feedback before continuing. Prefer `kg` when issuing multiple commands."
     )]
     fn kg_node_find(
         &self,
@@ -1412,12 +1449,46 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_node_add",
-        description = "Add a new node to a graph. Prefer `kg` when combining multiple actions."
+        description = "Add a new node to a graph. Valid node_type: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug. ID must match prefix:snake_case. Prefer `kg` when combining multiple actions."
     )]
     fn kg_node_add(
         &self,
         Parameters(args): Parameters<NodeAddArgs>,
     ) -> Result<CallToolResult, McpError> {
+        if !kg::VALID_TYPES.contains(&args.node_type.as_str()) {
+            return Err(McpError::invalid_params(
+                "invalid node_type",
+                Some(json!({
+                    "expected": kg::VALID_TYPES,
+                    "got": args.node_type,
+                })),
+            ));
+        }
+
+        let type_to_prefix: HashMap<&str, &str> = kg::TYPE_TO_PREFIX.iter().copied().collect();
+        if let Some(expected_prefix) = type_to_prefix.get(args.node_type.as_str()) {
+            if let Some((prefix, _)) = args.id.split_once(':') {
+                if prefix != *expected_prefix {
+                    return Err(McpError::invalid_params(
+                        "invalid id prefix for node_type",
+                        Some(json!({
+                            "expected_prefix": format!("{}:", expected_prefix),
+                            "got": args.id,
+                            "valid_types": kg::VALID_TYPES,
+                        })),
+                    ));
+                }
+            } else {
+                return Err(McpError::invalid_params(
+                    "invalid id format",
+                    Some(json!({
+                        "expected": "prefix:snake_case (e.g. concept:my_node)",
+                        "got": args.id,
+                    })),
+                ));
+            }
+        }
+
         let mut cmd = vec![
             args.graph,
             "node".to_owned(),
@@ -1533,12 +1604,95 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_edge_add",
-        description = "Add an edge between two nodes. Prefer `kg` when combining multiple actions."
+        description = "Add an edge between two nodes. Valid relations: HAS, STORED_IN, TRIGGERS, CREATED_BY, AFFECTED_BY, AVAILABLE_IN, DOCUMENTED_IN, DEPENDS_ON, TRANSITIONS, DECIDED_BY, GOVERNED_BY, USES, READS_FROM. Prefer `kg` when combining multiple actions."
     )]
     fn kg_edge_add(
         &self,
         Parameters(args): Parameters<EdgeAddArgs>,
     ) -> Result<CallToolResult, McpError> {
+        if !kg::VALID_RELATIONS.contains(&args.relation.as_str()) {
+            return Err(McpError::invalid_params(
+                "invalid relation",
+                Some(json!({
+                    "expected": kg::VALID_RELATIONS,
+                    "got": args.relation,
+                })),
+            ));
+        }
+
+        let graph_root = kg::default_graph_root(&self.cwd);
+        let path = match kg::resolve_graph_path(&self.cwd, &graph_root, &args.graph) {
+            Ok(p) => p,
+            Err(_) => {
+                return Err(McpError::invalid_params(
+                    "graph not found",
+                    Some(json!({ "graph": args.graph })),
+                ));
+            }
+        };
+
+        let graph_file = match kg::GraphFile::load(&path) {
+            Ok(g) => g,
+            Err(_) => {
+                return Err(McpError::invalid_params(
+                    "cannot load graph",
+                    Some(json!({ "graph": args.graph })),
+                ));
+            }
+        };
+
+        let node_type_map: HashMap<&str, &str> = graph_file
+            .nodes
+            .iter()
+            .map(|n| (n.id.as_str(), n.r#type.as_str()))
+            .collect();
+
+        let source_type = node_type_map.get(args.source_id.as_str());
+        let target_type = node_type_map.get(args.target_id.as_str());
+
+        if source_type.is_none() || target_type.is_none() {
+            return Err(McpError::invalid_params(
+                "source or target node not found",
+                Some(json!({
+                    "source_id": args.source_id,
+                    "target_id": args.target_id,
+                    "source_found": source_type.is_some(),
+                    "target_found": target_type.is_some(),
+                })),
+            ));
+        }
+
+        let edge_rules: HashMap<&str, (&[&str], &[&str])> = kg::EDGE_TYPE_RULES
+            .iter()
+            .map(|(r, s, t)| (*r, (*s, *t)))
+            .collect();
+
+        if let Some((valid_src, valid_tgt)) = edge_rules.get(args.relation.as_str()) {
+            let src_type = source_type.unwrap();
+            let tgt_type = target_type.unwrap();
+
+            if !valid_src.is_empty() && !valid_src.contains(src_type) {
+                return Err(McpError::invalid_params(
+                    "invalid source node type for relation",
+                    Some(json!({
+                        "relation": args.relation,
+                        "source_type": src_type,
+                        "valid_source_types": valid_src,
+                    })),
+                ));
+            }
+            if !valid_tgt.is_empty() && !valid_tgt.contains(tgt_type) {
+                return Err(McpError::invalid_params(
+                    "invalid target node type for relation",
+                    Some(json!({
+                        "relation": args.relation,
+                        "target_type": tgt_type,
+                        "valid_target_types": valid_tgt,
+                    })),
+                ));
+            }
+        }
+
         let mut cmd = vec![
             args.graph,
             "edge".to_owned(),
@@ -1552,6 +1706,89 @@ impl KgMcpServer {
             cmd.push(detail);
         }
         self.execute_kg(cmd)
+    }
+
+    #[tool(
+        name = "kg_edge_add_batch",
+        description = "Add multiple edges to a graph (atomic or best_effort). Prefer `kg` when combining multiple actions."
+    )]
+    fn kg_edge_add_batch(
+        &self,
+        Parameters(args): Parameters<EdgeAddBatchArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let graph = args.graph.clone();
+        let mode = args.mode.unwrap_or_else(|| "atomic".to_owned());
+        if mode != "atomic" && mode != "best_effort" {
+            return Err(McpError::invalid_params(
+                "invalid mode",
+                Some(json!({
+                    "expected": ["atomic", "best_effort"],
+                    "got": mode,
+                })),
+            ));
+        }
+
+        let mut results = Vec::new();
+        let mut errors = Vec::new();
+
+        for (i, edge) in args.edges.iter().enumerate() {
+            let mut cmd = vec![
+                graph.clone(),
+                "edge".to_owned(),
+                "add".to_owned(),
+                edge.source_id.clone(),
+                edge.relation.clone(),
+                edge.target_id.clone(),
+            ];
+            if let Some(detail) = &edge.detail {
+                cmd.push("--detail".to_owned());
+                cmd.push(detail.clone());
+            }
+            let result = self.execute_kg(cmd);
+
+            match result {
+                Ok(_) => {
+                    results.push(json!({
+                        "index": i,
+                        "source_id": edge.source_id,
+                        "relation": edge.relation,
+                        "target_id": edge.target_id,
+                        "ok": true,
+                    }));
+                }
+                Err(e) => {
+                    if mode == "atomic" {
+                        return Err(e);
+                    }
+                    errors.push(format!("edge {} failed: {}", i, e.message));
+                    results.push(json!({
+                        "index": i,
+                        "source_id": edge.source_id,
+                        "relation": edge.relation,
+                        "target_id": edge.target_id,
+                        "ok": false,
+                        "error": e.message,
+                    }));
+                }
+            }
+        }
+
+        let ok_count = results.iter().filter(|r| r["ok"] == true).count();
+        let failed_count = results.len() - ok_count;
+
+        Ok(CallToolResult {
+            content: vec![Content::text(format!(
+                "OK (added={} failed={})\n",
+                ok_count, failed_count
+            ))],
+            structured_content: Some(json!({
+                "added": ok_count,
+                "failed": failed_count,
+                "results": results,
+            })),
+            is_error: Some(failed_count > 0),
+            meta: None,
+        })
     }
 
     #[tool(
@@ -1573,8 +1810,38 @@ impl KgMcpServer {
     }
 
     #[tool(
+        name = "kg_schema",
+        description = "Get graph schema: valid node types, relations, ID prefixes, and edge rules. Use this to understand the data model before adding nodes or edges."
+    )]
+    fn kg_schema(&self, Parameters(_args): Parameters<()>) -> Result<CallToolResult, McpError> {
+        let type_to_prefix: HashMap<&str, &str> = kg::TYPE_TO_PREFIX.iter().copied().collect();
+        let edge_rules: Vec<_> = kg::EDGE_TYPE_RULES
+            .iter()
+            .map(|(rel, src, tgt)| {
+                json!({
+                    "relation": rel,
+                    "valid_source_types": src,
+                    "valid_target_types": tgt,
+                })
+            })
+            .collect();
+
+        Ok(CallToolResult {
+            content: vec![Content::text("Schema retrieved.\n")],
+            structured_content: Some(json!({
+                "valid_node_types": kg::VALID_TYPES,
+                "valid_relations": kg::VALID_RELATIONS,
+                "type_to_prefix": type_to_prefix,
+                "edge_rules": edge_rules,
+            })),
+            is_error: Some(false),
+            meta: None,
+        })
+    }
+
+    #[tool(
         name = "kg_stats",
-        description = "Show graph structure and usage statistics. Prefer `kg` when combining multiple actions."
+        description = "Show graph structure and usage statistics. Prefer `kg` when issuing multiple commands."
     )]
     fn kg_stats(
         &self,
@@ -1598,7 +1865,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_check",
-        description = "Run integrity validation checks. Prefer `kg` when combining multiple actions."
+        description = "[DEPRECATED: use kg script] Run integrity validation checks. Prefer `kg <graph> check`."
     )]
     fn kg_check(
         &self,
@@ -1611,7 +1878,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_audit",
-        description = "Run deep audit validation checks. Prefer `kg` when combining multiple actions."
+        description = "[DEPRECATED: use kg script] Run deep audit validation checks. Prefer `kg <graph> audit`."
     )]
     fn kg_audit(
         &self,
@@ -1624,7 +1891,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_quality",
-        description = "Run quality subcommands such as missing-facts or duplicates. Prefer `kg` when combining multiple actions."
+        description = "[DEPRECATED: use kg script] Run quality subcommands such as missing-facts or duplicates. Prefer `kg <graph> quality <command>`."
     )]
     fn kg_quality(
         &self,
@@ -1662,7 +1929,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_export_html",
-        description = "Export graph as an interactive HTML file. Prefer `kg` when combining multiple actions."
+        description = "[DEPRECATED: use kg script] Export graph as an interactive HTML file. Prefer `kg <graph> export-html`."
     )]
     fn kg_export_html(
         &self,
@@ -1682,7 +1949,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_access_log",
-        description = "Read graph access/search history. Prefer `kg` when combining multiple actions."
+        description = "[DEPRECATED: use kg script] Read graph access/search history. Prefer `kg <graph> access-log`."
     )]
     fn kg_access_log(
         &self,
@@ -1701,7 +1968,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_access_stats",
-        description = "Read aggregate access statistics. Prefer `kg` when combining multiple actions."
+        description = "[DEPRECATED: use kg script] Read aggregate access statistics. Prefer `kg <graph> access-stats`."
     )]
     fn kg_access_stats(
         &self,
@@ -2217,6 +2484,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
         include_features,
         mode,
         full,
+        skip_feedback: false,
     }))
 }
 

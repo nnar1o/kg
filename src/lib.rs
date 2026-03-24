@@ -21,6 +21,9 @@ mod vectors;
 pub use graph::{Edge, EdgeProperties, GraphFile, Metadata, Node, NodeProperties, Note};
 pub use output::FindMode;
 
+// Re-export validation constants for schema tools.
+pub use validate::{EDGE_TYPE_RULES, TYPE_TO_PREFIX, VALID_RELATIONS, VALID_TYPES};
+
 // Re-export BM25 index for embedding and benchmarks.
 pub use index::Bm25Index;
 

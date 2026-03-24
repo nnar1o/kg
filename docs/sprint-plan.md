@@ -260,8 +260,24 @@ Zakres:
 Wyjscie (DoD):
 - Praca zespolowa bez bolu konfliktow.
 
-## Sprint 18: FUSE mount (filesystem jako interfejs KG)
-Status: planned
+## Sprint 18: Release + dystrybucja (multi-OS)
+Status: done
+Cel: latwa instalacja binarek bez cargo, spojne release artefakty.
+
+Zakres:
+- Rozszerzenie GitHub Actions release o build na Linux/MacOS/Windows (artefakty per target).
+- Checksums dla wszystkich artefaktow + jasne nazewnictwo plikow.
+- Aktualizacja `install.sh`:
+  - wybor poprawnego artefaktu per OS/arch
+  - fallback na `cargo install` (jesli brak binarki)
+- (Opcjonalnie) podpisywanie artefaktow.
+
+Wyjscie (DoD):
+- Instalacja dziala na 3 OS bez budowania ze zrodel.
+- Release ma komplet artefaktow + `checksums.txt`.
+
+## Sprint 19: FUSE mount (filesystem jako interfejs KG)
+Status: done
 Cel: dostep do grafu przez standardowe narzedzia Unix (ls, grep, cat).
 
 Co to FUSE:
@@ -287,8 +303,8 @@ Wyjscie (DoD):
 - Graf dostepny jako folder, wszystkie operacje FS przekladaja sie na zapytania KG.
 - Dziala na Linuksie; MacOS FUSE jako opcjonalny target.
 
-## Sprint 19: Hybrid search (BM25 + semantic)
-Status: planned
+## Sprint 20: Hybrid search (BM25 + semantic)
+Status: done
 Cel: pelny hybrid search laczacy precyzje BM25 z rozumieniem semantycznym.
 
 Co to hybrid search:
@@ -310,8 +326,8 @@ Wyjscie (DoD):
 - Jeden tryb `hybrid` daje lepsze wyniki niz `bm25` lub `vector` osobno.
 - Provider plikowany (ollama, openai, local), kg-core bez zaleznosci.
 
-## Sprint 20: SDK bindings (TypeScript + Python)
-Status: planned
+## Sprint 21: SDK bindings (TypeScript + Python)
+Status: done
 Cel: latwa integracja kg z aplikacjami poza CLI.
 
 Co to SDK:
@@ -344,3 +360,86 @@ Zakres:
 Wyjscie (DoD):
 - Przykladowa aplikacja uzywajaca kazdego SDK.
 - SDK publikowane na npm/PyPI z wersjami.
+
+## Sprint 22: Stabilizacja i hardening (DX + CI + perf)
+Status: done
+Cel: podniesc jakosc, przewidywalnosc i bezpieczenstwo zmian.
+
+Zakres:
+- CI: macierz OS (linux/macos/windows) + `cargo fmt --check` + `cargo clippy`.
+- Regression guardrails: bazowe wyniki benchmarkow (np. zapisywane jako artefakt) + progi ostrzegawcze.
+- Testy integracyjne dla krytycznych komend (create/import/find/diff/check/audit) na JSON i redb.
+- Stabilizacja outputu `--json` (schemy + wersjonowanie) i kodow wyjscia.
+
+Wyjscie (DoD):
+- PR nie przechodzi bez fmt/clippy/test na 3 OS.
+- Performance regresje sa widoczne (benchmark artefakty) i latwe do porownania.
+
+## Sprint UX-1: Opcjonalny Feedback (0.5 dnia)
+Status: done
+Cel: Usunac friction przy prostych lookupach.
+
+Zakres:
+- Dodac parametr `skip_feedback?: bool` do `kg_node_find`.
+- Gdy `skip_feedback=true`: nie zwracac `requires_feedback` w structured_content.
+- Przyklad: agent robi `kg_node_find` -> sprawdza czy UID pasuje -> kontynuuje bez oddzielnego `kg_feedback`.
+
+Wyjscie (DoD):
+- Lookup bez feedbacku dziala, feedback nadal dziala normalnie.
+
+## Sprint UX-2: kg_edge_add_batch (0.5 dnia)
+Status: done
+Cel: Symetria z `kg_node_add_batch`.
+
+Zakres:
+- Nowy tool `kg_edge_add_batch` z:
+  - `graph: String`
+  - `edges: Vec<{ source_id, relation, target_id, detail? }>`
+  - `mode?: "atomic" | "best_effort"`
+- Walidacja istnienia wezlow przed zapisem.
+- Atomic mode: wszystko albo nic.
+
+Wyjscie (DoD):
+- 6 krawedzi = 1 tool call zamiast 6.
+
+## Sprint UX-3: kg_schema Tool (1 dzien)
+Status: done
+Cel: Schema widoczna w tool description / osobny tool.
+
+Zakres:
+- Opisac valid types i relations w `kg_node_add` / `kg_edge_add` descriptions.
+- Dodac `kg_schema` tool zwracajacy: { valid_types, valid_relations, type_to_prefix, edge_rules }.
+- Tool przydatny dla programistycznego dostepu do schematu.
+
+Wyjscie (DoD):
+- Agent zna konwencje bez `kg_stats`.
+
+## Sprint UX-4: Walidacja na Zapisie (1 dzien)
+Status: done
+Cel: Bledy wychodza przy `add`/`modify`, nie przy `check`.
+
+Zakres:
+- Rozszerzyc `kg_node_add` / `kg_edge_add` o pre-write validation:
+  - Sprawdzenie `node_type` vs `VALID_TYPES`
+  - Sprawdzenie `id` vs `TYPE_TO_PREFIX`
+  - Sprawdzenie `relation` vs `VALID_RELATIONS`
+  - Sprawdzenie source/target type constraints (EDGE_TYPE_RULES)
+- Blad zwraca jasna wiadomosc, np.:
+  ```
+  Invalid node_type 'analysis'. Valid types: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug
+  ```
+
+Wyjscie (DoD):
+- `kg_node_add` z blednym typem = niezwloczny blad z jasna wiadomoscia.
+
+## Sprint UX-5: Redukcja Tool Noise (0.5 dnia)
+Status: done
+Cel: Mniej tooli w liscie, latwiejszy wybor.
+
+Zakres:
+- Oznaczyc jako deprecated (z "Prefer kg script") dla:
+  - `kg_check`, `kg_audit`, `kg_quality`, `kg_access_log`, `kg_access_stats`, `kg_export_html`
+- Core tools (bez deprecation): `kg`, `kg_node_find`, `kg_node_get`, `kg_node_add`, `kg_node_add_batch`, `kg_node_modify`, `kg_edge_add`, `kg_edge_add_batch`, `kg_stats`, `kg_feedback`, `kg_feedback_batch`, `kg_schema`, `kg_create_graph`
+
+Wyjscie (DoD):
+- 13 core tools vs 20+ obecnie.
