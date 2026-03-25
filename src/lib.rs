@@ -4,7 +4,7 @@ mod cli;
 mod config;
 mod event_log;
 mod export_html;
-mod graph;
+pub mod graph;
 mod import_csv;
 mod import_markdown;
 mod index;

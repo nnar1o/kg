@@ -1,6 +1,6 @@
 [package]
-name = "kg-cli"
-version = "0.1.7"
+name = "kg"
+version = "0.1.8"
 edition = "2024"
 description = "A knowledge graph CLI tool for managing structured information"
 license = "MIT"
@@ -16,7 +16,7 @@ name = "kg"
 path = "src/lib.rs"
 
 [[bin]]
-name = "kg"
+name = "kg-cli"
 path = "src/main.rs"
 
 [dependencies]
