@@ -1,5 +1,6 @@
 mod access_log;
 mod analysis;
+mod app;
 mod cli;
 mod config;
 mod event_log;
@@ -33,25 +34,31 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use cli::{
-    AddEdgeArgs, AddEdgeBatchArgs, AddNodeArgs, AsOfArgs, AuditArgs, CheckArgs, Cli, Command,
-    DiffAsOfArgs, EdgeCommand, ExportDotArgs, ExportGraphmlArgs, ExportHtmlArgs, ExportJsonArgs,
+    AsOfArgs, AuditArgs, CheckArgs, Cli, Command, DiffAsOfArgs, ExportDotArgs, ExportGraphmlArgs,
     ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs, FeedbackSummaryArgs, FindMode as CliFindMode,
-    GraphCommand, HistoryArgs, ImportCsvArgs, ImportJsonArgs, ImportMarkdownArgs, KqlArgs,
-    ListNodesArgs, MergeStrategy, ModifyNodeArgs, NodeCommand, NoteAddArgs, NoteCommand,
-    NoteListArgs, QualityCommand, RemoveEdgeArgs, SplitArgs, TemporalSource, TimelineArgs,
-    VectorCommand,
+    GraphCommand, HistoryArgs, ImportCsvArgs, ImportMarkdownArgs, ListNodesArgs, MergeStrategy,
+    NoteAddArgs, NoteListArgs, SplitArgs, TemporalSource, TimelineArgs, VectorCommand,
 };
 use serde::Serialize;
 use serde_json::Value;
 // (graph types are re-exported above)
-use storage::{GraphStore, graph_store, load_graph_index};
+use storage::{GraphStore, graph_store};
 
-use analysis::{
-    render_duplicates, render_duplicates_json, render_edge_gaps, render_edge_gaps_json,
-    render_missing_descriptions, render_missing_descriptions_json, render_missing_facts,
-    render_missing_facts_json, render_stats,
+use app::graph_node_edge::{GraphCommandContext, execute_edge, execute_node};
+use app::graph_note::{GraphNoteContext, execute_note};
+use app::graph_query_quality::{
+    execute_audit, execute_check, execute_duplicates, execute_edge_gaps, execute_feedback_log,
+    execute_feedback_summary, execute_kql, execute_missing_descriptions, execute_missing_facts,
+    execute_node_list, execute_quality, execute_stats,
 };
-use ops::{add_edge, add_node, modify_node, remove_edge, remove_node};
+use app::graph_transfer_temporal::{
+    GraphTransferContext, execute_access_log, execute_access_stats, execute_as_of,
+    execute_diff_as_of, execute_export_dot, execute_export_graphml, execute_export_html,
+    execute_export_json, execute_export_md, execute_export_mermaid, execute_history,
+    execute_import_csv, execute_import_json, execute_import_markdown, execute_split,
+    execute_timeline, execute_vector,
+};
+
 use schema::{GraphSchema, SchemaViolation};
 use validate::validate_graph;
 
@@ -68,7 +75,7 @@ fn format_schema_violations(violations: &[SchemaViolation]) -> String {
     lines.join("\n")
 }
 
-fn bail_on_schema_violations(violations: &[SchemaViolation]) -> Result<()> {
+pub(crate) fn bail_on_schema_violations(violations: &[SchemaViolation]) -> Result<()> {
     if !violations.is_empty() {
         anyhow::bail!("{}", format_schema_violations(violations));
     }
@@ -214,7 +221,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                 render_graph_list(store.as_ref(), args.full)
             }
         }
-        Command::FeedbackLog(args) => render_feedback_log(cwd, &args),
+        Command::FeedbackLog(args) => execute_feedback_log(cwd, &args),
         Command::Graph { graph, command } => {
             let store = graph_store(cwd, graph_root)?;
             let path = store.resolve_graph_path(&graph)?;
@@ -222,540 +229,122 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
             let schema = GraphSchema::discover(cwd).ok().flatten().map(|(_, s)| s);
 
             match command {
-                GraphCommand::Node { command } => match command {
-                    NodeCommand::Find {
-                        queries,
-                        limit,
-                        include_features,
-                        mode,
-                        full,
-                        json,
-                        vector_query,
-                    } => {
-                        if mode == cli::FindMode::Vector {
-                            let result = if let Some(query_vec) = vector_query {
-                                let vector_path = path
-                                    .parent()
-                                    .map(|p| p.join(".kg.vectors.json"))
-                                    .unwrap_or_else(|| PathBuf::from(".kg.vectors.json"));
-                                if !vector_path.exists() {
-                                    anyhow::bail!(
-                                        "vector store not found. Run: kg {} vectors import --input <file.jsonl>",
-                                        graph
-                                    );
-                                }
-                                let store = vectors::VectorStore::load(&vector_path)?;
-                                let node_ids: Vec<_> =
-                                    graph_file.nodes.iter().map(|n| n.id.clone()).collect();
-                                let results = store.search(&query_vec, &node_ids, limit, 0.0);
-                                let mut lines =
-                                    vec![format!("= vector-search ({} results)", results.len())];
-                                for (node_id, score) in &results {
-                                    if let Some(node) = graph_file.node_by_id(node_id) {
-                                        lines.push(format!(
-                                            "# {} | {} [{}] ({:.3})",
-                                            node.id, node.name, node.r#type, score
-                                        ));
-                                    }
-                                }
-                                format!("{}\n", lines.join("\n"))
-                            } else {
-                                anyhow::bail!("--vector-query required for --mode vector")
-                            };
-                            return Ok(result);
-                        }
+                GraphCommand::Node { command } => execute_node(
+                    command,
+                    GraphCommandContext {
+                        graph_name: &graph,
+                        path: &path,
+                        graph_file: &mut graph_file,
+                        schema: schema.as_ref(),
+                        store: store.as_ref(),
+                    },
+                ),
 
-                        let bm25_index = if mode == cli::FindMode::Bm25 {
-                            load_graph_index(&path).ok().flatten()
-                        } else {
-                            None
-                        };
+                GraphCommand::Edge { command } => execute_edge(
+                    command,
+                    GraphCommandContext {
+                        graph_name: &graph,
+                        path: &path,
+                        graph_file: &mut graph_file,
+                        schema: schema.as_ref(),
+                        store: store.as_ref(),
+                    },
+                ),
 
-                        let timer = access_log::Timer::new();
-                        let results_count = output::count_find_results_with_index(
-                            &graph_file,
-                            &queries,
-                            limit,
-                            include_features,
-                            map_find_mode(mode),
-                            bm25_index.as_ref(),
-                        );
-                        let result = if json {
-                            render_find_json_with_index(
-                                &graph_file,
-                                &queries,
-                                limit,
-                                include_features,
-                                map_find_mode(mode),
-                                bm25_index.as_ref(),
-                            )
-                        } else {
-                            output::render_find_with_index(
-                                &graph_file,
-                                &queries,
-                                limit,
-                                include_features,
-                                map_find_mode(mode),
-                                full,
-                                bm25_index.as_ref(),
-                            )
-                        };
-                        let duration_ms = timer.elapsed_ms();
+                GraphCommand::Note { command } => execute_note(
+                    command,
+                    GraphNoteContext {
+                        path: &path,
+                        graph_file: &mut graph_file,
+                        store: store.as_ref(),
+                        _schema: schema.as_ref(),
+                    },
+                ),
 
-                        for query in &queries {
-                            let entry = access_log::AccessLogEntry::new(
-                                query.clone(),
-                                results_count,
-                                duration_ms,
-                            );
-                            if let Err(e) = access_log::append_entry(&path, &entry) {
-                                eprintln!("warning: failed to log access: {}", e);
-                            }
-                        }
+                GraphCommand::Stats(args) => Ok(execute_stats(&graph_file, &args)),
+                GraphCommand::Check(args) => Ok(execute_check(&graph_file, cwd, &args)),
+                GraphCommand::Audit(args) => Ok(execute_audit(&graph_file, cwd, &args)),
 
-                        Ok(result)
-                    }
-
-                    NodeCommand::Get {
-                        id,
-                        include_features,
-                        full,
-                        json,
-                    } => {
-                        let timer = access_log::Timer::new();
-                        let node = graph_file
-                            .node_by_id(&id)
-                            .ok_or_else(|| anyhow!("node not found: {id}"))?;
-                        if !include_features && node.r#type == "Feature" {
-                            bail!("feature nodes are hidden by default; use --include-features");
-                        }
-                        let result = Ok(if json {
-                            render_node_json(node)
-                        } else {
-                            output::render_node(&graph_file, node, full)
-                        });
-
-                        let duration_ms = timer.elapsed_ms();
-                        let entry = access_log::AccessLogEntry::node_get(id.clone(), duration_ms);
-                        if let Err(e) = access_log::append_entry(&path, &entry) {
-                            eprintln!("warning: failed to log access: {}", e);
-                        }
-
-                        result
-                    }
-
-                    NodeCommand::Add(AddNodeArgs {
-                        id,
-                        node_type,
-                        name,
-                        description,
-                        domain_area,
-                        provenance,
-                        confidence,
-                        created_at,
-                        fact,
-                        alias,
-                        source,
-                    }) => {
-                        let node = Node {
-                            id,
-                            r#type: node_type,
-                            name,
-                            properties: NodeProperties {
-                                description,
-                                domain_area,
-                                provenance,
-                                confidence,
-                                created_at,
-                                key_facts: fact,
-                                alias,
-                                ..NodeProperties::default()
-                            },
-                            source_files: source,
-                        };
-                        if let Some(schema) = schema {
-                            let violations = schema.validate_node_add(&node);
-                            bail_on_schema_violations(&violations)?;
-                        }
-                        add_node(&mut graph_file, node)?;
-                        store.save_graph(&path, &graph_file)?;
-                        append_event_snapshot(
-                            &path,
-                            "node.add",
-                            Some(graph_file.nodes.last().expect("node").id.clone()),
-                            &graph_file,
-                        )?;
-                        Ok(format!(
-                            "+ node {}\n",
-                            graph_file.nodes.last().expect("node").id
-                        ))
-                    }
-
-                    NodeCommand::Modify(ModifyNodeArgs {
-                        id,
-                        node_type,
-                        name,
-                        description,
-                        domain_area,
-                        provenance,
-                        confidence,
-                        created_at,
-                        fact,
-                        alias,
-                        source,
-                    }) => {
-                        modify_node(
-                            &mut graph_file,
-                            &id,
-                            node_type.clone(),
-                            name.clone(),
-                            description.clone(),
-                            domain_area.clone(),
-                            provenance.clone(),
-                            confidence,
-                            created_at.clone(),
-                            fact.clone(),
-                            alias.clone(),
-                            source.clone(),
-                        )?;
-                        if let Some(schema) = schema {
-                            if let Some(node) = graph_file.node_by_id(&id) {
-                                let violations = schema.validate_node_add(node);
-                                bail_on_schema_violations(&violations)?;
-                            }
-                        }
-                        store.save_graph(&path, &graph_file)?;
-                        append_event_snapshot(&path, "node.modify", Some(id.clone()), &graph_file)?;
-                        Ok(format!("~ node {id}\n"))
-                    }
-
-                    NodeCommand::Rename { from, to } => {
-                        if graph_file.node_by_id(&to).is_some() {
-                            bail!("node already exists: {to}");
-                        }
-                        let Some(node) = graph_file.node_by_id_mut(&from) else {
-                            bail!("node not found: {from}");
-                        };
-                        node.id = to.clone();
-                        for edge in &mut graph_file.edges {
-                            if edge.source_id == from {
-                                edge.source_id = to.clone();
-                            }
-                            if edge.target_id == from {
-                                edge.target_id = to.clone();
-                            }
-                        }
-                        for note in &mut graph_file.notes {
-                            if note.node_id == from {
-                                note.node_id = to.clone();
-                            }
-                        }
-                        store.save_graph(&path, &graph_file)?;
-                        append_event_snapshot(
-                            &path,
-                            "node.rename",
-                            Some(format!("{from} -> {to}")),
-                            &graph_file,
-                        )?;
-                        Ok(format!("~ node {from} -> {to}\n"))
-                    }
-
-                    NodeCommand::Remove { id } => {
-                        let removed_edges = remove_node(&mut graph_file, &id)?;
-                        store.save_graph(&path, &graph_file)?;
-                        append_event_snapshot(&path, "node.remove", Some(id.clone()), &graph_file)?;
-                        Ok(format!("- node {id} ({removed_edges} edges removed)\n"))
-                    }
-                    NodeCommand::List(args) => Ok(if args.json {
-                        render_node_list_json(&graph_file, &args)
-                    } else {
-                        render_node_list(&graph_file, &args)
-                    }),
-                },
-
-                GraphCommand::Edge { command } => match command {
-                    EdgeCommand::Add(AddEdgeArgs {
-                        source_id,
-                        relation,
-                        target_id,
-                        detail,
-                    }) => {
-                        if let Some(schema) = schema {
-                            let source_node = graph_file.node_by_id(&source_id);
-                            let target_node = graph_file.node_by_id(&target_id);
-                            if let (Some(src), Some(tgt)) = (source_node, target_node) {
-                                let violations = schema.validate_edge_add(
-                                    &source_id,
-                                    &src.r#type,
-                                    &relation,
-                                    &target_id,
-                                    &tgt.r#type,
-                                );
-                                bail_on_schema_violations(&violations)?;
-                            }
-                        }
-                        add_edge(
-                            &mut graph_file,
-                            Edge {
-                                source_id: source_id.clone(),
-                                relation: relation.clone(),
-                                target_id: target_id.clone(),
-                                properties: EdgeProperties {
-                                    detail,
-                                    ..EdgeProperties::default()
-                                },
-                            },
-                        )?;
-                        store.save_graph(&path, &graph_file)?;
-                        append_event_snapshot(
-                            &path,
-                            "edge.add",
-                            Some(format!("{source_id} {relation} {target_id}")),
-                            &graph_file,
-                        )?;
-                        Ok(format!("+ edge {source_id} {relation} {target_id}\n"))
-                    }
-                    EdgeCommand::AddBatch(AddEdgeBatchArgs { file }) => {
-                        use csv::ReaderBuilder;
-                        use std::fs::File;
-                        use std::io::BufReader;
-
-                        let f = File::open(&file)?;
-                        let mut reader = ReaderBuilder::new()
-                            .has_headers(true)
-                            .from_reader(BufReader::new(f));
-
-                        let mut added = 0;
-                        let mut skipped = 0;
-                        let mut errors = Vec::new();
-
-                        for result in reader.records() {
-                            match result {
-                                Ok(record) => {
-                                    let source_id = record.get(0).unwrap_or("");
-                                    let relation = record.get(1).unwrap_or("");
-                                    let target_id = record.get(2).unwrap_or("");
-                                    let detail = record.get(3).unwrap_or("");
-
-                                    if source_id.is_empty()
-                                        || relation.is_empty()
-                                        || target_id.is_empty()
-                                    {
-                                        errors.push(format!("Invalid row: {:?}", record));
-                                        skipped += 1;
-                                        continue;
-                                    }
-
-                                    add_edge(
-                                        &mut graph_file,
-                                        Edge {
-                                            source_id: source_id.to_string(),
-                                            relation: relation.to_string(),
-                                            target_id: target_id.to_string(),
-                                            properties: EdgeProperties {
-                                                detail: detail.to_string(),
-                                                ..EdgeProperties::default()
-                                            },
-                                        },
-                                    )?;
-                                    added += 1;
-                                }
-                                Err(e) => {
-                                    errors.push(format!("CSV error: {}", e));
-                                    skipped += 1;
-                                }
-                            }
-                        }
-
-                        store.save_graph(&path, &graph_file)?;
-                        append_event_snapshot(
-                            &path,
-                            "edge.add-batch",
-                            Some(format!("file={} added={}", file, added)),
-                            &graph_file,
-                        )?;
-
-                        let mut output = format!("+ edges: {added}\n");
-                        if skipped > 0 {
-                            output.push_str(&format!("~ skipped: {}\n", skipped));
-                        }
-                        if !errors.is_empty() {
-                            output.push_str(&format!("! errors: {}\n", errors.len()));
-                            for e in errors.iter().take(3) {
-                                output.push_str(&format!("  {}\n", e));
-                            }
-                        }
-                        Ok(output)
-                    }
-                    EdgeCommand::Remove(RemoveEdgeArgs {
-                        source_id,
-                        relation,
-                        target_id,
-                    }) => {
-                        remove_edge(&mut graph_file, &source_id, &relation, &target_id)?;
-                        store.save_graph(&path, &graph_file)?;
-                        append_event_snapshot(
-                            &path,
-                            "edge.remove",
-                            Some(format!("{source_id} {relation} {target_id}")),
-                            &graph_file,
-                        )?;
-                        Ok(format!("- edge {source_id} {relation} {target_id}\n"))
-                    }
-                },
-
-                GraphCommand::Note { command } => match command {
-                    NoteCommand::Add(args) => {
-                        let note = build_note(&graph_file, args)?;
-                        graph_file.notes.push(note.clone());
-                        store.save_graph(&path, &graph_file)?;
-                        append_event_snapshot(
-                            &path,
-                            "note.add",
-                            Some(note.id.clone()),
-                            &graph_file,
-                        )?;
-                        Ok(format!("+ note {}\n", note.id))
-                    }
-                    NoteCommand::List(args) => Ok(render_note_list(&graph_file, &args)),
-                    NoteCommand::Remove { id } => {
-                        let before = graph_file.notes.len();
-                        graph_file.notes.retain(|note| note.id != id);
-                        let removed = before.saturating_sub(graph_file.notes.len());
-                        if removed == 0 {
-                            bail!("note not found: {id}");
-                        }
-                        store.save_graph(&path, &graph_file)?;
-                        append_event_snapshot(&path, "note.remove", Some(id.clone()), &graph_file)?;
-                        Ok(format!("- note {id}\n"))
-                    }
-                },
-
-                GraphCommand::Stats(args) => Ok(render_stats(&graph_file, &args)),
-                GraphCommand::Check(args) => Ok(render_check(&graph_file, cwd, &args)),
-                GraphCommand::Audit(args) => Ok(render_audit(&graph_file, cwd, &args)),
-
-                GraphCommand::Quality { command } => match command {
-                    QualityCommand::MissingDescriptions(args) => Ok(if args.json {
-                        render_missing_descriptions_json(&graph_file, &args)
-                    } else {
-                        render_missing_descriptions(&graph_file, &args)
-                    }),
-                    QualityCommand::MissingFacts(args) => Ok(if args.json {
-                        render_missing_facts_json(&graph_file, &args)
-                    } else {
-                        render_missing_facts(&graph_file, &args)
-                    }),
-                    QualityCommand::Duplicates(args) => Ok(if args.json {
-                        render_duplicates_json(&graph_file, &args)
-                    } else {
-                        render_duplicates(&graph_file, &args)
-                    }),
-                    QualityCommand::EdgeGaps(args) => Ok(if args.json {
-                        render_edge_gaps_json(&graph_file, &args)
-                    } else {
-                        render_edge_gaps(&graph_file, &args)
-                    }),
-                },
+                GraphCommand::Quality { command } => Ok(execute_quality(command, &graph_file)),
 
                 // Short aliases (e.g. `kg graph fridge missing-descriptions`)
-                GraphCommand::MissingDescriptions(args) => Ok(if args.json {
-                    render_missing_descriptions_json(&graph_file, &args)
-                } else {
-                    render_missing_descriptions(&graph_file, &args)
-                }),
-                GraphCommand::MissingFacts(args) => Ok(if args.json {
-                    render_missing_facts_json(&graph_file, &args)
-                } else {
-                    render_missing_facts(&graph_file, &args)
-                }),
-                GraphCommand::Duplicates(args) => Ok(if args.json {
-                    render_duplicates_json(&graph_file, &args)
-                } else {
-                    render_duplicates(&graph_file, &args)
-                }),
-                GraphCommand::EdgeGaps(args) => Ok(if args.json {
-                    render_edge_gaps_json(&graph_file, &args)
-                } else {
-                    render_edge_gaps(&graph_file, &args)
-                }),
-
-                GraphCommand::ExportHtml(ExportHtmlArgs { output, title }) => {
-                    export_html::export_html(
-                        &graph_file,
-                        &graph,
-                        export_html::ExportHtmlOptions {
-                            output: output.as_deref(),
-                            title: title.as_deref(),
-                        },
-                    )
+                GraphCommand::MissingDescriptions(args) => {
+                    Ok(execute_missing_descriptions(&graph_file, &args))
                 }
+                GraphCommand::MissingFacts(args) => Ok(execute_missing_facts(&graph_file, &args)),
+                GraphCommand::Duplicates(args) => Ok(execute_duplicates(&graph_file, &args)),
+                GraphCommand::EdgeGaps(args) => Ok(execute_edge_gaps(&graph_file, &args)),
 
-                GraphCommand::AccessLog(args) => {
-                    Ok(access_log::read_log(&path, args.limit, args.show_empty)?)
-                }
+                GraphCommand::ExportHtml(args) => execute_export_html(&graph, &graph_file, args),
 
-                GraphCommand::AccessStats(_) => Ok(access_log::log_stats(&path)?),
-                GraphCommand::ImportCsv(args) => import_graph_csv(
-                    &path,
-                    &graph,
-                    &mut graph_file,
-                    store.as_ref(),
-                    &args,
-                    schema.as_ref(),
+                GraphCommand::AccessLog(args) => execute_access_log(&path, args),
+
+                GraphCommand::AccessStats(_) => execute_access_stats(&path),
+                GraphCommand::ImportCsv(args) => execute_import_csv(
+                    GraphTransferContext {
+                        cwd,
+                        graph_name: &graph,
+                        path: &path,
+                        graph_file: &mut graph_file,
+                        schema: schema.as_ref(),
+                        store: store.as_ref(),
+                    },
+                    args,
                 ),
-                GraphCommand::ImportMarkdown(args) => import_graph_markdown(
-                    &path,
-                    &graph,
-                    &mut graph_file,
-                    store.as_ref(),
-                    &args,
-                    schema.as_ref(),
+                GraphCommand::ImportMarkdown(args) => execute_import_markdown(
+                    GraphTransferContext {
+                        cwd,
+                        graph_name: &graph,
+                        path: &path,
+                        graph_file: &mut graph_file,
+                        schema: schema.as_ref(),
+                        store: store.as_ref(),
+                    },
+                    args,
                 ),
-                GraphCommand::Kql(KqlArgs { query, json }) => {
-                    if json {
-                        Ok(
-                            serde_json::to_string_pretty(&kql::query(&graph_file, &query)?)
-                                .unwrap_or_else(|_| "{}".to_owned()),
-                        )
-                    } else {
-                        kql::render_query(&graph_file, &query)
-                    }
+                GraphCommand::Kql(args) => execute_kql(&graph_file, args),
+                GraphCommand::ExportJson(args) => execute_export_json(&graph, &graph_file, args),
+                GraphCommand::ImportJson(args) => {
+                    execute_import_json(&path, &graph, store.as_ref(), args)
                 }
-                GraphCommand::ExportJson(ExportJsonArgs { output }) => {
-                    export_graph_json(&graph, &graph_file, output.as_deref())
-                }
-                GraphCommand::ImportJson(ImportJsonArgs { input }) => {
-                    import_graph_json(&path, &graph, &input, store.as_ref())
-                }
-                GraphCommand::ExportDot(args) => export_graph_dot(&graph, &graph_file, &args),
+                GraphCommand::ExportDot(args) => execute_export_dot(&graph, &graph_file, args),
                 GraphCommand::ExportMermaid(args) => {
-                    export_graph_mermaid(&graph, &graph_file, &args)
+                    execute_export_mermaid(&graph, &graph_file, args)
                 }
                 GraphCommand::ExportGraphml(args) => {
-                    export_graph_graphml(&graph, &graph_file, &args)
+                    execute_export_graphml(&graph, &graph_file, args)
                 }
-                GraphCommand::ExportMd(args) => export_graph_md(&graph, &graph_file, &args, cwd),
-                GraphCommand::Split(args) => split_graph(&graph, &graph_file, &args),
-                GraphCommand::Vector { command } => {
-                    handle_vector_command(&path, &graph, &graph_file, &command, cwd)
-                }
-                GraphCommand::AsOf(args) => export_graph_as_of(&path, &graph, &args),
-                GraphCommand::History(args) => Ok(render_graph_history(&path, &graph, &args)?),
-                GraphCommand::Timeline(args) => Ok(render_graph_timeline(&path, &graph, &args)?),
-                GraphCommand::DiffAsOf(args) => Ok(if args.json {
-                    render_graph_diff_as_of_json(&path, &graph, &args)?
-                } else {
-                    render_graph_diff_as_of(&path, &graph, &args)?
-                }),
+                GraphCommand::ExportMd(args) => execute_export_md(
+                    GraphTransferContext {
+                        cwd,
+                        graph_name: &graph,
+                        path: &path,
+                        graph_file: &mut graph_file,
+                        schema: schema.as_ref(),
+                        store: store.as_ref(),
+                    },
+                    args,
+                ),
+                GraphCommand::Split(args) => execute_split(&graph, &graph_file, args),
+                GraphCommand::Vector { command } => execute_vector(
+                    GraphTransferContext {
+                        cwd,
+                        graph_name: &graph,
+                        path: &path,
+                        graph_file: &mut graph_file,
+                        schema: schema.as_ref(),
+                        store: store.as_ref(),
+                    },
+                    command,
+                ),
+                GraphCommand::AsOf(args) => execute_as_of(&path, &graph, args),
+                GraphCommand::History(args) => execute_history(&path, &graph, args),
+                GraphCommand::Timeline(args) => execute_timeline(&path, &graph, args),
+                GraphCommand::DiffAsOf(args) => execute_diff_as_of(&path, &graph, args),
                 GraphCommand::FeedbackSummary(args) => {
-                    Ok(render_feedback_summary_for_graph(cwd, &graph, &args)?)
+                    Ok(execute_feedback_summary(cwd, &graph, &args)?)
                 }
-                GraphCommand::List(args) => Ok(if args.json {
-                    render_node_list_json(&graph_file, &args)
-                } else {
-                    render_node_list(&graph_file, &args)
-                }),
+                GraphCommand::List(args) => Ok(execute_node_list(&graph_file, &args)),
             }
         }
     }
@@ -812,7 +401,7 @@ struct FindResponse {
     queries: Vec<FindQueryResult>,
 }
 
-fn render_find_json_with_index(
+pub(crate) fn render_find_json_with_index(
     graph: &GraphFile,
     queries: &[String],
     limit: usize,
@@ -845,7 +434,7 @@ struct NodeGetResponse {
     node: Node,
 }
 
-fn render_node_json(node: &Node) -> String {
+pub(crate) fn render_node_json(node: &Node) -> String {
     let payload = NodeGetResponse { node: node.clone() };
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
 }
@@ -856,7 +445,7 @@ struct NodeListResponse {
     nodes: Vec<Node>,
 }
 
-fn render_node_list_json(graph: &GraphFile, args: &ListNodesArgs) -> String {
+pub(crate) fn render_node_list_json(graph: &GraphFile, args: &ListNodesArgs) -> String {
     let (total, visible) = collect_node_list(graph, args);
     let nodes = visible.into_iter().cloned().collect();
     let payload = NodeListResponse { total, nodes };
@@ -1495,7 +1084,7 @@ fn merge_graphs(
     Ok(format!("{}\n", lines.join("\n")))
 }
 
-fn export_graph_as_of(path: &Path, graph: &str, args: &AsOfArgs) -> Result<String> {
+pub(crate) fn export_graph_as_of(path: &Path, graph: &str, args: &AsOfArgs) -> Result<String> {
     match resolve_temporal_source(path, args.source)? {
         TemporalSource::EventLog => export_graph_as_of_event_log(path, graph, args),
         _ => export_graph_as_of_backups(path, graph, args),
@@ -1587,7 +1176,7 @@ fn read_gz_to_string(path: &Path) -> Result<String> {
     Ok(out)
 }
 
-fn append_event_snapshot(
+pub(crate) fn append_event_snapshot(
     path: &Path,
     action: &str,
     detail: Option<String>,
@@ -1596,7 +1185,11 @@ fn append_event_snapshot(
     event_log::append_snapshot(path, action, detail, graph)
 }
 
-fn export_graph_json(graph: &str, graph_file: &GraphFile, output: Option<&str>) -> Result<String> {
+pub(crate) fn export_graph_json(
+    graph: &str,
+    graph_file: &GraphFile,
+    output: Option<&str>,
+) -> Result<String> {
     let output_path = output
         .map(|value| value.to_owned())
         .unwrap_or_else(|| format!("{graph}.export.json"));
@@ -1605,7 +1198,7 @@ fn export_graph_json(graph: &str, graph_file: &GraphFile, output: Option<&str>) 
     Ok(format!("+ exported {output_path}\n"))
 }
 
-fn import_graph_json(
+pub(crate) fn import_graph_json(
     path: &Path,
     graph: &str,
     input: &str,
@@ -1622,7 +1215,7 @@ fn import_graph_json(
     Ok(format!("+ imported {input} -> {graph}\n"))
 }
 
-fn import_graph_csv(
+pub(crate) fn import_graph_csv(
     path: &Path,
     graph: &str,
     graph_file: &mut GraphFile,
@@ -1657,7 +1250,7 @@ fn import_graph_csv(
     Ok(format!("{}\n", lines.join("\n")))
 }
 
-fn import_graph_markdown(
+pub(crate) fn import_graph_markdown(
     path: &Path,
     graph: &str,
     graph_file: &mut GraphFile,
@@ -1688,7 +1281,11 @@ fn import_graph_markdown(
     Ok(format!("{}\n", lines.join("\n")))
 }
 
-fn export_graph_dot(graph: &str, graph_file: &GraphFile, args: &ExportDotArgs) -> Result<String> {
+pub(crate) fn export_graph_dot(
+    graph: &str,
+    graph_file: &GraphFile,
+    args: &ExportDotArgs,
+) -> Result<String> {
     let output_path = args
         .output
         .clone()
@@ -1722,7 +1319,7 @@ fn export_graph_dot(graph: &str, graph_file: &GraphFile, args: &ExportDotArgs) -
     Ok(format!("+ exported {output_path}\n"))
 }
 
-fn export_graph_mermaid(
+pub(crate) fn export_graph_mermaid(
     graph: &str,
     graph_file: &GraphFile,
     args: &ExportMermaidArgs,
@@ -1759,7 +1356,7 @@ fn export_graph_mermaid(
     Ok(format!("+ exported {output_path}\n"))
 }
 
-fn export_graph_graphml(
+pub(crate) fn export_graph_graphml(
     graph: &str,
     graph_file: &GraphFile,
     args: &ExportGraphmlArgs,
@@ -1843,7 +1440,7 @@ fn escape_xml(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn export_graph_md(
+pub(crate) fn export_graph_md(
     graph: &str,
     graph_file: &GraphFile,
     args: &ExportMdArgs,
@@ -1944,7 +1541,7 @@ fn sanitize_filename(name: &str) -> String {
     name.replace([':', '/', '\\', ' '], "_").replace('&', "and")
 }
 
-fn split_graph(graph: &str, graph_file: &GraphFile, args: &SplitArgs) -> Result<String> {
+pub(crate) fn split_graph(graph: &str, graph_file: &GraphFile, args: &SplitArgs) -> Result<String> {
     let output_dir = args
         .output
         .clone()
@@ -2125,7 +1722,7 @@ fn sanitize_mermaid_id(value: &str) -> String {
     }
 }
 
-fn render_graph_history(path: &Path, graph: &str, args: &HistoryArgs) -> Result<String> {
+pub(crate) fn render_graph_history(path: &Path, graph: &str, args: &HistoryArgs) -> Result<String> {
     let backups = list_graph_backups(path)?;
     let total = backups.len();
     let snapshots: Vec<(u64, PathBuf)> = backups.into_iter().rev().take(args.limit).collect();
@@ -2154,7 +1751,11 @@ fn render_graph_history(path: &Path, graph: &str, args: &HistoryArgs) -> Result<
     Ok(format!("{}\n", lines.join("\n")))
 }
 
-fn render_graph_timeline(path: &Path, graph: &str, args: &TimelineArgs) -> Result<String> {
+pub(crate) fn render_graph_timeline(
+    path: &Path,
+    graph: &str,
+    args: &TimelineArgs,
+) -> Result<String> {
     let entries = event_log::read_log(path)?;
     let total = entries.len();
     let filtered: Vec<&event_log::EventLogEntry> = entries
@@ -2263,14 +1864,22 @@ struct GraphTimelineResponse {
     entries: Vec<GraphTimelineEntry>,
 }
 
-fn render_graph_diff_as_of(path: &Path, graph: &str, args: &DiffAsOfArgs) -> Result<String> {
+pub(crate) fn render_graph_diff_as_of(
+    path: &Path,
+    graph: &str,
+    args: &DiffAsOfArgs,
+) -> Result<String> {
     match resolve_temporal_source(path, args.source)? {
         TemporalSource::EventLog => render_graph_diff_as_of_event_log(path, graph, args),
         _ => render_graph_diff_as_of_backups(path, graph, args),
     }
 }
 
-fn render_graph_diff_as_of_json(path: &Path, graph: &str, args: &DiffAsOfArgs) -> Result<String> {
+pub(crate) fn render_graph_diff_as_of_json(
+    path: &Path,
+    graph: &str,
+    args: &DiffAsOfArgs,
+) -> Result<String> {
     match resolve_temporal_source(path, args.source)? {
         TemporalSource::EventLog => render_graph_diff_as_of_event_log_json(path, graph, args),
         _ => render_graph_diff_as_of_backups_json(path, graph, args),
@@ -2452,7 +2061,7 @@ fn collect_node_list<'a>(graph: &'a GraphFile, args: &ListNodesArgs) -> (usize, 
     (total, visible)
 }
 
-fn render_node_list(graph: &GraphFile, args: &ListNodesArgs) -> String {
+pub(crate) fn render_node_list(graph: &GraphFile, args: &ListNodesArgs) -> String {
     let (total, visible) = collect_node_list(graph, args);
 
     let mut lines = vec![format!("= nodes ({total})")];
@@ -2467,7 +2076,7 @@ fn render_node_list(graph: &GraphFile, args: &ListNodesArgs) -> String {
     format!("{}\n", lines.join("\n"))
 }
 
-fn render_note_list(graph: &GraphFile, args: &NoteListArgs) -> String {
+pub(crate) fn render_note_list(graph: &GraphFile, args: &NoteListArgs) -> String {
     let mut notes: Vec<&Note> = graph
         .notes
         .iter()
@@ -2506,7 +2115,7 @@ fn render_note_list(graph: &GraphFile, args: &NoteListArgs) -> String {
     format!("{}\n", lines.join("\n"))
 }
 
-fn build_note(graph: &GraphFile, args: NoteAddArgs) -> Result<Note> {
+pub(crate) fn build_note(graph: &GraphFile, args: NoteAddArgs) -> Result<Note> {
     if graph.node_by_id(&args.node_id).is_none() {
         bail!("node not found: {}", args.node_id);
     }
@@ -2543,7 +2152,7 @@ fn now_ms() -> u128 {
         .as_millis()
 }
 
-fn map_find_mode(mode: CliFindMode) -> output::FindMode {
+pub(crate) fn map_find_mode(mode: CliFindMode) -> output::FindMode {
     match mode {
         CliFindMode::Fuzzy => output::FindMode::Fuzzy,
         CliFindMode::Bm25 => output::FindMode::Bm25,
@@ -2551,7 +2160,7 @@ fn map_find_mode(mode: CliFindMode) -> output::FindMode {
     }
 }
 
-fn render_feedback_log(cwd: &Path, args: &FeedbackLogArgs) -> Result<String> {
+pub(crate) fn render_feedback_log(cwd: &Path, args: &FeedbackLogArgs) -> Result<String> {
     let path = cwd.join("kg-mcp.feedback.log");
     if !path.exists() {
         return Ok(String::from("= feedback-log\nempty: no entries yet\n"));
@@ -2600,7 +2209,7 @@ fn render_feedback_log(cwd: &Path, args: &FeedbackLogArgs) -> Result<String> {
     Ok(format!("{}\n", output.join("\n")))
 }
 
-fn handle_vector_command(
+pub(crate) fn handle_vector_command(
     path: &Path,
     _graph: &str,
     graph_file: &GraphFile,
@@ -2764,7 +2373,7 @@ fn render_feedback_summary(cwd: &Path, args: &FeedbackSummaryArgs) -> Result<Str
     Ok(format!("{}\n", lines.join("\n")))
 }
 
-fn render_feedback_summary_for_graph(
+pub(crate) fn render_feedback_summary_for_graph(
     cwd: &Path,
     graph: &str,
     args: &FeedbackSummaryArgs,
@@ -2875,7 +2484,7 @@ pub fn resolve_graph_path(cwd: &Path, graph_root: &Path, graph: &str) -> Result<
 // Validation renderers (check vs audit differ in header only)
 // ---------------------------------------------------------------------------
 
-fn render_check(graph: &GraphFile, cwd: &Path, args: &CheckArgs) -> String {
+pub(crate) fn render_check(graph: &GraphFile, cwd: &Path, args: &CheckArgs) -> String {
     let report = validate_graph(graph, cwd, args.deep, args.base_dir.as_deref());
     format_validation_report(
         "check",
@@ -2887,7 +2496,7 @@ fn render_check(graph: &GraphFile, cwd: &Path, args: &CheckArgs) -> String {
     )
 }
 
-fn render_audit(graph: &GraphFile, cwd: &Path, args: &AuditArgs) -> String {
+pub(crate) fn render_audit(graph: &GraphFile, cwd: &Path, args: &AuditArgs) -> String {
     let report = validate_graph(graph, cwd, args.deep, args.base_dir.as_deref());
     format_validation_report(
         "audit",
@@ -2946,62 +2555,8 @@ mod tests {
         serde_json::from_str(include_str!("../graph-example-fridge.json")).expect("fixture graph")
     }
 
-    fn test_graph_root(cwd: &Path) -> PathBuf {
-        cwd.join(".kg").join("graphs")
-    }
-
-    fn write_fixture(dir: &Path) -> PathBuf {
-        std::fs::create_dir_all(dir).expect("create graph root");
-        let path = dir.join("fridge.json");
-        std::fs::write(&path, include_str!("../graph-example-fridge.json")).expect("write fixture");
-        path
-    }
-
-    fn write_config(cwd: &Path, body: &str) {
-        std::fs::write(cwd.join(".kg.toml"), body).expect("write config");
-    }
-
-    fn write_graph(path: &Path, graph: &GraphFile) {
-        graph.save(path).expect("save graph");
-    }
-
-    fn exec_ok(args: &[&str], cwd: &Path) -> String {
-        let cli = Cli::try_parse_from(normalize_args(args.iter().map(OsString::from)))
-            .expect("parse args");
-        execute(cli, cwd, &test_graph_root(cwd)).expect("execute")
-    }
-
     fn exec_safe(args: &[&str], cwd: &Path) -> Result<String> {
         run_args_safe(args.iter().map(OsString::from), cwd)
-    }
-
-    #[test]
-    fn create_graph_writes_empty_graph_file() {
-        let dir = tempdir().expect("tempdir");
-        let output = exec_ok(&["kg", "create", "fridge"], dir.path());
-        assert!(output.contains("+ created"));
-        assert!(output.contains(".kg/graphs/fridge.json"));
-        let graph = GraphFile::load(&test_graph_root(dir.path()).join("fridge.json"))
-            .expect("load created graph");
-        assert_eq!(graph.metadata.name, "fridge");
-        assert_eq!(graph.metadata.node_count, 0);
-        assert!(graph.nodes.is_empty());
-    }
-
-    #[test]
-    fn create_graph_writes_redb_file() {
-        let dir = tempdir().expect("tempdir");
-        write_config(dir.path(), "backend = \"redb\"\n");
-        let output = exec_ok(&["kg", "create", "fridge"], dir.path());
-        assert!(output.contains("+ created"));
-        assert!(output.contains(".kg/graphs/fridge.db"));
-
-        let store = graph_store(dir.path(), &test_graph_root(dir.path())).expect("graph store");
-        let path = store.resolve_graph_path("fridge").expect("resolve graph");
-        let graph = store.load_graph(&path).expect("load graph");
-        assert_eq!(graph.metadata.name, "fridge");
-        assert_eq!(graph.metadata.node_count, 0);
-        assert!(graph.nodes.is_empty());
     }
 
     #[test]
@@ -3019,332 +2574,6 @@ mod tests {
     }
 
     #[test]
-    fn find_supports_multiple_queries() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(
-            &["kg", "fridge", "node", "find", "lodowka", "smart"],
-            dir.path(),
-        );
-        assert!(output.contains("? lodowka ("));
-        assert!(output.contains("# concept:refrigerator | Lodowka"));
-        assert!(output.contains("? smart ("));
-        assert!(output.contains("# interface:smart_api | Smart Home API (REST)"));
-    }
-
-    #[test]
-    fn kql_filters_nodes_by_type() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(&["kg", "fridge", "kql", "node type=Concept"], dir.path());
-        assert!(output.contains("nodes:"));
-        assert!(output.contains("concept:refrigerator"));
-    }
-
-    #[test]
-    fn find_uses_fuzzy_matching_for_imperfect_queries() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(&["kg", "fridge", "node", "find", "smrt api"], dir.path());
-        assert!(output.contains("? smrt api ("));
-        assert!(output.contains("# interface:smart_api | Smart Home API (REST)"));
-        assert!(!output.contains("# process:diagnostics | Autodiagnostyka"));
-    }
-
-    #[test]
-    fn list_graphs_shows_available_graph_names() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        write_fixture(&dir.path().join(".kg").join("graphs"));
-        let output = exec_ok(&["kg", "list"], dir.path());
-        assert!(output.contains("= graphs (1)"));
-        assert!(output.contains("- fridge"));
-    }
-
-    #[test]
-    fn list_nodes_supports_type_filter_and_limit() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(
-            &["kg", "fridge", "list", "--type", "Process", "--limit", "1"],
-            dir.path(),
-        );
-        assert!(output.contains("= nodes (3)"));
-        assert!(output.contains("[Process]"));
-        assert!(!output.contains("[Concept]"));
-    }
-
-    #[test]
-    fn node_list_subcommand_matches_graph_list() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let graph_list = exec_ok(&["kg", "fridge", "list", "--limit", "5"], dir.path());
-        let node_list = exec_ok(
-            &["kg", "fridge", "node", "list", "--limit", "5"],
-            dir.path(),
-        );
-        assert_eq!(graph_list, node_list);
-    }
-
-    #[test]
-    fn feedback_log_lists_recent_entries_and_supports_filters() {
-        let dir = tempdir().expect("tempdir");
-        let log_path = dir.path().join("kg-mcp.feedback.log");
-        std::fs::write(
-            &log_path,
-            "ts_ms=1\tuid=aaaaaa\taction=YES\tpick=-\tselected=concept:refrigerator\tgraph=fridge\tqueries=lodowka\n\
-ts_ms=2\tuid=bbbbbb\taction=NO\tpick=-\tselected=-\tgraph=fridge\tqueries=smart\n\
-ts_ms=3\tuid=cccccc\taction=PICK\tpick=2\tselected=process:diagnostics\tgraph=fridge\tqueries=diag\n",
-        )
-        .expect("write feedback log");
-
-        let output = exec_ok(&["kg", "feedback-log", "--limit", "2"], dir.path());
-        assert!(output.contains("= feedback-log"));
-        assert!(output.contains("total_entries: 3"));
-        assert!(output.contains("showing: 2"));
-        // Most recent first.
-        assert!(output.contains("- 3 | cccccc | PICK"));
-
-        let filtered = exec_ok(
-            &["kg", "feedback-log", "--uid", "aaaaaa", "--limit", "5"],
-            dir.path(),
-        );
-        assert!(filtered.contains("total_entries: 1"));
-        assert!(filtered.contains("uid=aaaaaa") == false);
-        assert!(filtered.contains("aaaaaa"));
-        assert!(!filtered.contains("bbbbbb"));
-    }
-
-    #[test]
-    fn feedback_summary_parses_and_aggregates_correctly() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let log_path = dir.path().join("kg-mcp.feedback.log");
-        std::fs::write(
-            &log_path,
-            "ts_ms=1\tuid=aaaaaa\taction=YES\tpick=-\tselected=concept:foo\tgraph=fridge\tqueries=foo\n\
-ts_ms=2\tuid=bbbbbb\taction=YES\tpick=-\tselected=concept:bar\tgraph=fridge\tqueries=bar\n\
-ts_ms=3\tuid=cccccc\taction=NO\tpick=-\tselected=-\tgraph=fridge\tqueries=baz\n\
-ts_ms=4\tuid=dddddd\taction=NIL\tpick=-\tselected=-\tgraph=fridge\tqueries=missing\n\
-ts_ms=5\tuid=eeeeee\taction=PICK\tpick=1\tselected=concept:foo\tgraph=fridge\tqueries=xyz\n",
-        )
-        .expect("write feedback log");
-
-        let output = exec_ok(&["kg", "fridge", "feedback-summary"], dir.path());
-        assert!(output.contains("= feedback-summary"));
-        assert!(output.contains("YES:  2"));
-        assert!(output.contains("NO:   1"));
-        assert!(output.contains("NIL:  1"));
-        assert!(output.contains("Brakujące node'y"));
-        assert!(output.contains("missing"));
-        assert!(output.contains("concept:foo"));
-        assert!(output.contains("Top wyszukiwane"));
-    }
-
-    #[test]
-    fn graph_stats_reports_counts() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(
-            &[
-                "kg",
-                "graph",
-                "fridge",
-                "stats",
-                "--by-type",
-                "--by-relation",
-                "--show-sources",
-            ],
-            dir.path(),
-        );
-        assert!(output.contains("= stats"));
-        assert!(output.contains("nodes:"));
-        assert!(output.contains("types:"));
-        assert!(output.contains("relations:"));
-        assert!(output.contains("sources:"));
-    }
-
-    #[test]
-    fn graph_missing_descriptions_alias_works() {
-        let dir = tempdir().expect("tempdir");
-        let path = write_fixture(&test_graph_root(dir.path()));
-        let mut graph = GraphFile::load(&path).expect("load graph");
-        graph
-            .node_by_id_mut("concept:temperature")
-            .expect("node")
-            .properties
-            .description
-            .clear();
-        write_graph(&path, &graph);
-        let output = exec_ok(
-            &[
-                "kg",
-                "graph",
-                "fridge",
-                "missing-descriptions",
-                "--limit",
-                "10",
-            ],
-            dir.path(),
-        );
-        assert!(output.contains("= missing-descriptions ("));
-        assert!(output.contains("concept:temperature"));
-    }
-
-    #[test]
-    fn graph_missing_facts_quality_command_works() {
-        let dir = tempdir().expect("tempdir");
-        let path = write_fixture(&test_graph_root(dir.path()));
-        let mut graph = GraphFile::load(&path).expect("load graph");
-        graph
-            .node_by_id_mut("process:defrost")
-            .expect("node")
-            .properties
-            .key_facts
-            .clear();
-        write_graph(&path, &graph);
-        let output = exec_ok(
-            &[
-                "kg",
-                "graph",
-                "fridge",
-                "quality",
-                "missing-facts",
-                "--limit",
-                "10",
-            ],
-            dir.path(),
-        );
-        assert!(output.contains("= missing-facts ("));
-        assert!(output.contains("process:defrost"));
-    }
-
-    #[test]
-    fn graph_duplicates_detects_similar_names() {
-        let dir = tempdir().expect("tempdir");
-        let path = write_fixture(&test_graph_root(dir.path()));
-        let mut graph = GraphFile::load(&path).expect("load graph");
-        graph.nodes.push(Node {
-            id: "concept:smart_home_api".to_owned(),
-            r#type: "Interface".to_owned(),
-            name: "Smart Home API".to_owned(),
-            properties: NodeProperties::default(),
-            source_files: vec!["smart_home_integration.md".to_owned()],
-        });
-        graph.refresh_counts();
-        write_graph(&path, &graph);
-        let output = exec_ok(
-            &[
-                "kg",
-                "graph",
-                "fridge",
-                "quality",
-                "duplicates",
-                "--threshold",
-                "0.7",
-            ],
-            dir.path(),
-        );
-        assert!(output.contains("= duplicates ("));
-        assert!(output.contains("interface:smart_api"));
-        assert!(output.contains("concept:smart_home_api"));
-    }
-
-    #[test]
-    fn graph_edge_gaps_reports_structural_gaps() {
-        let dir = tempdir().expect("tempdir");
-        let path = write_fixture(&test_graph_root(dir.path()));
-        let mut graph = GraphFile::load(&path).expect("load graph");
-        graph.nodes.push(Node {
-            id: "datastore:manual_cache".to_owned(),
-            r#type: "DataStore".to_owned(),
-            name: "Manual Cache".to_owned(),
-            properties: NodeProperties::default(),
-            source_files: vec!["manual.md".to_owned()],
-        });
-        graph.nodes.push(Node {
-            id: "process:manual_sync".to_owned(),
-            r#type: "Process".to_owned(),
-            name: "Manual Sync".to_owned(),
-            properties: NodeProperties::default(),
-            source_files: vec!["manual.md".to_owned()],
-        });
-        graph.refresh_counts();
-        write_graph(&path, &graph);
-        let output = exec_ok(&["kg", "graph", "fridge", "edge-gaps"], dir.path());
-        assert!(output.contains("datastore-missing-stored-in:"));
-        assert!(output.contains("datastore:manual_cache"));
-        assert!(output.contains("process:manual_sync"));
-    }
-
-    #[test]
-    fn graph_audit_reports_invalid_conditions() {
-        let dir = tempdir().expect("tempdir");
-        let path = write_fixture(&test_graph_root(dir.path()));
-        let mut graph = GraphFile::load(&path).expect("load graph");
-        graph.nodes.push(Node {
-            id: "concept:refrigerator".to_owned(),
-            r#type: "Concept".to_owned(),
-            name: "Duplicate Refrigerator".to_owned(),
-            properties: NodeProperties::default(),
-            source_files: vec!["missing.md".to_owned()],
-        });
-        graph.refresh_counts();
-        write_graph(&path, &graph);
-        let output = exec_ok(
-            &["kg", "graph", "fridge", "audit", "--deep", "--limit", "20"],
-            dir.path(),
-        );
-        assert!(output.contains("= audit"));
-        assert!(output.contains("status: INVALID"));
-        assert!(output.contains("duplicate node id: concept:refrigerator"));
-        assert!(output.contains("missing source file:"));
-    }
-
-    #[test]
-    fn graph_check_reports_validation_errors() {
-        let dir = tempdir().expect("tempdir");
-        let path = write_fixture(&test_graph_root(dir.path()));
-        let mut graph = GraphFile::load(&path).expect("load graph");
-        graph.nodes.push(Node {
-            id: "bad-id".to_owned(),
-            r#type: "WeirdType".to_owned(),
-            name: String::new(),
-            properties: NodeProperties {
-                confidence: Some(1.5),
-                ..NodeProperties::default()
-            },
-            source_files: Vec::new(),
-        });
-        graph.refresh_counts();
-        write_graph(&path, &graph);
-        let output = exec_ok(
-            &["kg", "graph", "fridge", "check", "--limit", "20"],
-            dir.path(),
-        );
-        assert!(output.contains("= check"));
-        assert!(output.contains("status: INVALID"));
-        assert!(output.contains("node bad-id has invalid type WeirdType"));
-        assert!(output.contains("node id bad-id does not match prefix:snake_case"));
-        assert!(output.contains("node bad-id missing name"));
-        assert!(output.contains("node bad-id missing source_files"));
-        assert!(output.contains("confidence out of range"));
-    }
-
-    #[test]
-    fn resolve_graph_path_uses_config_mapping() {
-        let dir = tempdir().expect("tempdir");
-        let mapped_dir = dir.path().join("mapped");
-        write_fixture(&mapped_dir);
-        write_config(dir.path(), "[graphs]\nfridge = \"mapped/fridge.json\"\n");
-        let output = exec_ok(
-            &["kg", "fridge", "node", "get", "concept:refrigerator"],
-            dir.path(),
-        );
-        assert!(output.contains("# concept:refrigerator | Lodowka"));
-    }
-
-    #[test]
     fn get_renders_compact_symbolic_view() {
         let graph = fixture_graph();
         let node = graph.node_by_id("concept:refrigerator").expect("node");
@@ -3353,183 +2582,6 @@ ts_ms=5\tuid=eeeeee\taction=PICK\tpick=1\tselected=concept:foo\tgraph=fridge\tqu
         assert!(rendered.contains("aka: Chlodziarka, Fridge"));
         assert!(rendered.contains("-> HAS | concept:cooling_chamber | Komora Chlodzenia"));
         assert!(rendered.contains("-> HAS | concept:temperature | Temperatura"));
-    }
-
-    #[test]
-    fn add_persists_node_in_existing_graph() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(
-            &[
-                "kg",
-                "fridge",
-                "node",
-                "add",
-                "concept:ice_maker",
-                "--type",
-                "Concept",
-                "--name",
-                "Kostkarka",
-                "--description",
-                "Automatyczna kostkarka do lodu",
-                "--domain-area",
-                "hardware",
-                "--provenance",
-                "manual",
-                "--confidence",
-                "0.9",
-                "--created-at",
-                "2026-03-20T01:00:00Z",
-                "--fact",
-                "Wytwarza kostki lodu co 2 godziny",
-                "--alias",
-                "Ice Maker",
-                "--source",
-                "instrukcja_obslugi.md",
-            ],
-            dir.path(),
-        );
-        assert_eq!(output, "+ node concept:ice_maker\n");
-        let graph =
-            GraphFile::load(&test_graph_root(dir.path()).join("fridge.json")).expect("load graph");
-        let node = graph.node_by_id("concept:ice_maker").expect("new node");
-        assert_eq!(node.properties.alias, vec!["Ice Maker"]);
-        assert_eq!(node.properties.domain_area, "hardware");
-        assert_eq!(node.properties.provenance, "manual");
-        assert_eq!(node.properties.confidence, Some(0.9));
-        assert_eq!(node.properties.created_at, "2026-03-20T01:00:00Z");
-        assert_eq!(graph.metadata.node_count, graph.nodes.len());
-    }
-
-    #[test]
-    fn modify_updates_existing_node_without_duplicate_values() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(
-            &[
-                "kg",
-                "fridge",
-                "node",
-                "modify",
-                "concept:temperature",
-                "--name",
-                "Temperatura Komory",
-                "--domain-area",
-                "sensing",
-                "--provenance",
-                "service_manual",
-                "--confidence",
-                "0.75",
-                "--created-at",
-                "2026-03-20T01:05:00Z",
-                "--fact",
-                "Alarm po 15 minutach odchylenia",
-                "--fact",
-                "Alarm po 15 minutach odchylenia",
-                "--alias",
-                "Temp",
-                "--alias",
-                "Temp",
-                "--source",
-                "panel_api.md",
-            ],
-            dir.path(),
-        );
-        assert_eq!(output, "~ node concept:temperature\n");
-        let graph =
-            GraphFile::load(&test_graph_root(dir.path()).join("fridge.json")).expect("load graph");
-        let node = graph.node_by_id("concept:temperature").expect("node");
-        assert_eq!(node.name, "Temperatura Komory");
-        assert_eq!(node.properties.alias, vec!["Temp"]);
-        assert_eq!(node.properties.domain_area, "sensing");
-        assert_eq!(node.properties.provenance, "service_manual");
-        assert_eq!(node.properties.confidence, Some(0.75));
-        assert_eq!(node.properties.created_at, "2026-03-20T01:05:00Z");
-        assert_eq!(
-            node.properties
-                .key_facts
-                .iter()
-                .filter(|f| f.as_str() == "Alarm po 15 minutach odchylenia")
-                .count(),
-            1
-        );
-        assert!(node.source_files.iter().any(|s| s == "panel_api.md"));
-    }
-
-    #[test]
-    fn remove_deletes_node_and_incident_edges() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(
-            &["kg", "fridge", "node", "remove", "process:defrost"],
-            dir.path(),
-        );
-        assert_eq!(output, "- node process:defrost (3 edges removed)\n");
-        let graph =
-            GraphFile::load(&test_graph_root(dir.path()).join("fridge.json")).expect("load graph");
-        assert!(graph.node_by_id("process:defrost").is_none());
-        assert!(
-            graph
-                .edges
-                .iter()
-                .all(|e| e.source_id != "process:defrost" && e.target_id != "process:defrost")
-        );
-    }
-
-    #[test]
-    fn edge_add_persists_new_edge() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(
-            &[
-                "kg",
-                "fridge",
-                "edge",
-                "add",
-                "concept:refrigerator",
-                "READS_FROM",
-                "datastore:settings_storage",
-                "--detail",
-                "Lodowka odczytuje ustawienia z pamieci ustawien",
-            ],
-            dir.path(),
-        );
-        assert_eq!(
-            output,
-            "+ edge concept:refrigerator READS_FROM datastore:settings_storage\n"
-        );
-        let graph =
-            GraphFile::load(&test_graph_root(dir.path()).join("fridge.json")).expect("load graph");
-        assert!(graph.has_edge(
-            "concept:refrigerator",
-            "READS_FROM",
-            "datastore:settings_storage"
-        ));
-    }
-
-    #[test]
-    fn edge_remove_deletes_existing_edge() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        let output = exec_ok(
-            &[
-                "kg",
-                "fridge",
-                "edge",
-                "remove",
-                "concept:refrigerator",
-                "HAS",
-                "concept:temperature",
-            ],
-            dir.path(),
-        );
-        assert_eq!(
-            output,
-            "- edge concept:refrigerator HAS concept:temperature\n"
-        );
-        let graph =
-            GraphFile::load(&test_graph_root(dir.path()).join("fridge.json")).expect("load graph");
-        assert!(!graph.has_edge("concept:refrigerator", "HAS", "concept:temperature"));
     }
 
     #[test]
@@ -3543,45 +2595,6 @@ ts_ms=5\tuid=eeeeee\taction=PICK\tpick=1\tselected=concept:foo\tgraph=fridge\tqu
         assert!(rendered.contains("edge"));
         assert!(rendered.contains("quality"));
         assert!(rendered.contains("kg graph fridge stats"));
-    }
-
-    #[test]
-    fn get_full_renders_new_properties() {
-        let dir = tempdir().expect("tempdir");
-        write_fixture(&test_graph_root(dir.path()));
-        exec_ok(
-            &[
-                "kg",
-                "fridge",
-                "node",
-                "modify",
-                "concept:refrigerator",
-                "--domain-area",
-                "appliance",
-                "--provenance",
-                "user_import",
-                "--confidence",
-                "0.88",
-                "--created-at",
-                "2026-03-20T01:10:00Z",
-            ],
-            dir.path(),
-        );
-        let output = exec_ok(
-            &[
-                "kg",
-                "fridge",
-                "node",
-                "get",
-                "concept:refrigerator",
-                "--full",
-            ],
-            dir.path(),
-        );
-        assert!(output.contains("domain_area: appliance"));
-        assert!(output.contains("provenance: user_import"));
-        assert!(output.contains("confidence: 0.88"));
-        assert!(output.contains("created_at: 2026-03-20T01:10:00Z"));
     }
 
     #[test]

@@ -17,6 +17,10 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "kg-cli"
+path = "src/bin/kg-cli.rs"
+
+[[bin]]
+name = "kg"
 path = "src/main.rs"
 
 [dependencies]
