@@ -10,7 +10,8 @@ jobs:
   test:
     runs-on:
       - self-hosted
-      - kg-local
+      - Linux
+      - X64
     steps:
       - uses: actions/checkout@v4
 
