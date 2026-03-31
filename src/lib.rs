@@ -2480,6 +2480,13 @@ pub fn resolve_graph_path(cwd: &Path, graph_root: &Path, graph: &str) -> Result<
     store.resolve_graph_path(graph)
 }
 
+/// Load the MCP nudge probability from `.kg.toml`, defaulting to 20.
+pub fn feedback_nudge_percent(cwd: &Path) -> Result<u8> {
+    Ok(config::KgConfig::discover(cwd)?
+        .map(|(_, config)| config.nudge_percent())
+        .unwrap_or(config::DEFAULT_NUDGE_PERCENT))
+}
+
 // ---------------------------------------------------------------------------
 // Validation renderers (check vs audit differ in header only)
 // ---------------------------------------------------------------------------

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::ffi::OsString;
 use std::fs::OpenOptions;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -340,6 +342,7 @@ struct FeedbackUpdate {
 #[derive(Clone)]
 struct KgMcpServer {
     cwd: PathBuf,
+    nudge_percent: u8,
     exec_lock: Arc<Mutex<()>>,
     feedback_state: Arc<Mutex<FeedbackState>>,
     trace_counter: Arc<AtomicU64>,
@@ -350,16 +353,18 @@ struct KgMcpServer {
 
 #[tool_router]
 impl KgMcpServer {
-    fn new(cwd: PathBuf) -> Self {
-        Self {
+    fn new(cwd: PathBuf) -> anyhow::Result<Self> {
+        let nudge_percent = kg::feedback_nudge_percent(&cwd)?;
+        Ok(Self {
             cwd,
+            nudge_percent,
             exec_lock: Arc::new(Mutex::new(())),
             feedback_state: Arc::new(Mutex::new(FeedbackState::default())),
             trace_counter: Arc::new(AtomicU64::new(0)),
             debug_from_env: env_flag_enabled("KG_MCP_DEBUG"),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
-        }
+        })
     }
 
     fn run_kg(
@@ -910,28 +915,29 @@ impl KgMcpServer {
             )
         };
 
+        let show_nudge = should_emit_nudge(self.nudge_percent, &uid);
         let mut output = String::new();
-        output.push_str(&nudge);
-        output.push('\n');
+        if show_nudge {
+            output.push_str(&nudge);
+            output.push('\n');
+        }
         output.push_str(&rendered);
         if !output.ends_with('\n') {
             output.push('\n');
         }
 
-        let requires_feedback = match feedback_mode.as_str() {
+        let mut requires_feedback = match feedback_mode.as_str() {
             "miss" => json!({
                 "required": true,
                 "uid": uid,
                 "mode": "miss",
                 "allow_nil": true,
-                "nudge": nudge,
             }),
             "yesno" => json!({
                 "required": true,
                 "uid": uid,
                 "mode": "yesno",
                 "options": 2,
-                "nudge": nudge,
             }),
             _ => json!({
                 "required": true,
@@ -939,9 +945,11 @@ impl KgMcpServer {
                 "mode": "pick",
                 "options": pick_max.unwrap_or(total),
                 "allow_nil": true,
-                "nudge": nudge,
             }),
         };
+        if show_nudge {
+            requires_feedback["nudge"] = json!(nudge);
+        }
 
         Ok(CallToolResult {
             content: vec![Content::text(output)],
@@ -996,24 +1004,31 @@ impl KgMcpServer {
         let nudge = format!(
             "NUDGE: Useful? Reply: kg_feedback_batch lines=[\"uid={uid} YES\"] or [\"uid={uid} NO\"]"
         );
+        let show_nudge = should_emit_nudge(self.nudge_percent, &uid);
         let mut output = String::new();
-        output.push_str(&nudge);
-        output.push('\n');
+        if show_nudge {
+            output.push_str(&nudge);
+            output.push('\n');
+        }
         output.push_str(&rendered);
         if !output.ends_with('\n') {
             output.push('\n');
         }
 
+        let mut requires_feedback = json!({
+            "required": true,
+            "uid": uid,
+            "mode": "yesno",
+            "options": 2,
+        });
+        if show_nudge {
+            requires_feedback["nudge"] = json!(nudge);
+        }
+
         Ok(CallToolResult {
             content: vec![Content::text(output)],
             structured_content: Some(json!({
-                "requires_feedback": {
-                    "required": true,
-                    "uid": uid,
-                    "mode": "yesno",
-                    "options": 2,
-                    "nudge": nudge,
-                },
+                "requires_feedback": requires_feedback,
                 "results": {
                     "total": 1,
                     "candidates": 1,
@@ -2768,6 +2783,18 @@ fn env_flag_enabled(name: &str) -> bool {
     }
 }
 
+fn should_emit_nudge(percent: u8, salt: &str) -> bool {
+    match percent {
+        0 => false,
+        100 => true,
+        percent => {
+            let mut hasher = DefaultHasher::new();
+            salt.hash(&mut hasher);
+            hasher.finish() % 100 < u64::from(percent)
+        }
+    }
+}
+
 fn redact_cli_args(args: &[String]) -> Vec<String> {
     let mut redacted = Vec::with_capacity(args.len());
     let mut mask_next = false;
@@ -3044,12 +3071,25 @@ mod tests {
         assert_eq!(redacted[3], "api_key=***REDACTED***");
         assert_eq!(redacted[5], "bm25");
     }
+
+    #[test]
+    fn should_emit_nudge_respects_zero_and_hundred() {
+        assert!(!should_emit_nudge(0, "abc123"));
+        assert!(should_emit_nudge(100, "abc123"));
+    }
+
+    #[test]
+    fn should_emit_nudge_is_deterministic_for_same_salt() {
+        let first = should_emit_nudge(20, "abc123");
+        let second = should_emit_nudge(20, "abc123");
+        assert_eq!(first, second);
+    }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
-    let service = KgMcpServer::new(cwd);
+    let service = KgMcpServer::new(cwd)?;
     let server = service
         .serve((tokio::io::stdin(), tokio::io::stdout()))
         .await?;

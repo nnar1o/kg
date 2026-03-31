@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.12] - 2026-03-31
+
+### Added
+- configurable MCP feedback `nudge` probability in `.kg.toml` with default `20` and validation for values from `0` to `100`
+
+### Changed
+- show MCP nudges probabilistically based on config while keeping structured feedback metadata available
+
 ## [0.1.11] - 2026-03-31
 
 ### Changed
