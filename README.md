@@ -25,6 +25,8 @@ A fast CLI for managing JSON knowledge graphs with native MCP server support. Bu
   curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
 ```
 
+The installer auto-detects Linux x86_64, macOS x86_64, and macOS Apple Silicon releases.
+
 ### From crates.io
 
 ```sh

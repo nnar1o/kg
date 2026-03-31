@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.13] - 2026-03-31
+
+### Changed
+- build release artifacts for Linux, macOS Intel, and macOS Apple Silicon in GitHub Actions
+- publish per-target binaries and update `install.sh` to download the correct asset for the current OS/architecture
+
 ## [0.1.12] - 2026-03-31
 
 ### Added
