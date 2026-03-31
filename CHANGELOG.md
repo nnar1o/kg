@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.10] - 2026-03-31
+
+### Added
+- per-request debug output for MCP `kg` commands plus richer trace and error metadata
+
+### Changed
+- refactor CLI dispatch into app modules and move integration tests out of the main binary
+- update GitHub Actions runner labels to match the self-hosted runner setup
+
 ## [0.1.8] - 2026-03-25
 
 ### Added

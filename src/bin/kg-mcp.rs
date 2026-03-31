@@ -3,8 +3,9 @@ use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
@@ -25,6 +26,9 @@ use serde_json::json;
 struct KgCommandArgs {
     #[schemars(description = "Arguments passed to `kg` (without the binary name)")]
     args: Vec<String>,
+    #[serde(default)]
+    #[schemars(description = "Enable per-request debug output")]
+    debug: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -34,6 +38,9 @@ struct KgScriptArgs {
     /// best_effort (default) or strict
     #[serde(default)]
     mode: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Enable per-request debug output")]
+    debug: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -58,6 +65,8 @@ struct NodeFindArgs {
     full: bool,
     #[serde(default)]
     skip_feedback: bool,
+    #[serde(default)]
+    debug: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -68,6 +77,8 @@ struct NodeGetArgs {
     include_features: bool,
     #[serde(default)]
     full: bool,
+    #[serde(default)]
+    debug: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -331,6 +342,8 @@ struct KgMcpServer {
     cwd: PathBuf,
     exec_lock: Arc<Mutex<()>>,
     feedback_state: Arc<Mutex<FeedbackState>>,
+    trace_counter: Arc<AtomicU64>,
+    debug_from_env: bool,
     tool_router: ToolRouter<KgMcpServer>,
     prompt_router: PromptRouter<KgMcpServer>,
 }
@@ -342,17 +355,46 @@ impl KgMcpServer {
             cwd,
             exec_lock: Arc::new(Mutex::new(())),
             feedback_state: Arc::new(Mutex::new(FeedbackState::default())),
+            trace_counter: Arc::new(AtomicU64::new(0)),
+            debug_from_env: env_flag_enabled("KG_MCP_DEBUG"),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
     }
 
-    fn run_kg(&self, os_args: Vec<OsString>) -> Result<String, McpError> {
+    fn run_kg(
+        &self,
+        os_args: Vec<OsString>,
+        tool_name: &str,
+        operation: &str,
+        request_debug: bool,
+    ) -> Result<String, McpError> {
+        let trace_id = self.next_trace_id();
+        let debug_enabled = self.debug_enabled(request_debug);
+        let started_at = Instant::now();
+        let raw_args: Vec<String> = os_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect();
+        let redacted_args = redact_cli_args(&raw_args);
+        let redacted_command = redacted_args.join(" ");
+
         let _guard = self.exec_lock.lock().map_err(|_| {
-            McpError::internal_error(
-                "kg command lock poisoned",
-                Some(json!({ "reason": "previous command panicked" })),
-            )
+            let mut data = json!({
+                "tool": tool_name,
+                "operation": operation,
+                "trace_id": trace_id,
+                "cli_command": redacted_command,
+                "reason": "previous command panicked",
+            });
+            if debug_enabled {
+                data["debug"] = json!({
+                    "cwd": self.cwd.display().to_string(),
+                    "cli_args": redacted_args,
+                    "duration_ms": started_at.elapsed().as_millis(),
+                });
+            }
+            McpError::internal_error("kg command lock poisoned", Some(data))
         })?;
 
         let cwd = self.cwd.clone();
@@ -362,25 +404,105 @@ impl KgMcpServer {
 
         match result {
             Ok(Ok(rendered)) => Ok(rendered),
-            Ok(Err(err)) => Err(McpError::internal_error(
-                "kg command failed",
-                Some(json!({ "error": err.to_string() })),
-            )),
-            Err(payload) => Err(McpError::internal_error(
-                "kg command panicked",
-                Some(json!({ "panic": panic_payload_to_string(payload) })),
-            )),
+            Ok(Err(err)) => {
+                let stderr = err.to_string();
+                let duration_ms = started_at.elapsed().as_millis();
+                let (code, message, kind, exit_code) = classify_kg_error(&stderr);
+                let mut data = json!({
+                    "tool": tool_name,
+                    "operation": operation,
+                    "trace_id": trace_id,
+                    "error_kind": kind,
+                    "cli_command": redacted_command,
+                    "exit_code": exit_code,
+                    "stdout_tail": "",
+                    "stderr_tail": last_lines(&stderr, 30),
+                    "hint": error_hint(kind),
+                });
+                if debug_enabled {
+                    data["debug"] = json!({
+                        "cwd": self.cwd.display().to_string(),
+                        "cli_args": redacted_args,
+                        "duration_ms": duration_ms,
+                        "raw_error": last_lines(&stderr, 80),
+                    });
+                }
+                Err(McpError::new(code, message, Some(data)))
+            }
+            Err(payload) => {
+                let panic = panic_payload_to_string(payload);
+                let duration_ms = started_at.elapsed().as_millis();
+                let mut data = json!({
+                    "tool": tool_name,
+                    "operation": operation,
+                    "trace_id": trace_id,
+                    "error_kind": "panic",
+                    "cli_command": redacted_command,
+                    "exit_code": 101,
+                    "stdout_tail": "",
+                    "stderr_tail": last_lines(&panic, 30),
+                    "hint": "Inspect panic payload and stack trace in logs.",
+                });
+                if debug_enabled {
+                    data["debug"] = json!({
+                        "cwd": self.cwd.display().to_string(),
+                        "cli_args": redacted_args,
+                        "duration_ms": duration_ms,
+                        "raw_error": panic,
+                    });
+                }
+                Err(McpError::internal_error("kg command panicked", Some(data)))
+            }
         }
     }
 
     fn execute_kg(&self, args: Vec<String>) -> Result<CallToolResult, McpError> {
+        self.execute_kg_for("kg_typed", args, false)
+    }
+
+    fn execute_kg_for(
+        &self,
+        tool_name: &str,
+        args: Vec<String>,
+        request_debug: bool,
+    ) -> Result<CallToolResult, McpError> {
+        let operation = args
+            .first()
+            .map(|v| v.as_str())
+            .unwrap_or("(empty command)")
+            .to_owned();
         let mut os_args = Vec::with_capacity(args.len() + 1);
         os_args.push(OsString::from("kg"));
         os_args.extend(args.into_iter().map(OsString::from));
 
-        let rendered = self.run_kg(os_args)?;
+        let rendered = self.run_kg(os_args, tool_name, &operation, request_debug)?;
 
-        Ok(CallToolResult::success(vec![Content::text(rendered)]))
+        let structured_content = if self.debug_enabled(request_debug) {
+            Some(json!({
+                "debug": {
+                    "tool": tool_name,
+                    "operation": operation,
+                }
+            }))
+        } else {
+            None
+        };
+
+        Ok(CallToolResult {
+            content: vec![Content::text(rendered)],
+            structured_content,
+            is_error: Some(false),
+            meta: None,
+        })
+    }
+
+    fn debug_enabled(&self, request_debug: bool) -> bool {
+        request_debug || self.debug_from_env
+    }
+
+    fn next_trace_id(&self) -> String {
+        let seq = self.trace_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("kgmcp-{}-{}", Self::now_ms(), to_base36(seq))
     }
 
     fn parse_mode(&self, mode: Option<String>) -> Result<String, McpError> {
@@ -712,7 +834,7 @@ impl KgMcpServer {
         let mut os_args = Vec::with_capacity(cmd.len() + 1);
         os_args.push(OsString::from("kg"));
         os_args.extend(cmd.into_iter().map(OsString::from));
-        let rendered = self.run_kg(os_args)?;
+        let rendered = self.run_kg(os_args, "kg_node_find", "node find", args.debug)?;
 
         let total = parse_find_total_results(&rendered).unwrap_or(0);
         let mut candidate_ids = parse_find_candidate_ids(&rendered);
@@ -849,7 +971,7 @@ impl KgMcpServer {
         let mut os_args = Vec::with_capacity(cmd.len() + 1);
         os_args.push(OsString::from("kg"));
         os_args.extend(cmd.into_iter().map(OsString::from));
-        let rendered = self.run_kg(os_args)?;
+        let rendered = self.run_kg(os_args, "kg_node_get", "node get", args.debug)?;
 
         let uid = self.next_uid()?;
         {
@@ -910,7 +1032,7 @@ impl KgMcpServer {
         &self,
         Parameters(args): Parameters<KgCommandArgs>,
     ) -> Result<CallToolResult, McpError> {
-        self.execute_kg(args.args)
+        self.execute_kg_for("kg_command", args.args, args.debug)
     }
 
     #[tool(
@@ -918,6 +1040,7 @@ impl KgMcpServer {
         description = "Run one or more kg commands separated by ';' or newlines. Supports feedback lines like `uid=abc123 YES`. Example: `uid=aa01bc YES; fridge node find \"smart fridge\"; fridge node get concept:refrigerator`."
     )]
     fn kg(&self, Parameters(args): Parameters<KgScriptArgs>) -> Result<CallToolResult, McpError> {
+        let request_debug = args.debug;
         let mode = self.parse_mode(args.mode)?;
         let commands = split_script(&args.script);
         let mut output = String::new();
@@ -1025,7 +1148,10 @@ impl KgMcpServer {
 
             if let Some(find_args) = parse_node_find_args(&args) {
                 let result = match find_args {
-                    Ok(find_args) => self.handle_node_find(find_args),
+                    Ok(mut find_args) => {
+                        find_args.debug = request_debug;
+                        self.handle_node_find(find_args)
+                    }
                     Err(err) => Err(McpError::invalid_params(
                         "invalid node find command",
                         Some(json!({ "command": trimmed, "error": err })),
@@ -1082,7 +1208,10 @@ impl KgMcpServer {
             if !handled {
                 if let Some(get_args) = parse_node_get_args(&args) {
                     let result = match get_args {
-                        Ok(get_args) => self.handle_node_get(get_args),
+                        Ok(mut get_args) => {
+                            get_args.debug = request_debug;
+                            self.handle_node_get(get_args)
+                        }
                         Err(err) => Err(McpError::invalid_params(
                             "invalid node get command",
                             Some(json!({ "command": trimmed, "error": err })),
@@ -1141,7 +1270,7 @@ impl KgMcpServer {
                 continue;
             }
 
-            match self.execute_kg(args.clone()) {
+            match self.execute_kg_for("kg", args.clone(), request_debug) {
                 Ok(tool_result) => {
                     let stdout = Self::render_text_content(&tool_result);
                     output.push_str("> ");
@@ -2045,7 +2174,7 @@ impl KgMcpServer {
             let os_args: Vec<OsString> = std::iter::once(OsString::from("kg"))
                 .chain(cmd.into_iter().map(OsString::from))
                 .collect();
-            let result = self.run_kg(os_args)?;
+            let result = self.run_kg(os_args, "kg_gap_summary", "quality sweep", false)?;
 
             output.push_str(&format!("### {}\n{}\n\n", section, result));
         }
@@ -2232,13 +2361,18 @@ impl ServerHandler for KgMcpServer {
                 )
             })?
         } else if let Some(graph_name) = uri.as_str().strip_prefix("kg://graph/") {
-            self.run_kg(vec![
-                OsString::from("kg"),
-                OsString::from(graph_name),
-                OsString::from("stats"),
-                OsString::from("--by-type"),
-                OsString::from("--by-relation"),
-            ])
+            self.run_kg(
+                vec![
+                    OsString::from("kg"),
+                    OsString::from(graph_name),
+                    OsString::from("stats"),
+                    OsString::from("--by-type"),
+                    OsString::from("--by-relation"),
+                ],
+                "read_resource",
+                "graph stats resource",
+                false,
+            )
             .map_err(|err| {
                 McpError::internal_error(
                     "failed to render graph resource",
@@ -2510,6 +2644,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
         mode,
         full,
         skip_feedback: false,
+        debug: false,
     }))
 }
 
@@ -2554,6 +2689,7 @@ fn parse_node_get_args(args: &[String]) -> Option<Result<NodeGetArgs, String>> {
         id,
         include_features,
         full,
+        debug: false,
     }))
 }
 
@@ -2565,6 +2701,115 @@ fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
     } else {
         "non-string panic payload".to_owned()
     }
+}
+
+fn classify_kg_error(message: &str) -> (ErrorCode, &'static str, &'static str, i32) {
+    if looks_like_permission_error(message) {
+        return (
+            ErrorCode(-32012),
+            "kg command permission denied",
+            "permission_denied",
+            1,
+        );
+    }
+    if looks_like_parse_error(message) {
+        return (
+            ErrorCode(-32011),
+            "kg command parse error",
+            "parse_error",
+            2,
+        );
+    }
+    (ErrorCode(-32010), "kg command failed", "command_failed", 1)
+}
+
+fn looks_like_parse_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("usage:")
+        || lower.contains("for more information, try")
+        || lower.contains("unexpected argument")
+        || lower.contains("unrecognized subcommand")
+        || lower.contains("required arguments were not provided")
+        || lower.contains("a value is required")
+}
+
+fn looks_like_permission_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("permission denied") || lower.contains("os error 13")
+}
+
+fn error_hint(kind: &str) -> &'static str {
+    match kind {
+        "parse_error" => "Check command syntax and required arguments.",
+        "permission_denied" => "Verify file permissions and graph path access.",
+        _ => "Inspect stderr_tail for details.",
+    }
+}
+
+fn last_lines(input: &str, max_lines: usize) -> String {
+    if max_lines == 0 {
+        return String::new();
+    }
+    let lines: Vec<&str> = input.lines().collect();
+    if lines.is_empty() {
+        return input.trim().to_owned();
+    }
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    match std::env::var(name) {
+        Ok(raw) => {
+            let normalized = raw.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        }
+        Err(_) => false,
+    }
+}
+
+fn redact_cli_args(args: &[String]) -> Vec<String> {
+    let mut redacted = Vec::with_capacity(args.len());
+    let mut mask_next = false;
+    for arg in args {
+        if mask_next {
+            redacted.push("***REDACTED***".to_owned());
+            mask_next = false;
+            continue;
+        }
+
+        if let Some((key, _value)) = arg.split_once('=') {
+            if is_sensitive_key(key) {
+                redacted.push(format!("{key}=***REDACTED***"));
+                continue;
+            }
+        }
+
+        if let Some(key) = arg.strip_prefix("--") {
+            if is_sensitive_key(key) {
+                if arg.contains('=') {
+                    redacted.push(format!("--{key}=***REDACTED***"));
+                } else {
+                    redacted.push(arg.clone());
+                    mask_next = true;
+                }
+                continue;
+            }
+        }
+
+        redacted.push(arg.clone());
+    }
+    redacted
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    lower.contains("token")
+        || lower.contains("secret")
+        || lower.contains("password")
+        || lower.contains("passwd")
+        || lower.ends_with("key")
+        || lower.contains("api_key")
 }
 
 fn to_base36(mut n: u64) -> String {
@@ -2773,6 +3018,31 @@ mod tests {
         ];
         let err = parse_node_get_args(&args).expect("match").unwrap_err();
         assert!(err.contains("unknown option"));
+    }
+
+    #[test]
+    fn classify_kg_error_detects_parse_errors() {
+        let message = "error: unexpected argument 'x' found\n\nUsage: kg graph";
+        let (code, _msg, kind, exit_code) = classify_kg_error(message);
+        assert_eq!(code.0, -32011);
+        assert_eq!(kind, "parse_error");
+        assert_eq!(exit_code, 2);
+    }
+
+    #[test]
+    fn redact_cli_args_masks_sensitive_values() {
+        let args = vec![
+            "kg".to_owned(),
+            "--token".to_owned(),
+            "abc123".to_owned(),
+            "api_key=secret123".to_owned(),
+            "--mode".to_owned(),
+            "bm25".to_owned(),
+        ];
+        let redacted = redact_cli_args(&args);
+        assert_eq!(redacted[2], "***REDACTED***");
+        assert_eq!(redacted[3], "api_key=***REDACTED***");
+        assert_eq!(redacted[5], "bm25");
     }
 }
 
