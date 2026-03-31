@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.14] - 2026-03-31
+
+### Fixed
+- switch the macOS Intel release runner to the supported `macos-15-intel` GitHub Actions label so multi-arch releases complete successfully
+
 ## [0.1.13] - 2026-03-31
 
 ### Changed
