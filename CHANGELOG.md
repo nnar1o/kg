@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.11] - 2026-03-31
+
+### Changed
+- run CI and release workflows on GitHub-hosted `ubuntu-latest` runners instead of self-hosted runners
+
 ## [0.1.10] - 2026-03-31
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "kg"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2024"
 description = "A knowledge graph CLI tool for managing structured information"
 license = "MIT"
