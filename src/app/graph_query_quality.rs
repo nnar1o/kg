@@ -3,13 +3,13 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::analysis::{
-    render_duplicates, render_duplicates_json, render_edge_gaps, render_edge_gaps_json,
-    render_missing_descriptions, render_missing_descriptions_json, render_missing_facts,
-    render_missing_facts_json, render_stats,
+    compute_quality_snapshot, render_duplicates, render_duplicates_json, render_edge_gaps,
+    render_edge_gaps_json, render_missing_descriptions, render_missing_descriptions_json,
+    render_missing_facts, render_missing_facts_json, render_stats,
 };
 use crate::cli::{
-    AuditArgs, CheckArgs, FeedbackLogArgs, FeedbackSummaryArgs, KqlArgs, ListNodesArgs,
-    QualityCommand, StatsArgs,
+    AuditArgs, BaselineArgs, CheckArgs, FeedbackLogArgs, FeedbackSummaryArgs, KqlArgs,
+    ListNodesArgs, QualityCommand, StatsArgs,
 };
 use crate::graph::GraphFile;
 use crate::kql;
@@ -118,6 +118,16 @@ pub(crate) fn execute_feedback_summary(
     args: &FeedbackSummaryArgs,
 ) -> Result<String> {
     crate::render_feedback_summary_for_graph(cwd, graph_name, args)
+}
+
+pub(crate) fn execute_baseline(
+    cwd: &Path,
+    graph_name: &str,
+    graph: &GraphFile,
+    args: &BaselineArgs,
+) -> Result<String> {
+    let quality = compute_quality_snapshot(graph, args.include_features, 0.85);
+    crate::render_baseline_report(cwd, graph_name, graph, &quality, args)
 }
 
 pub(crate) fn execute_node_list(graph: &GraphFile, args: &ListNodesArgs) -> String {

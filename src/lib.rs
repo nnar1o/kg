@@ -34,12 +34,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use cli::{
-    AsOfArgs, AuditArgs, CheckArgs, Cli, Command, DiffAsOfArgs, ExportDotArgs, ExportGraphmlArgs,
-    ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs, FeedbackSummaryArgs, FindMode as CliFindMode,
-    GraphCommand, HistoryArgs, ImportCsvArgs, ImportMarkdownArgs, ListNodesArgs, MergeStrategy,
-    NoteAddArgs, NoteListArgs, SplitArgs, TemporalSource, TimelineArgs, VectorCommand,
+    AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, Command, DiffAsOfArgs, ExportDotArgs,
+    ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs, FeedbackSummaryArgs,
+    FindMode as CliFindMode, GraphCommand, HistoryArgs, ImportCsvArgs, ImportMarkdownArgs,
+    ListNodesArgs, MergeStrategy, NoteAddArgs, NoteListArgs, SplitArgs, TemporalSource,
+    TimelineArgs, VectorCommand,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 // (graph types are re-exported above)
 use storage::{GraphStore, graph_store};
@@ -47,9 +48,9 @@ use storage::{GraphStore, graph_store};
 use app::graph_node_edge::{GraphCommandContext, execute_edge, execute_node};
 use app::graph_note::{GraphNoteContext, execute_note};
 use app::graph_query_quality::{
-    execute_audit, execute_check, execute_duplicates, execute_edge_gaps, execute_feedback_log,
-    execute_feedback_summary, execute_kql, execute_missing_descriptions, execute_missing_facts,
-    execute_node_list, execute_quality, execute_stats,
+    execute_audit, execute_baseline, execute_check, execute_duplicates, execute_edge_gaps,
+    execute_feedback_log, execute_feedback_summary, execute_kql, execute_missing_descriptions,
+    execute_missing_facts, execute_node_list, execute_quality, execute_stats,
 };
 use app::graph_transfer_temporal::{
     GraphTransferContext, execute_access_log, execute_access_stats, execute_as_of,
@@ -343,6 +344,9 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                 GraphCommand::DiffAsOf(args) => execute_diff_as_of(&path, &graph, args),
                 GraphCommand::FeedbackSummary(args) => {
                     Ok(execute_feedback_summary(cwd, &graph, &args)?)
+                }
+                GraphCommand::Baseline(args) => {
+                    Ok(execute_baseline(cwd, &graph, &graph_file, &args)?)
                 }
                 GraphCommand::List(args) => Ok(execute_node_list(&graph_file, &args)),
             }
@@ -2381,6 +2385,361 @@ pub(crate) fn render_feedback_summary_for_graph(
     let mut args = args.clone();
     args.graph = Some(graph.to_string());
     render_feedback_summary(cwd, &args)
+}
+
+#[derive(Debug, Serialize)]
+struct BaselineFeedbackMetrics {
+    entries: usize,
+    yes: usize,
+    no: usize,
+    pick: usize,
+    nil: usize,
+    yes_rate: f64,
+    no_rate: f64,
+    nil_rate: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct BaselineCostMetrics {
+    find_operations: usize,
+    feedback_events: usize,
+    feedback_events_per_1000_find_ops: f64,
+    token_cost_estimate: Option<f64>,
+    token_cost_note: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct GoldenSetMetrics {
+    cases: usize,
+    hits_any: usize,
+    top1_hits: usize,
+    hit_rate: f64,
+    top1_rate: f64,
+    mrr: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct BaselineQualityScore {
+    description_coverage: f64,
+    facts_coverage: f64,
+    duplicate_penalty: f64,
+    edge_gap_penalty: f64,
+    score_0_100: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct BaselineReport {
+    graph: String,
+    quality: crate::analysis::QualitySnapshot,
+    quality_score: BaselineQualityScore,
+    feedback: BaselineFeedbackMetrics,
+    cost: BaselineCostMetrics,
+    golden: Option<GoldenSetMetrics>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoldenSetCase {
+    query: String,
+    expected: Vec<String>,
+}
+
+fn parse_feedback_entries(cwd: &Path, graph_name: &str) -> Result<Vec<FeedbackLogEntry>> {
+    let path = cwd.join("kg-mcp.feedback.log");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(path)?;
+    let mut entries = Vec::new();
+    for line in content.lines() {
+        if let Some(entry) = FeedbackLogEntry::parse(line) {
+            if entry.graph == graph_name {
+                entries.push(entry);
+            }
+        }
+    }
+    Ok(entries)
+}
+
+fn parse_find_operations(graph_path: &Path) -> Result<usize> {
+    let path = access_log::access_log_path(graph_path);
+    if !path.exists() {
+        return Ok(0);
+    }
+
+    let content = std::fs::read_to_string(path)?;
+    let mut find_ops = 0usize;
+    for line in content.lines() {
+        let mut parts = line.split('\t');
+        let _ts = parts.next();
+        if let Some(op) = parts.next() {
+            if op == "FIND" {
+                find_ops += 1;
+            }
+        }
+    }
+    Ok(find_ops)
+}
+
+fn compute_feedback_metrics(entries: &[FeedbackLogEntry]) -> BaselineFeedbackMetrics {
+    let mut yes = 0usize;
+    let mut no = 0usize;
+    let mut pick = 0usize;
+    let mut nil = 0usize;
+    for entry in entries {
+        match entry.action.as_str() {
+            "YES" => yes += 1,
+            "NO" => no += 1,
+            "PICK" => pick += 1,
+            "NIL" => nil += 1,
+            _ => {}
+        }
+    }
+    let total = entries.len() as f64;
+    BaselineFeedbackMetrics {
+        entries: entries.len(),
+        yes,
+        no,
+        pick,
+        nil,
+        yes_rate: if total > 0.0 { yes as f64 / total } else { 0.0 },
+        no_rate: if total > 0.0 { no as f64 / total } else { 0.0 },
+        nil_rate: if total > 0.0 { nil as f64 / total } else { 0.0 },
+    }
+}
+
+fn compute_quality_score(snapshot: &crate::analysis::QualitySnapshot) -> BaselineQualityScore {
+    let total_nodes = snapshot.total_nodes as f64;
+    let description_coverage = if total_nodes > 0.0 {
+        (snapshot
+            .total_nodes
+            .saturating_sub(snapshot.missing_descriptions)) as f64
+            / total_nodes
+    } else {
+        1.0
+    };
+    let facts_coverage = if total_nodes > 0.0 {
+        (snapshot.total_nodes.saturating_sub(snapshot.missing_facts)) as f64 / total_nodes
+    } else {
+        1.0
+    };
+
+    let duplicate_penalty = if snapshot.total_nodes > 1 {
+        let max_pairs = (snapshot.total_nodes * (snapshot.total_nodes - 1) / 2) as f64;
+        (snapshot.duplicate_pairs as f64 / max_pairs).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let edge_candidates = snapshot.edge_gaps.total_candidates();
+    let edge_gap_penalty = if edge_candidates > 0 {
+        (snapshot.edge_gaps.total_missing() as f64 / edge_candidates as f64).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let score = 100.0
+        * (0.35 * description_coverage
+            + 0.35 * facts_coverage
+            + 0.15 * (1.0 - duplicate_penalty)
+            + 0.15 * (1.0 - edge_gap_penalty));
+
+    BaselineQualityScore {
+        description_coverage,
+        facts_coverage,
+        duplicate_penalty,
+        edge_gap_penalty,
+        score_0_100: score,
+    }
+}
+
+fn eval_golden_set(graph: &GraphFile, args: &BaselineArgs) -> Result<Option<GoldenSetMetrics>> {
+    let Some(path) = args.golden.as_ref() else {
+        return Ok(None);
+    };
+
+    let raw = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read golden set: {path}"))?;
+    let cases: Vec<GoldenSetCase> =
+        serde_json::from_str(&raw).with_context(|| format!("invalid golden set JSON: {path}"))?;
+
+    if cases.is_empty() {
+        return Ok(Some(GoldenSetMetrics {
+            cases: 0,
+            hits_any: 0,
+            top1_hits: 0,
+            hit_rate: 0.0,
+            top1_rate: 0.0,
+            mrr: 0.0,
+        }));
+    }
+
+    let mode = map_find_mode(args.mode);
+    let mut hits_any = 0usize;
+    let mut top1_hits = 0usize;
+    let mut mrr_sum = 0.0;
+
+    for case in &cases {
+        let results = output::find_nodes(
+            graph,
+            &case.query,
+            args.find_limit,
+            args.include_features,
+            mode,
+        );
+
+        let mut first_rank: Option<usize> = None;
+        for (idx, node) in results.iter().enumerate() {
+            if case.expected.iter().any(|id| id == &node.id) {
+                first_rank = Some(idx + 1);
+                break;
+            }
+        }
+
+        if let Some(rank) = first_rank {
+            hits_any += 1;
+            if rank == 1 {
+                top1_hits += 1;
+            }
+            mrr_sum += 1.0 / rank as f64;
+        }
+    }
+
+    let total = cases.len() as f64;
+    Ok(Some(GoldenSetMetrics {
+        cases: cases.len(),
+        hits_any,
+        top1_hits,
+        hit_rate: hits_any as f64 / total,
+        top1_rate: top1_hits as f64 / total,
+        mrr: mrr_sum / total,
+    }))
+}
+
+pub(crate) fn render_baseline_report(
+    cwd: &Path,
+    graph_name: &str,
+    graph: &GraphFile,
+    quality: &crate::analysis::QualitySnapshot,
+    args: &BaselineArgs,
+) -> Result<String> {
+    let feedback_entries = parse_feedback_entries(cwd, graph_name)?;
+    let feedback = compute_feedback_metrics(&feedback_entries);
+
+    let graph_root = default_graph_root(cwd);
+    let graph_path = resolve_graph_path(cwd, &graph_root, graph_name)?;
+    let find_operations = parse_find_operations(&graph_path)?;
+
+    let cost = BaselineCostMetrics {
+        find_operations,
+        feedback_events: feedback.entries,
+        feedback_events_per_1000_find_ops: if find_operations > 0 {
+            (feedback.entries as f64 / find_operations as f64) * 1000.0
+        } else {
+            0.0
+        },
+        token_cost_estimate: None,
+        token_cost_note: "token cost unavailable in current logs (instrumentation pending)",
+    };
+
+    let quality_score = compute_quality_score(quality);
+    let golden = eval_golden_set(graph, args)?;
+
+    let report = BaselineReport {
+        graph: graph_name.to_owned(),
+        quality: crate::analysis::QualitySnapshot {
+            total_nodes: quality.total_nodes,
+            missing_descriptions: quality.missing_descriptions,
+            missing_facts: quality.missing_facts,
+            duplicate_pairs: quality.duplicate_pairs,
+            edge_gaps: crate::analysis::EdgeGapSnapshot {
+                datastore_candidates: quality.edge_gaps.datastore_candidates,
+                datastore_missing_stored_in: quality.edge_gaps.datastore_missing_stored_in,
+                process_candidates: quality.edge_gaps.process_candidates,
+                process_missing_incoming: quality.edge_gaps.process_missing_incoming,
+            },
+        },
+        quality_score,
+        feedback,
+        cost,
+        golden,
+    };
+
+    if args.json {
+        let rendered = serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_owned());
+        return Ok(format!("{rendered}\n"));
+    }
+
+    let mut lines = vec![String::from("= baseline")];
+    lines.push(format!("graph: {}", report.graph));
+    lines.push(format!(
+        "quality_score_0_100: {:.1}",
+        report.quality_score.score_0_100
+    ));
+    lines.push(String::from("quality:"));
+    lines.push(format!("- total_nodes: {}", report.quality.total_nodes));
+    lines.push(format!(
+        "- missing_descriptions: {} ({:.1}%)",
+        report.quality.missing_descriptions,
+        report
+            .quality_score
+            .description_coverage
+            .mul_add(-100.0, 100.0)
+    ));
+    lines.push(format!(
+        "- missing_facts: {} ({:.1}%)",
+        report.quality.missing_facts,
+        report.quality_score.facts_coverage.mul_add(-100.0, 100.0)
+    ));
+    lines.push(format!(
+        "- duplicate_pairs: {}",
+        report.quality.duplicate_pairs
+    ));
+    lines.push(format!(
+        "- edge_gaps: {} / {}",
+        report.quality.edge_gaps.total_missing(),
+        report.quality.edge_gaps.total_candidates()
+    ));
+
+    lines.push(String::from("feedback:"));
+    lines.push(format!("- entries: {}", report.feedback.entries));
+    lines.push(format!(
+        "- YES/NO/NIL/PICK: {}/{}/{}/{}",
+        report.feedback.yes, report.feedback.no, report.feedback.nil, report.feedback.pick
+    ));
+    lines.push(format!(
+        "- yes_rate: {:.1}%",
+        report.feedback.yes_rate * 100.0
+    ));
+    lines.push(format!(
+        "- no_rate: {:.1}%",
+        report.feedback.no_rate * 100.0
+    ));
+
+    lines.push(String::from("cost:"));
+    lines.push(format!(
+        "- find_operations: {}",
+        report.cost.find_operations
+    ));
+    lines.push(format!(
+        "- feedback_events: {}",
+        report.cost.feedback_events
+    ));
+    lines.push(format!(
+        "- feedback_events_per_1000_find_ops: {:.1}",
+        report.cost.feedback_events_per_1000_find_ops
+    ));
+    lines.push(format!("- token_cost: {}", report.cost.token_cost_note));
+
+    if let Some(golden) = report.golden {
+        lines.push(String::from("golden_set:"));
+        lines.push(format!("- cases: {}", golden.cases));
+        lines.push(format!("- hit_rate: {:.1}%", golden.hit_rate * 100.0));
+        lines.push(format!("- top1_rate: {:.1}%", golden.top1_rate * 100.0));
+        lines.push(format!("- mrr: {:.3}", golden.mrr));
+    }
+
+    Ok(format!("{}\n", lines.join("\n")))
 }
 
 #[derive(Debug, Clone)]

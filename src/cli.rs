@@ -163,6 +163,11 @@ pub enum GraphCommand {
     DiffAsOf(DiffAsOfArgs),
     #[command(name = "feedback-summary", about = "Human-readable feedback summary")]
     FeedbackSummary(FeedbackSummaryArgs),
+    #[command(
+        name = "baseline",
+        about = "Compute quality and feedback baseline metrics"
+    )]
+    Baseline(BaselineArgs),
     List(ListNodesArgs),
 }
 
@@ -471,6 +476,20 @@ pub struct StatsArgs {
     pub by_relation: bool,
     #[arg(long)]
     pub show_sources: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct BaselineArgs {
+    #[arg(long, default_value_t = 5)]
+    pub find_limit: usize,
+    #[arg(long)]
+    pub include_features: bool,
+    #[arg(long, value_enum, default_value_t = FindMode::Fuzzy)]
+    pub mode: FindMode,
+    #[arg(long)]
+    pub golden: Option<String>,
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]

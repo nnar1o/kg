@@ -413,3 +413,107 @@ pub fn render_edge_gaps_json(graph: &GraphFile, args: &EdgeGapsArgs) -> String {
     })
     .unwrap_or_else(|_| "{}".to_owned())
 }
+
+#[derive(Debug, Serialize)]
+pub struct EdgeGapSnapshot {
+    pub datastore_candidates: usize,
+    pub datastore_missing_stored_in: usize,
+    pub process_candidates: usize,
+    pub process_missing_incoming: usize,
+}
+
+impl EdgeGapSnapshot {
+    pub fn total_candidates(&self) -> usize {
+        self.datastore_candidates + self.process_candidates
+    }
+
+    pub fn total_missing(&self) -> usize {
+        self.datastore_missing_stored_in + self.process_missing_incoming
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct QualitySnapshot {
+    pub total_nodes: usize,
+    pub missing_descriptions: usize,
+    pub missing_facts: usize,
+    pub duplicate_pairs: usize,
+    pub edge_gaps: EdgeGapSnapshot,
+}
+
+pub fn compute_quality_snapshot(
+    graph: &GraphFile,
+    include_features: bool,
+    duplicate_threshold: f64,
+) -> QualitySnapshot {
+    let nodes = filtered_nodes(graph, &[], include_features);
+    let total_nodes = nodes.len();
+    let missing_descriptions = nodes
+        .iter()
+        .filter(|node| node.properties.description.trim().is_empty())
+        .count();
+    let missing_facts = nodes
+        .iter()
+        .filter(|node| node.properties.key_facts.is_empty())
+        .count();
+
+    let mut by_type = BTreeMap::<&str, Vec<&Node>>::new();
+    for node in &nodes {
+        by_type.entry(node.r#type.as_str()).or_default().push(node);
+    }
+
+    let mut duplicate_pairs = 0usize;
+    for group in by_type.values() {
+        for (idx, left) in group.iter().enumerate() {
+            let left_name = left.name.to_lowercase();
+            for right in group.iter().skip(idx + 1) {
+                let right_name = right.name.to_lowercase();
+                let similarity = normalized_levenshtein(&left_name, &right_name);
+                if left_name.contains(&right_name)
+                    || right_name.contains(&left_name)
+                    || similarity >= duplicate_threshold
+                {
+                    duplicate_pairs += 1;
+                }
+            }
+        }
+    }
+
+    let mut datastore_candidates = 0usize;
+    let mut datastore_missing = 0usize;
+    let mut process_candidates = 0usize;
+    let mut process_missing = 0usize;
+
+    for node in nodes {
+        if node.r#type == "DataStore" {
+            datastore_candidates += 1;
+            let has_stored_in = graph
+                .edges
+                .iter()
+                .any(|edge| edge.target_id == node.id && edge.relation == "STORED_IN");
+            if !has_stored_in {
+                datastore_missing += 1;
+            }
+        }
+        if node.r#type == "Process" {
+            process_candidates += 1;
+            let has_incoming = graph.edges.iter().any(|edge| edge.target_id == node.id);
+            if !has_incoming {
+                process_missing += 1;
+            }
+        }
+    }
+
+    QualitySnapshot {
+        total_nodes,
+        missing_descriptions,
+        missing_facts,
+        duplicate_pairs,
+        edge_gaps: EdgeGapSnapshot {
+            datastore_candidates,
+            datastore_missing_stored_in: datastore_missing,
+            process_candidates,
+            process_missing_incoming: process_missing,
+        },
+    }
+}
