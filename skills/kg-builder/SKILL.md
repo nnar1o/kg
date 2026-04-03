@@ -6,6 +6,8 @@ Use this skill when asked to build or extend a knowledge graph from source mater
 
 Read the provided source material and extract entities and relations into a knowledge graph using the `kg` CLI.
 
+Preferred command pattern: `kg graph <graph> ...`.
+
 ## Step 1: plan before execution
 
 Before adding nodes, briefly answer:
@@ -28,7 +30,7 @@ Do not skip this step. Bad node decomposition is the main source of low-quality 
 kg create <graph_name>
 
 # Or use an existing one
-kg <graph> node find <topic>   # check what already exists
+kg graph <graph> node find <topic>   # check what already exists
 ```
 
 ## Step 3: add nodes
@@ -51,7 +53,7 @@ Use the right type for each entity:
 Node ID convention: `prefix:snake_case`
 
 ```bash
-kg <graph> node add concept:benefit_pool \
+kg graph <graph> node add concept:benefit_pool \
   --type Concept \
   --name "Benefit Pool" \
   --description "A pool of benefits allocated to employees" \
@@ -81,33 +83,33 @@ Use relations that describe real structural or semantic links:
 | `HAS`           | Parent owns or contains child                  |
 | `USES`          | Component uses another                         |
 | `DEPENDS_ON`    | Hard dependency                                |
-| `IMPLEMENTS`    | Realizes an interface or rule                  |
-| `STORES`        | Process writes to a DataStore                  |
 | `STORED_IN`     | Concept/data is stored in a DataStore          |
 | `READS_FROM`    | Process reads from a DataStore                 |
 | `TRIGGERS`      | Event or process triggers another              |
-| `VALIDATES`     | Rule or process validates a concept            |
 | `DOCUMENTED_IN` | Node documented in a Feature or spec           |
 | `GOVERNED_BY`   | Concept governed by a Rule                     |
-| `EXPOSES`       | Interface exposes a Concept or operation       |
-| `CALLS`         | Process or Interface calls another Interface   |
+| `CREATED_BY`    | Concept/artifact created by process/interface  |
+| `AFFECTED_BY`   | Node impacted by another                       |
+| `AVAILABLE_IN`  | Node available in environment/context          |
+| `TRANSITIONS`   | State/process transitions to another           |
+| `DECIDED_BY`    | Node constrained by a decision                 |
 
 ```bash
-kg <graph> edge add concept:benefit_pool GOVERNED_BY rule:pool_budget_rule
-kg <graph> edge add process:pool_allocation READS_FROM datastore:benefit_db
-kg <graph> edge add process:pool_allocation STORES datastore:allocation_log --detail "writes final allocation records after approval"
+kg graph <graph> edge add concept:benefit_pool GOVERNED_BY rule:pool_budget_rule
+kg graph <graph> edge add process:pool_allocation READS_FROM datastore:benefit_db
+kg graph <graph> edge add concept:allocation_record STORED_IN datastore:allocation_log --detail "persisted after approval"
 ```
 
 Tips:
 - add `--detail` when the relation has nuance worth preserving
-- prefer specific relations (`READS_FROM`, `STORES`) over generic ones (`USES`) where applicable
+- prefer specific relations (`READS_FROM`, `STORED_IN`) over generic ones (`USES`) where applicable
 - one edge per actual relationship — do not add redundant edges
 
 ## Step 5: verify and validate
 
 ```bash
-kg <graph> check
-kg <graph> stats --by-type --by-relation
+kg graph <graph> check
+kg graph <graph> stats --by-type --by-relation
 ```
 
 Fix any errors before finishing. Common issues:
@@ -118,8 +120,8 @@ Fix any errors before finishing. Common issues:
 ## Step 6: spot-check output
 
 ```bash
-kg <graph> node find <key_term>
-kg <graph> node get <id>
+kg graph <graph> node find <key_term>
+kg graph <graph> node get <id>
 ```
 
 Confirm the output looks clean and facts are legible to an AI reading them cold.
@@ -134,9 +136,9 @@ A good node:
 
 A good graph:
 - has no orphan nodes (every node has at least one edge)
-- has no DataStore without an incoming `STORED_IN` or `STORES` edge
+- has no DataStore without an incoming `STORED_IN` edge
 - has no Process without at least one incoming or outgoing edge
-- passes `kg <graph> check` with zero errors
+- passes `kg graph <graph> check` with zero errors
 
 ## Example workflow
 
@@ -145,15 +147,15 @@ A good graph:
 kg create myapp
 
 # 2. add nodes from code/docs
-kg myapp node add concept:user_session --type Concept --name "User Session" ...
-kg myapp node add datastore:session_db --type DataStore --name "Session DB" ...
-kg myapp node add process:session_cleanup --type Process --name "Session Cleanup" ...
+kg graph myapp node add concept:user_session --type Concept --name "User Session" ...
+kg graph myapp node add datastore:session_db --type DataStore --name "Session DB" ...
+kg graph myapp node add process:session_cleanup --type Process --name "Session Cleanup" ...
 
 # 3. connect them
-kg myapp edge add process:session_cleanup READS_FROM datastore:session_db
-kg myapp edge add process:session_cleanup STORES datastore:audit_log
+kg graph myapp edge add process:session_cleanup READS_FROM datastore:session_db
+kg graph myapp edge add concept:session_audit_event STORED_IN datastore:audit_log
 
 # 4. validate
-kg myapp check
-kg myapp stats --by-type
+kg graph myapp check
+kg graph myapp stats --by-type
 ```

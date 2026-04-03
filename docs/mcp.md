@@ -2,12 +2,29 @@
 
 `kg-mcp` is a native MCP stdio server built with [`rmcp`](https://github.com/modelcontextprotocol/rust-sdk). It exposes all kg operations as MCP tools.
 
+If you are new to MCP, start with `kg-mcp` as a local stdio process (no network service needed).
+
+## Quick start
+
+1. Ensure `kg-mcp` is installed and runnable.
+2. Add it to your MCP client config.
+3. Restart the client and verify tools appear.
+4. Run a simple tool call (`kg_node_find` or `kg`).
+
+Example first command through MCP shell tool:
+
+```text
+kg fridge node find refrigerator
+```
+
 ## Running
 
 ```sh
 ./target/release/kg-mcp    # binary
 cargo run --bin kg-mcp      # from source
 ```
+
+Tip: during local development, prefer `cargo run --quiet --bin kg-mcp` in client config.
 
 ## Client Config
 
@@ -41,6 +58,12 @@ cargo run --bin kg-mcp      # from source
 ### Shell-like
 
 - `kg` — run multiple commands separated by `;` or newlines
+
+Good for compact workflows, for example:
+
+```text
+kg create fridge; kg fridge node add concept:refrigerator --type Concept --name Refrigerator
+```
 
 ### Nodes
 
@@ -87,3 +110,12 @@ cargo run --bin kg-mcp      # from source
 ## Prompts
 
 - `kg_workflow_prompt` — template for planning safe multi-step edits
+- Ready-to-copy ingestion prompt: [`docs/ai-prompt-graph-from-docs.md`](ai-prompt-graph-from-docs.md)
+
+## Common issues
+
+- Tools not visible in client: verify command path and restart the client process.
+- Feedback-required flow in some operations: follow tool response metadata and submit required feedback before continuing.
+- Unexpected graph format behavior: check whether runtime is using default `.kg` mode or `--legacy` JSON mode.
+
+See also: [`docs/troubleshooting.md`](troubleshooting.md)

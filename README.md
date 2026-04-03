@@ -4,57 +4,88 @@
 ![Release](https://img.shields.io/github/v/release/nnar1o/kg?display_name=tag&sort=semver)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-> **Beta** — This software is in active development. APIs may change.
+> **Beta** - This software is in active development. APIs may change.
 
-A fast CLI for managing JSON knowledge graphs with native MCP server support. Built for LLM chat workflows: plain text by default, `--json` for machines.
+A fast CLI for managing local knowledge graphs (`.kg` and `.json`) with native MCP server support. Built for LLM chat workflows: readable text by default, `--json` for automation.
 
-## Features
+## Why kg
 
-- **Graph operations** — create, query, merge, diff, backup
-- **Search** — full-text and BM25 ranking
-- **MCP server** — first-class tool integration for AI assistants
-- **TUI browser** — interactive graph exploration
-- **Quality analysis** — find missing descriptions, facts, edge gaps
-- **Import** — CSV, JSON, Markdown/YAML frontmatter
+- **One local graph per domain** - store concepts, processes, rules, bugs, decisions
+- **Fast lookup and search** - fuzzy, BM25, vector modes
+- **Quality controls** - checks, audits, missing facts/descriptions, duplicate detection
+- **LLM integration** - native MCP server (`kg-mcp`) with graph-safe tools
+- **Flexible I/O** - import/export CSV, JSON, Markdown, KQL queries
+- **Backward compatible runtime** - legacy JSON mode via `--legacy`
 
 ## Install
 
-### Quick (curl)
+### Option 1: install from source (recommended for contributors)
 
 ```sh
-  curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
+cargo install --path .
 ```
 
-The installer auto-detects Linux x86_64, macOS x86_64, and macOS Apple Silicon releases.
-
-### From crates.io
+### Option 2: install from crates.io
 
 ```sh
 cargo install kg-cli
 ```
 
-### From source
+### Option 3: quick installer script
 
 ```sh
-cargo install --path . --locked --root ~/.local
-export PATH="$HOME/.local/bin:$PATH"
+curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
 ```
 
-Or build manually: `cargo build --release`
+The installer auto-detects Linux x86_64, macOS x86_64, and macOS Apple Silicon releases.
 
-## Quick start
+## 60-second quick start
 
 ```sh
-kg init                           # print init prompts
-kg create mygraph                 # create graph
-kg mygraph node find query        # search
-kg mygraph node get id             # view node
-kg mygraph node add id --type Concept --name "Label"
-kg mygraph edge add source REL target
-kg mygraph quality missing-facts  # quality check
+# 1) Create graph
+kg create fridge
+
+# 2) Add two nodes
+kg graph fridge node add concept:refrigerator --type Concept --name "Refrigerator"
+kg graph fridge node add process:defrost --type Process --name "Defrost cycle"
+
+# 3) Connect them
+kg graph fridge edge add concept:refrigerator DEPENDS_ON process:defrost --detail "requires periodic defrost"
+
+# 4) Search and inspect
+kg graph fridge node find refrigerator
+kg graph fridge node get concept:refrigerator --full
+
+# 5) Validate quality
+kg graph fridge check
+kg graph fridge quality missing-facts
 ```
 
-See `kg --help` for all commands.
+See `kg --help` and `kg graph --help` for the full command tree.
+
+For a more complete onboarding flow, go to [`docs/getting-started.md`](docs/getting-started.md).
+
+## Command patterns (important)
+
+Most commands use this structure:
+
+```sh
+kg graph <graph-name> <command> [args...]
+```
+
+Examples:
+
+```sh
+kg graph fridge stats
+kg graph fridge node list --type Concept --limit 20
+kg graph fridge kql "node type=Concept sort=name limit=10"
+```
+
+There is also a backward-compatible shorthand still accepted in many places:
+
+```sh
+kg fridge node find cooling
+```
 
 ## MCP Server
 
@@ -63,6 +94,8 @@ The primary way to integrate with LLMs:
 ```sh
 ./target/release/kg-mcp
 ```
+
+`kg-mcp` uses stdio transport (no HTTP server to expose).
 
 Config for OpenCode/Claude Desktop:
 
@@ -80,16 +113,85 @@ Tools: node find/get/add/modify/remove, edge add/remove, stats, check, audit, qu
 
 See [`docs/mcp.md`](docs/mcp.md) for full docs.
 
+## Common workflows
+
+```sh
+# List available graphs
+kg list --full
+
+# Show graph health quickly
+kg graph fridge stats --by-type --by-relation
+kg graph fridge check --errors-only
+
+# Use strict parser checks for .kg files (optional)
+KG_STRICT_FORMAT=1 kg graph fridge check
+
+# Keep JSON-first behavior for older pipelines
+kg graph fridge --legacy stats
+```
+
 ## Documentation
 
 Detailed guides in [`docs/`](docs/):
 
+- [`docs/getting-started.md`](docs/getting-started.md) - beginner guide with practical examples
+- [`docs/build-graph-from-docs.md`](docs/build-graph-from-docs.md) - step-by-step playbook to build a graph from raw documentation
+- [`docs/ai-prompt-graph-from-docs.md`](docs/ai-prompt-graph-from-docs.md) - ready-to-use AI prompt for `kg-mcp` graph construction
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) - common problems and fixes
 - [`docs/sprint-plan.md`](docs/sprint-plan.md) — roadmap
 - [`docs/kql.md`](docs/kql.md) — KQL query language
 - [`docs/import-csv.md`](docs/import-csv.md) — CSV import
 - [`docs/import-markdown.md`](docs/import-markdown.md) — Markdown import
 - [`docs/mcp.md`](docs/mcp.md) — MCP server reference
 - [`docs/decision-backend.md`](docs/decision-backend.md) — backend selection
+- [`docs/eyg-rollout-notes.md`](docs/eyg-rollout-notes.md) - migration, strict mode, rollback notes
+
+## Project skills (for AI workflows)
+
+If your AI client supports repo skills, these templates are available:
+
+- [`skills/kg/SKILL.md`](skills/kg/SKILL.md) - core read/write graph operations
+- [`skills/kg-builder/SKILL.md`](skills/kg-builder/SKILL.md) - build graph from docs/code/specs
+- [`skills/kg-assistant/SKILL.md`](skills/kg-assistant/SKILL.md) - collaborative graph improvement with user
+- [`skills/kg-gardener/SKILL.md`](skills/kg-gardener/SKILL.md) - graph quality and maintenance workflow
+
+## FAQ
+
+### Should I use `kg graph <name> ...` or `kg <name> ...`?
+
+Use `kg graph <name> ...` as the default pattern. The shorthand `kg <name> ...` is kept for backward compatibility.
+
+### Why did my graph file change from `.json` to `.kg`?
+
+Default runtime prefers `.kg` and can auto-migrate from `.json` side-by-side. Your original `.json` file is kept.
+
+### What are `.kgindex` and `.kglog` files?
+
+They are sidecars for `.kg` graphs: `.kgindex` helps fast node lookup, `.kglog` stores lightweight hit/feedback events.
+
+### How do I keep old JSON-first behavior?
+
+Run graph commands with `--legacy`, for example: `kg graph fridge --legacy stats`.
+
+### A command fails with validation errors. What now?
+
+Run `kg graph <graph> check --errors-only` first, fix the reported node/edge issues, then retry your command.
+
+### Which output format should I use in scripts?
+
+Use `--json` in automation and CI. Use default text output for interactive local usage.
+
+## Need help fast?
+
+If users are unsure how to start, share these three commands first:
+
+```sh
+kg --help
+kg graph --help
+kg graph <graph> node --help
+```
+
+Then follow [`docs/getting-started.md`](docs/getting-started.md).
 
 ## Benchmarks (large graphs)
 

@@ -2,19 +2,21 @@
 
 Use this skill when working with a user to collaboratively improve a knowledge graph. The LLM analyzes gaps, asks the user for information, and updates the graph.
 
+Preferred command pattern: `kg graph <graph> ...`.
+
 ## Workflow
 
 ### Phase 1: Discovery (do once at start)
 
 ```bash
 # Get graph overview
-kg <graph> stats --by-type --by-relation
+kg graph <graph> stats --by-type --by-relation
 
 # Find quality issues
-kg <graph> quality missing-descriptions --limit 10
-kg <graph> quality missing-facts --limit 10
-kg <graph> quality edge-gaps --limit 10
-kg <graph> quality duplicates
+kg graph <graph> quality missing-descriptions --limit 10
+kg graph <graph> quality missing-facts --limit 10
+kg graph <graph> quality edge-gaps --limit 10
+kg graph <graph> quality duplicates
 ```
 
 ### Phase 2: Gap prioritization
@@ -99,7 +101,7 @@ After getting user response, add the node:
 
 ```bash
 # Add node
-kg <graph> node add <type>:<id> \
+kg graph <graph> node add <type>:<id> \
   --type <Type> \
   --name "<name>" \
   --description "<description>" \
@@ -108,7 +110,7 @@ kg <graph> node add <type>:<id> \
   --fact "<fact2>"
 
 # Add edge
-kg <graph> edge add <source_id> <RELATION> <target_id> --detail "<optional detail>"
+kg graph <graph> edge add <source_id> <RELATION> <target_id> --detail "<optional detail>"
 ```
 
 ## Session tracking
@@ -173,23 +175,23 @@ Mogę też przejść przez wszystkie po kolei.
 3. **Accept partial info** - even 1 fact is better than none
 4. **Suggest based on patterns** - if user mentions X, check if similar Y exists
 5. **Mark provenance** - use `--source user-input` for user-provided content
-6. **Verify after add** - run `kg <graph> node get <id>` to confirm
+6. **Verify after add** - run `kg graph <graph> node get <id>` to confirm
 
 ## Workflow commands summary
 
 ```bash
 # Discovery
-kg <graph> stats --by-type
-kg <graph> quality missing-descriptions --limit 5
-kg <graph> quality missing-facts --limit 5
+kg graph <graph> stats --by-type
+kg graph <graph> quality missing-descriptions --limit 5
+kg graph <graph> quality missing-facts --limit 5
 
 # Add from user input
-kg <graph> node add <id> --type <Type> --name "<name>" --description "<desc>" --source user-input --fact "<fact>"
+kg graph <graph> node add <id> --type <Type> --name "<name>" --description "<desc>" --source user-input --fact "<fact>"
 
 # Connect
-kg <graph> edge add <source> <RELATION> <target> --detail "<detail>"
+kg graph <graph> edge add <source> <RELATION> <target> --detail "<detail>"
 
 # Verify
-kg <graph> check
-kg <graph> node get <id> --full
+kg graph <graph> check
+kg graph <graph> node get <id> --full
 ```
