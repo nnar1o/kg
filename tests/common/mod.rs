@@ -25,7 +25,17 @@ pub fn write_config(cwd: &Path, body: &str) {
 }
 
 pub fn load_graph(path: &Path) -> kg::GraphFile {
-    kg::GraphFile::load(path).expect("load graph")
+    let resolved = if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+        let kg_path = path.with_extension("kg");
+        if kg_path.exists() {
+            kg_path
+        } else {
+            path.to_path_buf()
+        }
+    } else {
+        path.to_path_buf()
+    };
+    kg::GraphFile::load(&resolved).expect("load graph")
 }
 
 pub fn write_graph(path: &Path, graph: &kg::GraphFile) {

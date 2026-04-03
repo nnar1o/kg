@@ -113,6 +113,26 @@ pub fn access_log_path(graph_path: &Path) -> PathBuf {
     path
 }
 
+fn access_log_fallback_paths(graph_path: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![access_log_path(graph_path)];
+    match graph_path.extension().and_then(|ext| ext.to_str()) {
+        Some("kg") => {
+            paths.push(access_log_path(&graph_path.with_extension("json")));
+        }
+        Some("json") => {
+            paths.push(access_log_path(&graph_path.with_extension("kg")));
+        }
+        _ => {}
+    }
+    paths
+}
+
+pub fn first_existing_access_log_path(graph_path: &Path) -> Option<PathBuf> {
+    access_log_fallback_paths(graph_path)
+        .into_iter()
+        .find(|path| path.exists())
+}
+
 pub fn append_entry(graph_path: &Path, entry: &AccessLogEntry) -> Result<()> {
     let log_path = access_log_path(graph_path);
     let mut file = OpenOptions::new()
@@ -123,11 +143,14 @@ pub fn append_entry(graph_path: &Path, entry: &AccessLogEntry) -> Result<()> {
     Ok(())
 }
 
+pub fn append_hit(graph_path: &Path, user_short_uid: &str, node_id: &str) -> Result<()> {
+    crate::kg_sidecar::append_hit_with_uid(graph_path, user_short_uid, node_id)
+}
+
 pub fn read_log(graph_path: &Path, limit: usize, show_empty: bool) -> Result<String> {
-    let log_path = access_log_path(graph_path);
-    if !log_path.exists() {
+    let Some(log_path) = first_existing_access_log_path(graph_path) else {
         return Ok(String::from("= access-log\nempty: no entries yet\n"));
-    }
+    };
 
     let content = fs::read_to_string(&log_path)?;
     let mut lines: Vec<&str> = content.lines().collect();
@@ -172,10 +195,9 @@ pub fn read_log(graph_path: &Path, limit: usize, show_empty: bool) -> Result<Str
 }
 
 pub fn log_stats(graph_path: &Path) -> Result<String> {
-    let log_path = access_log_path(graph_path);
-    if !log_path.exists() {
+    let Some(log_path) = first_existing_access_log_path(graph_path) else {
         return Ok(String::from("= access-stats\nno access log found\n"));
-    }
+    };
 
     let content = fs::read_to_string(&log_path)?;
     let lines: Vec<&str> = content.lines().collect();

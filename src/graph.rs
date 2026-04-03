@@ -82,6 +82,671 @@ fn latest_backup_ts(dir: &Path, stem: &str) -> Result<Option<u64>> {
     Ok(latest)
 }
 
+fn node_type_to_code(node_type: &str) -> &str {
+    match node_type {
+        "Feature" => "F",
+        "Concept" => "K",
+        "Interface" => "I",
+        "Process" => "P",
+        "DataStore" => "D",
+        "Attribute" => "A",
+        "Entity" => "Y",
+        "Note" => "N",
+        "Rule" => "R",
+        "Convention" => "C",
+        "Bug" => "B",
+        "Decision" => "Z",
+        "OpenQuestion" => "O",
+        "Claim" => "Q",
+        "Insight" => "W",
+        "Reference" => "M",
+        "Term" => "T",
+        "Status" => "S",
+        "Doubt" => "L",
+        _ => node_type,
+    }
+}
+
+fn code_to_node_type(code: &str) -> &str {
+    match code {
+        "F" => "Feature",
+        "K" => "Concept",
+        "I" => "Interface",
+        "P" => "Process",
+        "D" => "DataStore",
+        "A" => "Attribute",
+        "Y" => "Entity",
+        "N" => "Note",
+        "R" => "Rule",
+        "C" => "Convention",
+        "B" => "Bug",
+        "Z" => "Decision",
+        "O" => "OpenQuestion",
+        "Q" => "Claim",
+        "W" => "Insight",
+        "M" => "Reference",
+        "T" => "Term",
+        "S" => "Status",
+        "L" => "Doubt",
+        _ => code,
+    }
+}
+
+fn relation_to_code(relation: &str) -> &str {
+    match relation {
+        "DOCUMENTED_IN" | "DOCUMENTS" => "D",
+        "HAS" => "H",
+        "TRIGGERS" => "T",
+        "AFFECTED_BY" | "AFFECTS" => "A",
+        "READS_FROM" | "READS" => "R",
+        "GOVERNED_BY" | "GOVERNS" => "G",
+        "DEPENDS_ON" => "O",
+        "AVAILABLE_IN" => "I",
+        "SUPPORTS" => "S",
+        "SUMMARIZES" => "U",
+        "RELATED_TO" => "L",
+        "CONTRADICTS" => "V",
+        "CREATED_BY" | "CREATES" => "C",
+        _ => relation,
+    }
+}
+
+fn code_to_relation(code: &str) -> &str {
+    match code {
+        "D" => "DOCUMENTED_IN",
+        "H" => "HAS",
+        "T" => "TRIGGERS",
+        "A" => "AFFECTED_BY",
+        "R" => "READS_FROM",
+        "G" => "GOVERNED_BY",
+        "O" => "DEPENDS_ON",
+        "I" => "AVAILABLE_IN",
+        "S" => "SUPPORTS",
+        "U" => "SUMMARIZES",
+        "L" => "RELATED_TO",
+        "V" => "CONTRADICTS",
+        "C" => "CREATED_BY",
+        _ => code,
+    }
+}
+
+fn sort_case_insensitive(values: &[String]) -> Vec<String> {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| {
+        let la = a.to_ascii_lowercase();
+        let lb = b.to_ascii_lowercase();
+        la.cmp(&lb).then_with(|| a.cmp(b))
+    });
+    sorted
+}
+
+fn normalize_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn dedupe_case_insensitive(values: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for value in values {
+        let key = value.to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(value);
+        }
+    }
+    out
+}
+
+fn parse_utc_timestamp(value: &str) -> bool {
+    if value.len() != 20 {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let is_digit = |idx: usize| bytes.get(idx).is_some_and(|b| b.is_ascii_digit());
+    if !(is_digit(0)
+        && is_digit(1)
+        && is_digit(2)
+        && is_digit(3)
+        && bytes.get(4) == Some(&b'-')
+        && is_digit(5)
+        && is_digit(6)
+        && bytes.get(7) == Some(&b'-')
+        && is_digit(8)
+        && is_digit(9)
+        && bytes.get(10) == Some(&b'T')
+        && is_digit(11)
+        && is_digit(12)
+        && bytes.get(13) == Some(&b':')
+        && is_digit(14)
+        && is_digit(15)
+        && bytes.get(16) == Some(&b':')
+        && is_digit(17)
+        && is_digit(18)
+        && bytes.get(19) == Some(&b'Z'))
+    {
+        return false;
+    }
+
+    let month = value[5..7].parse::<u32>().ok();
+    let day = value[8..10].parse::<u32>().ok();
+    let hour = value[11..13].parse::<u32>().ok();
+    let minute = value[14..16].parse::<u32>().ok();
+    let second = value[17..19].parse::<u32>().ok();
+    matches!(month, Some(1..=12))
+        && matches!(day, Some(1..=31))
+        && matches!(hour, Some(0..=23))
+        && matches!(minute, Some(0..=59))
+        && matches!(second, Some(0..=59))
+}
+
+fn strict_kg_mode() -> bool {
+    let Ok(value) = std::env::var("KG_STRICT_FORMAT") else {
+        return false;
+    };
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn validate_len(
+    line_no: usize,
+    field: &str,
+    value: &str,
+    min: usize,
+    max: usize,
+    strict: bool,
+) -> Result<()> {
+    let len = value.chars().count();
+    if strict && (len < min || len > max) {
+        return Err(anyhow::anyhow!(
+            "invalid {field} length at line {line_no}: expected {min}..={max}, got {len}"
+        ));
+    }
+    Ok(())
+}
+
+fn enforce_field_order(
+    line_no: usize,
+    key: &str,
+    rank: u8,
+    last_rank: &mut u8,
+    section: &str,
+    strict: bool,
+) -> Result<()> {
+    if strict && rank < *last_rank {
+        return Err(anyhow::anyhow!(
+            "invalid field order at line {line_no}: {key} in {section} block"
+        ));
+    }
+    if rank > *last_rank {
+        *last_rank = rank;
+    }
+    Ok(())
+}
+
+fn field_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    if line == key {
+        Some("")
+    } else {
+        line.strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix(' '))
+    }
+}
+
+fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
+    let mut graph = GraphFile::new(graph_name);
+    let mut current_node: Option<Node> = None;
+    let mut current_note: Option<Note> = None;
+    let mut current_edge_index: Option<usize> = None;
+    let mut last_node_rank: u8 = 0;
+    let mut last_note_rank: u8 = 0;
+    let mut last_edge_rank: u8 = 0;
+
+    for (idx, line) in raw.lines().enumerate() {
+        let line_no = idx + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("@ ") {
+            if let Some(note) = current_note.take() {
+                graph.notes.push(note);
+            }
+            if let Some(node) = current_node.take() {
+                graph.nodes.push(node);
+            }
+            let (type_code, node_id) = rest.split_once(':').ok_or_else(|| {
+                anyhow::anyhow!("invalid node header at line {line_no}: {trimmed}")
+            })?;
+            current_node = Some(Node {
+                id: node_id.trim().to_owned(),
+                r#type: code_to_node_type(type_code.trim()).to_owned(),
+                name: String::new(),
+                properties: NodeProperties::default(),
+                source_files: Vec::new(),
+            });
+            current_edge_index = None;
+            last_node_rank = 0;
+            last_edge_rank = 0;
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("! ") {
+            if let Some(node) = current_node.take() {
+                graph.nodes.push(node);
+            }
+            if let Some(note) = current_note.take() {
+                graph.notes.push(note);
+            }
+            let mut parts = rest.split_whitespace();
+            let id = parts.next().ok_or_else(|| {
+                anyhow::anyhow!("invalid note header at line {line_no}: {trimmed}")
+            })?;
+            let node_id = parts.next().ok_or_else(|| {
+                anyhow::anyhow!("invalid note header at line {line_no}: {trimmed}")
+            })?;
+            current_note = Some(Note {
+                id: id.to_owned(),
+                node_id: node_id.to_owned(),
+                ..Default::default()
+            });
+            current_edge_index = None;
+            last_note_rank = 0;
+            continue;
+        }
+
+        if let Some(note) = current_note.as_mut() {
+            if let Some(rest) = field_value(trimmed, "b") {
+                enforce_field_order(line_no, "b", 1, &mut last_note_rank, "note", strict)?;
+                note.body = normalize_text(rest.trim());
+                continue;
+            }
+            if let Some(rest) = field_value(trimmed, "t") {
+                enforce_field_order(line_no, "t", 2, &mut last_note_rank, "note", strict)?;
+                let value = normalize_text(rest.trim());
+                if !value.is_empty() {
+                    note.tags.push(value);
+                }
+                continue;
+            }
+            if let Some(rest) = field_value(trimmed, "a") {
+                enforce_field_order(line_no, "a", 3, &mut last_note_rank, "note", strict)?;
+                note.author = normalize_text(rest.trim());
+                continue;
+            }
+            if let Some(rest) = field_value(trimmed, "e") {
+                enforce_field_order(line_no, "e", 4, &mut last_note_rank, "note", strict)?;
+                note.created_at = rest.trim().to_owned();
+                continue;
+            }
+            if let Some(rest) = field_value(trimmed, "p") {
+                enforce_field_order(line_no, "p", 5, &mut last_note_rank, "note", strict)?;
+                note.provenance = normalize_text(rest.trim());
+                continue;
+            }
+            if let Some(rest) = field_value(trimmed, "s") {
+                enforce_field_order(line_no, "s", 6, &mut last_note_rank, "note", strict)?;
+                let value = normalize_text(rest.trim());
+                if !value.is_empty() {
+                    note.source_files.push(value);
+                }
+                continue;
+            }
+            return Err(anyhow::anyhow!(
+                "unrecognized note line at {line_no}: {trimmed}"
+            ));
+        }
+
+        let Some(node) = current_node.as_mut() else {
+            return Err(anyhow::anyhow!(
+                "unexpected line before first node at line {line_no}: {trimmed}"
+            ));
+        };
+
+        if let Some(rest) = field_value(trimmed, "N") {
+            enforce_field_order(line_no, "N", 1, &mut last_node_rank, "node", strict)?;
+            let value = normalize_text(rest.trim());
+            validate_len(line_no, "N", &value, 1, 120, strict)?;
+            node.name = value;
+            continue;
+        }
+        if let Some(rest) = field_value(trimmed, "D") {
+            enforce_field_order(line_no, "D", 2, &mut last_node_rank, "node", strict)?;
+            let value = normalize_text(rest.trim());
+            validate_len(line_no, "D", &value, 1, 200, strict)?;
+            node.properties.description = value;
+            continue;
+        }
+        if let Some(rest) = field_value(trimmed, "A") {
+            enforce_field_order(line_no, "A", 3, &mut last_node_rank, "node", strict)?;
+            let value = normalize_text(rest.trim());
+            validate_len(line_no, "A", &value, 1, 80, strict)?;
+            node.properties.alias.push(value);
+            continue;
+        }
+        if let Some(rest) = field_value(trimmed, "F") {
+            enforce_field_order(line_no, "F", 4, &mut last_node_rank, "node", strict)?;
+            let value = normalize_text(rest.trim());
+            validate_len(line_no, "F", &value, 1, 200, strict)?;
+            node.properties.key_facts.push(value);
+            continue;
+        }
+        if let Some(rest) = field_value(trimmed, "E") {
+            enforce_field_order(line_no, "E", 5, &mut last_node_rank, "node", strict)?;
+            let value = rest.trim();
+            if !value.is_empty() && !parse_utc_timestamp(value) {
+                return Err(anyhow::anyhow!(
+                    "invalid E timestamp at line {line_no}: expected YYYY-MM-DDTHH:MM:SSZ"
+                ));
+            }
+            node.properties.created_at = value.to_owned();
+            continue;
+        }
+        if let Some(rest) = field_value(trimmed, "C") {
+            enforce_field_order(line_no, "C", 6, &mut last_node_rank, "node", strict)?;
+            if !rest.trim().is_empty() {
+                node.properties.confidence = rest.trim().parse::<f64>().ok();
+            }
+            continue;
+        }
+        if let Some(rest) = field_value(trimmed, "V") {
+            enforce_field_order(line_no, "V", 7, &mut last_node_rank, "node", strict)?;
+            if let Ok(value) = rest.trim().parse::<u8>() {
+                node.properties.importance = value;
+            }
+            continue;
+        }
+        if let Some(rest) = field_value(trimmed, "P") {
+            enforce_field_order(line_no, "P", 8, &mut last_node_rank, "node", strict)?;
+            node.properties.provenance = normalize_text(rest.trim());
+            continue;
+        }
+        if let Some(rest) = field_value(trimmed, "S") {
+            enforce_field_order(line_no, "S", 10, &mut last_node_rank, "node", strict)?;
+            let value = normalize_text(rest.trim());
+            validate_len(line_no, "S", &value, 1, 200, strict)?;
+            node.source_files.push(value);
+            continue;
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("> ") {
+            let mut parts = rest.split_whitespace();
+            let relation = parts.next().ok_or_else(|| {
+                anyhow::anyhow!("missing relation in edge at line {line_no}: {trimmed}")
+            })?;
+            let target_id = parts.next().ok_or_else(|| {
+                anyhow::anyhow!("missing target id in edge at line {line_no}: {trimmed}")
+            })?;
+            graph.edges.push(Edge {
+                source_id: node.id.clone(),
+                relation: code_to_relation(relation).to_owned(),
+                target_id: target_id.to_owned(),
+                properties: EdgeProperties::default(),
+            });
+            current_edge_index = Some(graph.edges.len() - 1);
+            last_edge_rank = 0;
+            continue;
+        }
+
+        if let Some(rest) = field_value(trimmed, "d") {
+            enforce_field_order(line_no, "d", 1, &mut last_edge_rank, "edge", strict)?;
+            let edge_idx = current_edge_index.ok_or_else(|| {
+                anyhow::anyhow!("edge detail without preceding edge at line {line_no}")
+            })?;
+            let value = normalize_text(rest.trim());
+            validate_len(line_no, "d", &value, 1, 200, strict)?;
+            graph.edges[edge_idx].properties.detail = value;
+            continue;
+        }
+
+        if let Some(rest) = field_value(trimmed, "i") {
+            enforce_field_order(line_no, "i", 2, &mut last_edge_rank, "edge", strict)?;
+            let edge_idx = current_edge_index.ok_or_else(|| {
+                anyhow::anyhow!("edge valid_from without preceding edge at line {line_no}")
+            })?;
+            let value = rest.trim();
+            if !value.is_empty() && !parse_utc_timestamp(value) {
+                return Err(anyhow::anyhow!(
+                    "invalid i timestamp at line {line_no}: expected YYYY-MM-DDTHH:MM:SSZ"
+                ));
+            }
+            graph.edges[edge_idx].properties.valid_from = value.to_owned();
+            continue;
+        }
+
+        if let Some(rest) = field_value(trimmed, "x") {
+            enforce_field_order(line_no, "x", 3, &mut last_edge_rank, "edge", strict)?;
+            let edge_idx = current_edge_index.ok_or_else(|| {
+                anyhow::anyhow!("edge valid_to without preceding edge at line {line_no}")
+            })?;
+            let value = rest.trim();
+            if !value.is_empty() && !parse_utc_timestamp(value) {
+                return Err(anyhow::anyhow!(
+                    "invalid x timestamp at line {line_no}: expected YYYY-MM-DDTHH:MM:SSZ"
+                ));
+            }
+            graph.edges[edge_idx].properties.valid_to = value.to_owned();
+            continue;
+        }
+
+        if let Some(rest) = field_value(trimmed, "-") {
+            let mut parts = rest.trim().splitn(2, char::is_whitespace);
+            let key = parts.next().unwrap_or("").trim();
+            let value = parts.next().unwrap_or("").trim();
+            let is_edge_custom = matches!(
+                key,
+                "edge_feedback_score" | "edge_feedback_count" | "edge_feedback_last_ts_ms"
+            );
+            if is_edge_custom {
+                enforce_field_order(line_no, "-", 4, &mut last_edge_rank, "edge", strict)?;
+            } else {
+                enforce_field_order(line_no, "-", 9, &mut last_node_rank, "node", strict)?;
+            }
+            match key {
+                "domain_area" => node.properties.domain_area = value.to_owned(),
+                "feedback_score" => {
+                    node.properties.feedback_score = value.parse::<f64>().unwrap_or(0.0)
+                }
+                "feedback_count" => {
+                    node.properties.feedback_count = value.parse::<u64>().unwrap_or(0)
+                }
+                "feedback_last_ts_ms" => {
+                    node.properties.feedback_last_ts_ms = value.parse::<u64>().ok()
+                }
+                "edge_feedback_score" => {
+                    if let Some(edge_idx) = current_edge_index {
+                        graph.edges[edge_idx].properties.feedback_score =
+                            value.parse::<f64>().unwrap_or(0.0);
+                    }
+                }
+                "edge_feedback_count" => {
+                    if let Some(edge_idx) = current_edge_index {
+                        graph.edges[edge_idx].properties.feedback_count =
+                            value.parse::<u64>().unwrap_or(0);
+                    }
+                }
+                "edge_feedback_last_ts_ms" => {
+                    if let Some(edge_idx) = current_edge_index {
+                        graph.edges[edge_idx].properties.feedback_last_ts_ms =
+                            value.parse::<u64>().ok();
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        return Err(anyhow::anyhow!("unrecognized line at {line_no}: {trimmed}"));
+    }
+
+    if let Some(node) = current_node.take() {
+        graph.nodes.push(node);
+    }
+    if let Some(note) = current_note.take() {
+        graph.notes.push(note);
+    }
+
+    for node in &mut graph.nodes {
+        node.properties.alias =
+            sort_case_insensitive(&dedupe_case_insensitive(node.properties.alias.clone()));
+        node.properties.key_facts =
+            sort_case_insensitive(&dedupe_case_insensitive(node.properties.key_facts.clone()));
+        node.source_files =
+            sort_case_insensitive(&dedupe_case_insensitive(node.source_files.clone()));
+    }
+
+    graph.edges.sort_by(|a, b| {
+        a.source_id
+            .cmp(&b.source_id)
+            .then_with(|| a.relation.cmp(&b.relation))
+            .then_with(|| a.target_id.cmp(&b.target_id))
+            .then_with(|| a.properties.detail.cmp(&b.properties.detail))
+    });
+
+    for note in &mut graph.notes {
+        note.tags = sort_case_insensitive(&dedupe_case_insensitive(note.tags.clone()));
+        note.source_files =
+            sort_case_insensitive(&dedupe_case_insensitive(note.source_files.clone()));
+    }
+    graph.notes.sort_by(|a, b| {
+        a.id.cmp(&b.id)
+            .then_with(|| a.node_id.cmp(&b.node_id))
+            .then_with(|| a.created_at.cmp(&b.created_at))
+    });
+
+    graph.refresh_counts();
+    Ok(graph)
+}
+
+fn serialize_kg(graph: &GraphFile) -> String {
+    let mut out = String::new();
+    let mut nodes = graph.nodes.clone();
+    nodes.sort_by(|a, b| a.id.cmp(&b.id));
+
+    for node in nodes {
+        out.push_str(&format!(
+            "@ {}:{}\n",
+            node_type_to_code(&node.r#type),
+            node.id
+        ));
+        out.push_str(&format!("N {}\n", node.name));
+        out.push_str(&format!("D {}\n", node.properties.description));
+
+        for alias in sort_case_insensitive(&node.properties.alias) {
+            out.push_str(&format!("A {}\n", alias));
+        }
+        for fact in sort_case_insensitive(&node.properties.key_facts) {
+            out.push_str(&format!("F {}\n", fact));
+        }
+
+        out.push_str(&format!("E {}\n", node.properties.created_at));
+        if let Some(confidence) = node.properties.confidence {
+            out.push_str(&format!("C {}\n", confidence));
+        }
+        out.push_str(&format!("V {}\n", node.properties.importance));
+        out.push_str(&format!("P {}\n", node.properties.provenance));
+        if !node.properties.domain_area.is_empty() {
+            out.push_str(&format!("- domain_area {}\n", node.properties.domain_area));
+        }
+        if node.properties.feedback_score != 0.0 {
+            out.push_str(&format!(
+                "- feedback_score {}\n",
+                node.properties.feedback_score
+            ));
+        }
+        if node.properties.feedback_count != 0 {
+            out.push_str(&format!(
+                "- feedback_count {}\n",
+                node.properties.feedback_count
+            ));
+        }
+        if let Some(ts) = node.properties.feedback_last_ts_ms {
+            out.push_str(&format!("- feedback_last_ts_ms {}\n", ts));
+        }
+
+        for source in sort_case_insensitive(&node.source_files) {
+            out.push_str(&format!("S {}\n", source));
+        }
+
+        let mut edges: Vec<Edge> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.source_id == node.id)
+            .cloned()
+            .collect();
+        edges.sort_by(|a, b| {
+            a.relation
+                .cmp(&b.relation)
+                .then_with(|| a.target_id.cmp(&b.target_id))
+                .then_with(|| a.properties.detail.cmp(&b.properties.detail))
+        });
+
+        for edge in edges {
+            out.push_str(&format!(
+                "> {} {}\n",
+                relation_to_code(&edge.relation),
+                edge.target_id
+            ));
+            if !edge.properties.detail.is_empty() {
+                out.push_str(&format!("d {}\n", edge.properties.detail));
+            }
+            if !edge.properties.valid_from.is_empty() {
+                out.push_str(&format!("i {}\n", edge.properties.valid_from));
+            }
+            if !edge.properties.valid_to.is_empty() {
+                out.push_str(&format!("x {}\n", edge.properties.valid_to));
+            }
+            if edge.properties.feedback_score != 0.0 {
+                out.push_str(&format!(
+                    "- edge_feedback_score {}\n",
+                    edge.properties.feedback_score
+                ));
+            }
+            if edge.properties.feedback_count != 0 {
+                out.push_str(&format!(
+                    "- edge_feedback_count {}\n",
+                    edge.properties.feedback_count
+                ));
+            }
+            if let Some(ts) = edge.properties.feedback_last_ts_ms {
+                out.push_str(&format!("- edge_feedback_last_ts_ms {}\n", ts));
+            }
+        }
+
+        out.push('\n');
+    }
+
+    let mut notes = graph.notes.clone();
+    notes.sort_by(|a, b| {
+        a.id.cmp(&b.id)
+            .then_with(|| a.node_id.cmp(&b.node_id))
+            .then_with(|| a.created_at.cmp(&b.created_at))
+    });
+    for note in notes {
+        out.push_str(&format!("! {} {}\n", note.id, note.node_id));
+        out.push_str(&format!("b {}\n", note.body));
+        for tag in sort_case_insensitive(&note.tags) {
+            out.push_str(&format!("t {}\n", tag));
+        }
+        if !note.author.is_empty() {
+            out.push_str(&format!("a {}\n", note.author));
+        }
+        if !note.created_at.is_empty() {
+            out.push_str(&format!("e {}\n", note.created_at));
+        }
+        if !note.provenance.is_empty() {
+            out.push_str(&format!("p {}\n", note.provenance));
+        }
+        for source in sort_case_insensitive(&note.source_files) {
+            out.push_str(&format!("s {}\n", source));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphFile {
     pub metadata: Metadata,
@@ -114,7 +779,7 @@ pub struct Node {
     pub source_files: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeProperties {
     #[serde(default)]
     pub description: String,
@@ -126,6 +791,8 @@ pub struct NodeProperties {
     pub confidence: Option<f64>,
     #[serde(default)]
     pub created_at: String,
+    #[serde(default = "default_importance")]
+    pub importance: u8,
     #[serde(default)]
     pub key_facts: Vec<String>,
     #[serde(default)]
@@ -136,6 +803,28 @@ pub struct NodeProperties {
     pub feedback_count: u64,
     #[serde(default)]
     pub feedback_last_ts_ms: Option<u64>,
+}
+
+fn default_importance() -> u8 {
+    4
+}
+
+impl Default for NodeProperties {
+    fn default() -> Self {
+        Self {
+            description: String::new(),
+            domain_area: String::new(),
+            provenance: String::new(),
+            confidence: None,
+            created_at: String::new(),
+            importance: default_importance(),
+            key_facts: Vec::new(),
+            alias: Vec::new(),
+            feedback_score: 0.0,
+            feedback_count: 0,
+            feedback_last_ts_ms: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +840,10 @@ pub struct Edge {
 pub struct EdgeProperties {
     #[serde(default)]
     pub detail: String,
+    #[serde(default)]
+    pub valid_from: String,
+    #[serde(default)]
+    pub valid_to: String,
     #[serde(default)]
     pub feedback_score: f64,
     #[serde(default)]
@@ -196,8 +889,29 @@ impl GraphFile {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path)
             .with_context(|| format!("failed to read graph: {}", path.display()))?;
-        let mut graph: GraphFile = serde_json::from_str(&raw)
-            .with_context(|| format!("invalid JSON: {}", path.display()))?;
+        let ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("json");
+        let mut graph = if ext == "kg" {
+            if raw.trim_start().starts_with('{') {
+                serde_json::from_str(&raw).with_context(|| {
+                    format!(
+                        "invalid legacy JSON payload in .kg file: {}",
+                        path.display()
+                    )
+                })?
+            } else {
+                let graph_name = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("graph");
+                parse_kg(&raw, graph_name, strict_kg_mode())?
+            }
+        } else {
+            serde_json::from_str(&raw)
+                .with_context(|| format!("invalid JSON: {}", path.display()))?
+        };
         graph.refresh_counts();
         Ok(graph)
     }
@@ -205,7 +919,15 @@ impl GraphFile {
     pub fn save(&self, path: &Path) -> Result<()> {
         let mut graph = self.clone();
         graph.refresh_counts();
-        let raw = serde_json::to_string_pretty(&graph).context("failed to serialize graph")?;
+        let ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("json");
+        let raw = if ext == "kg" {
+            serialize_kg(&graph)
+        } else {
+            serde_json::to_string_pretty(&graph).context("failed to serialize graph")?
+        };
         atomic_write(path, &raw)?;
         backup_graph_if_stale(path, &raw)
     }
@@ -219,6 +941,13 @@ impl GraphFile {
         self.nodes.iter().find(|node| node.id == id)
     }
 
+    pub fn node_by_id_sorted(&self, id: &str) -> Option<&Node> {
+        self.nodes
+            .binary_search_by(|node| node.id.as_str().cmp(id))
+            .ok()
+            .and_then(|idx| self.nodes.get(idx))
+    }
+
     pub fn node_by_id_mut(&mut self, id: &str) -> Option<&mut Node> {
         self.nodes.iter_mut().find(|node| node.id == id)
     }
@@ -227,5 +956,198 @@ impl GraphFile {
         self.edges.iter().any(|edge| {
             edge.source_id == source_id && edge.relation == relation && edge.target_id == target_id
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GraphFile, parse_kg};
+
+    #[test]
+    fn save_and_load_kg_roundtrip_keeps_core_fields() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("graph.kg");
+
+        let mut graph = GraphFile::new("graph");
+        graph.nodes.push(crate::Node {
+            id: "concept:refrigerator".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Lodowka".to_owned(),
+            properties: crate::NodeProperties {
+                description: "Urzadzenie chlodzace".to_owned(),
+                provenance: "U".to_owned(),
+                created_at: "2026-04-04T12:00:00Z".to_owned(),
+                importance: 5,
+                key_facts: vec!["A".to_owned(), "b".to_owned()],
+                alias: vec!["Fridge".to_owned()],
+                ..Default::default()
+            },
+            source_files: vec!["docs/fridge.md".to_owned()],
+        });
+        graph.edges.push(crate::Edge {
+            source_id: "concept:refrigerator".to_owned(),
+            relation: "READS_FROM".to_owned(),
+            target_id: "datastore:settings".to_owned(),
+            properties: crate::EdgeProperties {
+                detail: "runtime read".to_owned(),
+                valid_from: "2026-04-04T12:00:00Z".to_owned(),
+                valid_to: "2026-04-05T12:00:00Z".to_owned(),
+                ..Default::default()
+            },
+        });
+
+        graph.save(&path).expect("save kg");
+        let raw = std::fs::read_to_string(&path).expect("read kg");
+        assert!(raw.contains("@ K:concept:refrigerator"));
+        assert!(raw.contains("> R datastore:settings"));
+
+        let loaded = GraphFile::load(&path).expect("load kg");
+        assert_eq!(loaded.nodes.len(), 1);
+        assert_eq!(loaded.edges.len(), 1);
+        let node = &loaded.nodes[0];
+        assert_eq!(node.properties.importance, 5);
+        assert_eq!(node.properties.provenance, "U");
+        assert_eq!(node.name, "Lodowka");
+        assert_eq!(loaded.edges[0].relation, "READS_FROM");
+        assert_eq!(loaded.edges[0].properties.detail, "runtime read");
+        assert_eq!(
+            loaded.edges[0].properties.valid_from,
+            "2026-04-04T12:00:00Z"
+        );
+        assert_eq!(loaded.edges[0].properties.valid_to, "2026-04-05T12:00:00Z");
+    }
+
+    #[test]
+    fn load_supports_legacy_json_payload_with_kg_extension() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("legacy.kg");
+        std::fs::write(
+            &path,
+            r#"{
+  "metadata": {"name": "legacy", "version": "1.0", "description": "x", "node_count": 0, "edge_count": 0},
+  "nodes": [],
+  "edges": [],
+  "notes": []
+}"#,
+        )
+        .expect("write legacy payload");
+
+        let loaded = GraphFile::load(&path).expect("load legacy kg");
+        assert_eq!(loaded.metadata.name, "legacy");
+        assert!(loaded.nodes.is_empty());
+    }
+
+    #[test]
+    fn load_kg_rejects_invalid_timestamp_format() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("invalid-ts.kg");
+        std::fs::write(
+            &path,
+            "@ K:concept:x\nN X\nD Desc\nE 2026-04-04 12:00:00\nV 4\nP U\n",
+        )
+        .expect("write kg");
+
+        let err = GraphFile::load(&path).expect_err("invalid timestamp should fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("invalid E timestamp"));
+    }
+
+    #[test]
+    fn load_kg_rejects_invalid_edge_timestamp_format() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("invalid-edge-ts.kg");
+        std::fs::write(
+            &path,
+            "@ K:concept:x\nN X\nD Desc\nE 2026-04-04T12:00:00Z\nV 4\nP U\nS docs/a.md\n> H concept:y\ni 2026-04-04 12:00:00\n",
+        )
+        .expect("write kg");
+
+        let err = GraphFile::load(&path).expect_err("invalid edge timestamp should fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("invalid i timestamp"));
+    }
+
+    #[test]
+    fn load_kg_normalizes_and_dedupes_multivalue_fields() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("normalize.kg");
+        std::fs::write(
+            &path,
+            "@ K:concept:x\nN  Name   With   Spaces \nD  Desc   with   spaces \nA Alias\nA alias\nF fact one\nF FACT   one\nS docs/a.md\nS docs/a.md\nE 2026-04-04T12:00:00Z\nV 4\nP U\n",
+        )
+        .expect("write kg");
+
+        let loaded = GraphFile::load(&path).expect("load kg");
+        let node = &loaded.nodes[0];
+        assert_eq!(node.name, "Name With Spaces");
+        assert_eq!(node.properties.description, "Desc with spaces");
+        assert_eq!(node.properties.alias.len(), 1);
+        assert_eq!(node.properties.key_facts.len(), 1);
+        assert_eq!(node.source_files.len(), 1);
+    }
+
+    #[test]
+    fn save_and_load_kg_roundtrip_keeps_notes_without_json_fallback() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("graph-notes.kg");
+
+        let mut graph = GraphFile::new("graph-notes");
+        graph.nodes.push(crate::Node {
+            id: "concept:refrigerator".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Lodowka".to_owned(),
+            properties: crate::NodeProperties {
+                description: "Urzadzenie chlodzace".to_owned(),
+                provenance: "U".to_owned(),
+                created_at: "2026-04-04T12:00:00Z".to_owned(),
+                ..Default::default()
+            },
+            source_files: vec!["docs/fridge.md".to_owned()],
+        });
+        graph.notes.push(crate::Note {
+            id: "note:1".to_owned(),
+            node_id: "concept:refrigerator".to_owned(),
+            body: "Important maintenance insight".to_owned(),
+            tags: vec!["Maintenance".to_owned(), "maintenance".to_owned()],
+            author: "alice".to_owned(),
+            created_at: "1712345678".to_owned(),
+            provenance: "U".to_owned(),
+            source_files: vec!["docs/a.md".to_owned(), "docs/a.md".to_owned()],
+        });
+
+        graph.save(&path).expect("save kg");
+        let raw = std::fs::read_to_string(&path).expect("read kg");
+        assert!(raw.contains("! note:1 concept:refrigerator"));
+        assert!(!raw.trim_start().starts_with('{'));
+
+        let loaded = GraphFile::load(&path).expect("load kg");
+        assert_eq!(loaded.notes.len(), 1);
+        let note = &loaded.notes[0];
+        assert_eq!(note.id, "note:1");
+        assert_eq!(note.node_id, "concept:refrigerator");
+        assert_eq!(note.body, "Important maintenance insight");
+        assert_eq!(note.tags.len(), 1);
+        assert_eq!(note.source_files.len(), 1);
+    }
+
+    #[test]
+    fn strict_mode_rejects_out_of_order_node_fields() {
+        let raw = "@ K:concept:x\nD Desc\nN Name\nE 2026-04-04T12:00:00Z\nV 4\nP U\nS docs/a.md\n";
+        let err = parse_kg(raw, "x", true).expect_err("strict mode should fail on field order");
+        assert!(format!("{err:#}").contains("invalid field order"));
+    }
+
+    #[test]
+    fn strict_mode_rejects_overlong_name_but_compat_mode_allows_it() {
+        let long_name = "N ".to_owned() + &"X".repeat(121);
+        let raw = format!(
+            "@ K:concept:x\n{}\nD Desc\nE 2026-04-04T12:00:00Z\nV 4\nP U\nS docs/a.md\n",
+            long_name
+        );
+
+        let strict_err = parse_kg(&raw, "x", true).expect_err("strict mode should fail on length");
+        assert!(format!("{strict_err:#}").contains("invalid N length"));
+
+        parse_kg(&raw, "x", false).expect("compat mode keeps permissive behavior");
     }
 }

@@ -101,6 +101,8 @@ struct NodeAddArgs {
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
+    importance: Option<u8>,
+    #[serde(default)]
     facts: Vec<String>,
     #[serde(default)]
     aliases: Vec<String>,
@@ -126,6 +128,8 @@ struct NodeModifyArgs {
     confidence: Option<f64>,
     #[serde(default)]
     created_at: Option<String>,
+    #[serde(default)]
+    importance: Option<u8>,
     #[serde(default)]
     facts: Vec<String>,
     #[serde(default)]
@@ -292,6 +296,8 @@ struct NodeAddBatchItem {
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
+    importance: Option<u8>,
+    #[serde(default)]
     facts: Vec<String>,
     #[serde(default)]
     aliases: Vec<String>,
@@ -403,6 +409,7 @@ struct FeedbackUpdate {
     item_index: usize,
     graph: String,
     node_id: String,
+    action: String,
     delta: f64,
     ts_ms: u128,
 }
@@ -417,6 +424,7 @@ struct PendingFindFeedback {
 struct KgMcpServer {
     cwd: PathBuf,
     nudge_percent: u8,
+    user_short_uid: String,
     exec_lock: Arc<Mutex<()>>,
     feedback_state: Arc<Mutex<FeedbackState>>,
     trace_counter: Arc<AtomicU64>,
@@ -429,10 +437,12 @@ struct KgMcpServer {
 impl KgMcpServer {
     fn new(cwd: PathBuf) -> anyhow::Result<Self> {
         let nudge_percent = kg::feedback_nudge_percent(&cwd)?;
+        let user_short_uid = kg::sidecar_user_short_uid(&cwd);
         let feedback_state = initialize_feedback_state(&cwd);
         Ok(Self {
             cwd,
             nudge_percent,
+            user_short_uid,
             exec_lock: Arc::new(Mutex::new(())),
             feedback_state: Arc::new(Mutex::new(feedback_state)),
             trace_counter: Arc::new(AtomicU64::new(0)),
@@ -729,6 +739,17 @@ impl KgMcpServer {
                             results.insert(item.item_index, Err(msg.clone()));
                         }
                     }
+                } else {
+                    for item in items {
+                        if matches!(results.get(&item.item_index), Some(Ok(()))) {
+                            kg::append_kg_feedback(
+                                &path,
+                                &self.user_short_uid,
+                                &item.node_id,
+                                &item.action,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -854,7 +875,7 @@ impl KgMcpServer {
                             "line": line,
                             "status": "ok",
                             "uid": uid,
-                            "action": action,
+                            "action": action.clone(),
                             "pick": pick,
                             "selected": selected_s,
                             "graph": graph_s,
@@ -870,6 +891,7 @@ impl KgMcpServer {
                                     item_index: index,
                                     graph,
                                     node_id: selected,
+                                    action,
                                     delta,
                                     ts_ms: now_ms,
                                 });
@@ -1714,6 +1736,7 @@ impl KgMcpServer {
                     provenance: item.provenance.unwrap_or_default(),
                     confidence: item.confidence,
                     created_at: item.created_at.unwrap_or_default(),
+                    importance: item.importance.unwrap_or(4),
                     key_facts: item.facts,
                     alias: item.aliases,
                     ..kg::NodeProperties::default()
@@ -1832,6 +1855,10 @@ impl KgMcpServer {
             cmd.push("--created-at".to_owned());
             cmd.push(created_at);
         }
+        if let Some(importance) = args.importance {
+            cmd.push("--importance".to_owned());
+            cmd.push(importance.to_string());
+        }
         for fact in args.facts {
             cmd.push("--fact".to_owned());
             cmd.push(fact);
@@ -1883,6 +1910,10 @@ impl KgMcpServer {
         if let Some(created_at) = args.created_at {
             cmd.push("--created-at".to_owned());
             cmd.push(created_at);
+        }
+        if let Some(importance) = args.importance {
+            cmd.push("--importance".to_owned());
+            cmd.push(importance.to_string());
         }
         for fact in args.facts {
             cmd.push("--fact".to_owned());
@@ -3222,6 +3253,7 @@ fn cleanup_old_finds(finds: &mut HashMap<String, FindContext>, now_ms: u128, ttl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn split_script_handles_semicolons_and_newlines() {
@@ -3412,6 +3444,38 @@ mod tests {
         let percent =
             compute_adaptive_nudge_percent(10, &["query".to_owned()], 3, &HashMap::new(), &global);
         assert_eq!(percent, 20);
+    }
+
+    #[test]
+    fn apply_feedback_updates_appends_f_record_to_kglog() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        fs::write(
+            cwd.join(".kg.toml"),
+            "user_short_uid = \"tester01\"\ngraphs.fridge = \"fridge.kg\"\n",
+        )
+        .expect("write config");
+        fs::write(
+            cwd.join("fridge.kg"),
+            "@ K:concept:refrigerator\nN Lodowka\nD Desc\nE\nP M\n",
+        )
+        .expect("write graph");
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let updates = vec![FeedbackUpdate {
+            item_index: 0,
+            graph: "fridge".to_owned(),
+            node_id: "concept:refrigerator".to_owned(),
+            action: "YES".to_owned(),
+            delta: 1.0,
+            ts_ms: 1,
+        }];
+
+        let results = server.apply_feedback_updates(&updates);
+        assert!(matches!(results.get(&0), Some(Ok(()))));
+
+        let kglog_raw = fs::read_to_string(cwd.join("fridge.kglog")).expect("read kglog");
+        assert!(kglog_raw.contains(" tester01 F concept:refrigerator YES"));
     }
 }
 

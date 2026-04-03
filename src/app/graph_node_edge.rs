@@ -18,6 +18,7 @@ use crate::vectors;
 pub(crate) struct GraphCommandContext<'a> {
     pub(crate) graph_name: &'a str,
     pub(crate) path: &'a Path,
+    pub(crate) user_short_uid: &'a str,
     pub(crate) graph_file: &'a mut GraphFile,
     pub(crate) schema: Option<&'a GraphSchema>,
     pub(crate) store: &'a dyn GraphStore,
@@ -80,22 +81,29 @@ pub(crate) fn execute_node(
                 None
             };
 
+            let find_mode = crate::map_find_mode(mode);
             let timer = access_log::Timer::new();
-            let results_count = output::count_find_results_with_index(
-                context.graph_file,
-                &queries,
-                limit,
-                include_features,
-                crate::map_find_mode(mode),
-                bm25_index.as_ref(),
-            );
+            let mut query_hits: Vec<Vec<String>> = Vec::new();
+            let mut results_count = 0usize;
+            for query in &queries {
+                let matches = output::find_nodes_with_index(
+                    context.graph_file,
+                    query,
+                    limit,
+                    include_features,
+                    find_mode,
+                    bm25_index.as_ref(),
+                );
+                results_count += matches.len();
+                query_hits.push(matches.into_iter().map(|node| node.id).collect());
+            }
             let result = if json {
                 crate::render_find_json_with_index(
                     context.graph_file,
                     &queries,
                     limit,
                     include_features,
-                    crate::map_find_mode(mode),
+                    find_mode,
                     bm25_index.as_ref(),
                 )
             } else {
@@ -104,7 +112,7 @@ pub(crate) fn execute_node(
                     &queries,
                     limit,
                     include_features,
-                    crate::map_find_mode(mode),
+                    find_mode,
                     full,
                     bm25_index.as_ref(),
                 )
@@ -118,6 +126,13 @@ pub(crate) fn execute_node(
                     eprintln!("warning: failed to log access: {}", error);
                 }
             }
+            for node_id in query_hits.into_iter().flatten() {
+                if let Err(error) =
+                    access_log::append_hit(context.path, context.user_short_uid, &node_id)
+                {
+                    eprintln!("warning: failed to log kg hit: {}", error);
+                }
+            }
 
             Ok(result)
         }
@@ -129,10 +144,16 @@ pub(crate) fn execute_node(
             json,
         } => {
             let timer = access_log::Timer::new();
-            let node = context
-                .graph_file
-                .node_by_id(&id)
-                .ok_or_else(|| anyhow!("node not found: {id}"))?;
+            let index_hint = crate::kg_sidecar::lookup_node_line(context.path, &id);
+            let node = if index_hint.is_some() {
+                context
+                    .graph_file
+                    .node_by_id_sorted(&id)
+                    .or_else(|| context.graph_file.node_by_id(&id))
+            } else {
+                context.graph_file.node_by_id(&id)
+            }
+            .ok_or_else(|| anyhow!("node not found: {id}"))?;
             if !include_features && node.r#type == "Feature" {
                 bail!("feature nodes are hidden by default; use --include-features");
             }
@@ -143,9 +164,12 @@ pub(crate) fn execute_node(
             };
 
             let duration_ms = timer.elapsed_ms();
-            let entry = access_log::AccessLogEntry::node_get(id, duration_ms);
+            let entry = access_log::AccessLogEntry::node_get(id.clone(), duration_ms);
             if let Err(error) = access_log::append_entry(context.path, &entry) {
                 eprintln!("warning: failed to log access: {}", error);
+            }
+            if let Err(error) = access_log::append_hit(context.path, context.user_short_uid, &id) {
+                eprintln!("warning: failed to log kg hit: {}", error);
             }
 
             Ok(result)
@@ -160,6 +184,7 @@ pub(crate) fn execute_node(
             provenance,
             confidence,
             created_at,
+            importance,
             fact,
             alias,
             source,
@@ -174,6 +199,7 @@ pub(crate) fn execute_node(
                     provenance,
                     confidence,
                     created_at,
+                    importance,
                     key_facts: fact,
                     alias,
                     ..NodeProperties::default()
@@ -211,6 +237,7 @@ pub(crate) fn execute_node(
             provenance,
             confidence,
             created_at,
+            importance,
             fact,
             alias,
             source,
@@ -225,6 +252,7 @@ pub(crate) fn execute_node(
                 provenance.clone(),
                 confidence,
                 created_at.clone(),
+                importance,
                 fact.clone(),
                 alias.clone(),
                 source.clone(),

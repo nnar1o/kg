@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, de};
 
 pub const DEFAULT_NUDGE_PERCENT: u8 = 20;
-
 #[derive(Debug, Default, Deserialize)]
 pub struct KgConfig {
     #[serde(default)]
@@ -15,6 +14,8 @@ pub struct KgConfig {
     pub graph_dir: Option<PathBuf>,
     #[serde(default, deserialize_with = "deserialize_nudge_percent")]
     pub nudge: Option<u8>,
+    #[serde(default, deserialize_with = "deserialize_user_short_uid")]
+    pub user_short_uid: Option<String>,
     #[serde(default)]
     pub graphs: HashMap<String, PathBuf>,
 }
@@ -52,6 +53,38 @@ impl KgConfig {
     }
 }
 
+pub fn ensure_user_short_uid(cwd: &Path) -> String {
+    let env_uid = std::env::var("KG_USER_SHORT_UID").ok();
+    resolve_user_short_uid_with_env(cwd, env_uid.as_deref())
+}
+
+fn resolve_user_short_uid_with_env(cwd: &Path, env_uid: Option<&str>) -> String {
+    if let Some(uid) = env_uid.and_then(normalize_user_short_uid) {
+        return uid;
+    }
+
+    match KgConfig::discover(cwd) {
+        Ok(Some((config_path, cfg))) => {
+            if let Some(uid) = cfg
+                .user_short_uid
+                .as_deref()
+                .and_then(normalize_user_short_uid)
+            {
+                return uid;
+            }
+            let generated = generate_user_short_uid();
+            let _ = persist_user_short_uid(&config_path, &generated);
+            generated
+        }
+        Ok(None) | Err(_) => {
+            let generated = generate_user_short_uid();
+            let config_path = cwd.join(".kg.toml");
+            let _ = persist_user_short_uid(&config_path, &generated);
+            generated
+        }
+    }
+}
+
 fn resolve_path(base: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -72,9 +105,98 @@ where
     }
 }
 
+fn deserialize_user_short_uid<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    match value {
+        Some(value) => normalize_user_short_uid(&value).map(Some).ok_or_else(|| {
+            de::Error::custom("user_short_uid must be 1..=16 chars [a-zA-Z0-9_-] (or unset)")
+        }),
+        None => Ok(None),
+    }
+}
+
+fn normalize_user_short_uid(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    let len = trimmed.chars().count();
+    if len == 0 || len > 16 {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn generate_user_short_uid() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut value = nanos;
+    let alphabet = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut out = Vec::new();
+    while value > 0 {
+        out.push(alphabet[(value % 36) as usize] as char);
+        value /= 36;
+    }
+    if out.is_empty() {
+        out.push('0');
+    }
+    out.reverse();
+    let mut uid: String = out.into_iter().collect();
+    if uid.len() > 8 {
+        uid = uid.split_off(uid.len() - 8);
+    } else if uid.len() < 8 {
+        uid = format!("{:0>8}", uid);
+    }
+    uid
+}
+
+fn persist_user_short_uid(config_path: &Path, uid: &str) -> Result<()> {
+    let mut raw = if config_path.exists() {
+        fs::read_to_string(config_path)
+            .with_context(|| format!("failed to read config: {}", config_path.display()))?
+    } else {
+        String::new()
+    };
+
+    let mut replaced = false;
+    let mut lines = Vec::new();
+    for line in raw.lines() {
+        if line.trim_start().starts_with("user_short_uid") {
+            lines.push(format!("user_short_uid = \"{}\"", uid));
+            replaced = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !replaced {
+        if !raw.is_empty() && !raw.ends_with('\n') {
+            raw.push('\n');
+        }
+        raw.push_str(&format!("user_short_uid = \"{}\"\n", uid));
+    } else {
+        raw = format!("{}\n", lines.join("\n"));
+    }
+
+    fs::write(config_path, raw)
+        .with_context(|| format!("failed to write config: {}", config_path.display()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_NUDGE_PERCENT, KgConfig};
+    use super::{
+        DEFAULT_NUDGE_PERCENT, KgConfig, normalize_user_short_uid, resolve_user_short_uid_with_env,
+    };
 
     #[test]
     fn nudge_defaults_to_twenty() {
@@ -94,5 +216,37 @@ mod tests {
     fn nudge_rejects_values_above_hundred() {
         let err = toml::from_str::<KgConfig>("nudge = 101\n").expect_err("invalid config");
         assert!(err.to_string().contains("nudge must be between 0 and 100"));
+    }
+
+    #[test]
+    fn user_short_uid_accepts_valid_value() {
+        let config: KgConfig = toml::from_str("user_short_uid = \"dev_01\"\n").expect("config");
+        assert_eq!(config.user_short_uid.as_deref(), Some("dev_01"));
+    }
+
+    #[test]
+    fn user_short_uid_rejects_invalid_value() {
+        let err = toml::from_str::<KgConfig>("user_short_uid = \"bad uid\"\n")
+            .expect_err("invalid config");
+        assert!(err.to_string().contains("user_short_uid must be"));
+    }
+
+    #[test]
+    fn normalize_user_short_uid_enforces_shape() {
+        assert_eq!(normalize_user_short_uid(" u-1 "), Some("u-1".to_string()));
+        assert_eq!(normalize_user_short_uid(""), None);
+        assert_eq!(normalize_user_short_uid("bad uid"), None);
+    }
+
+    #[test]
+    fn ensure_user_short_uid_persists_when_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join(".kg.toml"), "nudge = 20\n").expect("write config");
+
+        let uid = resolve_user_short_uid_with_env(dir.path(), None);
+        assert!(uid.len() <= 16);
+
+        let saved = std::fs::read_to_string(dir.path().join(".kg.toml")).expect("read config");
+        assert!(saved.contains("user_short_uid = \""));
     }
 }

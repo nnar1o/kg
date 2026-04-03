@@ -10,6 +10,7 @@ mod import_csv;
 mod import_markdown;
 mod index;
 mod init;
+mod kg_sidecar;
 mod kql;
 mod ops;
 pub mod output;
@@ -192,14 +193,14 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
     match cli.command {
         Command::Init(args) => Ok(init::render_init(&args)),
         Command::Create { graph_name } => {
-            let store = graph_store(cwd, graph_root)?;
+            let store = graph_store(cwd, graph_root, false)?;
             let path = store.create_graph(&graph_name)?;
             let graph_file = store.load_graph(&path)?;
             append_event_snapshot(&path, "graph.create", Some(graph_name.clone()), &graph_file)?;
             Ok(format!("+ created {}\n", path.display()))
         }
         Command::Diff { left, right, json } => {
-            let store = graph_store(cwd, graph_root)?;
+            let store = graph_store(cwd, graph_root, false)?;
             if json {
                 render_graph_diff_json(store.as_ref(), &left, &right)
             } else {
@@ -211,11 +212,11 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
             source,
             strategy,
         } => {
-            let store = graph_store(cwd, graph_root)?;
+            let store = graph_store(cwd, graph_root, false)?;
             merge_graphs(store.as_ref(), &target, &source, strategy)
         }
         Command::List(args) => {
-            let store = graph_store(cwd, graph_root)?;
+            let store = graph_store(cwd, graph_root, false)?;
             if args.json {
                 render_graph_list_json(store.as_ref())
             } else {
@@ -223,11 +224,16 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
             }
         }
         Command::FeedbackLog(args) => execute_feedback_log(cwd, &args),
-        Command::Graph { graph, command } => {
-            let store = graph_store(cwd, graph_root)?;
+        Command::Graph {
+            graph,
+            legacy,
+            command,
+        } => {
+            let store = graph_store(cwd, graph_root, legacy)?;
             let path = store.resolve_graph_path(&graph)?;
             let mut graph_file = store.load_graph(&path)?;
             let schema = GraphSchema::discover(cwd).ok().flatten().map(|(_, s)| s);
+            let user_short_uid = config::ensure_user_short_uid(cwd);
 
             match command {
                 GraphCommand::Node { command } => execute_node(
@@ -235,6 +241,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                     GraphCommandContext {
                         graph_name: &graph,
                         path: &path,
+                        user_short_uid: &user_short_uid,
                         graph_file: &mut graph_file,
                         schema: schema.as_ref(),
                         store: store.as_ref(),
@@ -246,6 +253,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                     GraphCommandContext {
                         graph_name: &graph,
                         path: &path,
+                        user_short_uid: &user_short_uid,
                         graph_file: &mut graph_file,
                         schema: schema.as_ref(),
                         store: store.as_ref(),
@@ -2462,10 +2470,9 @@ fn parse_feedback_entries(cwd: &Path, graph_name: &str) -> Result<Vec<FeedbackLo
 }
 
 fn parse_find_operations(graph_path: &Path) -> Result<usize> {
-    let path = access_log::access_log_path(graph_path);
-    if !path.exists() {
+    let Some(path) = access_log::first_existing_access_log_path(graph_path) else {
         return Ok(0);
-    }
+    };
 
     let content = std::fs::read_to_string(path)?;
     let mut find_ops = 0usize;
@@ -2835,7 +2842,7 @@ fn graph_root_from(home: Option<&Path>, cwd: &Path) -> PathBuf {
 /// This is primarily exposed for embedding use-cases (e.g. kg-mcp), so they
 /// can resolve graph paths consistently with the CLI.
 pub fn resolve_graph_path(cwd: &Path, graph_root: &Path, graph: &str) -> Result<PathBuf> {
-    let store = graph_store(cwd, graph_root)?;
+    let store = graph_store(cwd, graph_root, false)?;
     store.resolve_graph_path(graph)
 }
 
@@ -2844,6 +2851,16 @@ pub fn feedback_nudge_percent(cwd: &Path) -> Result<u8> {
     Ok(config::KgConfig::discover(cwd)?
         .map(|(_, config)| config.nudge_percent())
         .unwrap_or(config::DEFAULT_NUDGE_PERCENT))
+}
+
+/// Resolve and (if needed) persist `user_short_uid` for sidecar logging.
+pub fn sidecar_user_short_uid(cwd: &Path) -> String {
+    config::ensure_user_short_uid(cwd)
+}
+
+/// Best-effort append of an `F` feedback record to `<graph>.kglog`.
+pub fn append_kg_feedback(graph_path: &Path, user_short_uid: &str, node_id: &str, feedback: &str) {
+    let _ = kg_sidecar::append_feedback_with_uid(graph_path, user_short_uid, node_id, feedback);
 }
 
 // ---------------------------------------------------------------------------

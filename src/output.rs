@@ -121,6 +121,7 @@ fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
         if let Some(confidence) = node.properties.confidence {
             lines.push(format!("confidence: {confidence}"));
         }
+        lines.push(format!("importance: {}", node.properties.importance));
         if !node.properties.created_at.is_empty() {
             lines.push(format!("created_at: {}", node.properties.created_at));
         }

@@ -1,7 +1,7 @@
 mod common;
 
 use common::{exec_ok, load_graph, temp_workspace, test_graph_root, write_fixture, write_graph};
-use kg::{Node, NodeProperties};
+use kg::{Edge, Node, NodeProperties};
 
 #[test]
 fn graph_stats_reports_counts() {
@@ -174,6 +174,7 @@ fn graph_check_reports_validation_errors() {
         name: String::new(),
         properties: NodeProperties {
             confidence: Some(1.5),
+            importance: 9,
             ..NodeProperties::default()
         },
         source_files: Vec::new(),
@@ -186,9 +187,33 @@ fn graph_check_reports_validation_errors() {
     );
     assert!(output.contains("= check"));
     assert!(output.contains("status: INVALID"));
-    assert!(output.contains("node bad-id has invalid type WeirdType"));
     assert!(output.contains("node id bad-id does not match prefix:snake_case"));
     assert!(output.contains("node bad-id missing name"));
     assert!(output.contains("node bad-id missing source_files"));
     assert!(output.contains("confidence out of range"));
+    assert!(output.contains("importance out of range"));
+}
+
+#[test]
+fn graph_check_reports_relation_semantic_type_mismatch() {
+    let dir = temp_workspace();
+    let path = write_fixture(&test_graph_root(dir.path()));
+    let mut graph = load_graph(&path);
+    graph.edges.push(Edge {
+        source_id: "datastore:settings_storage".to_owned(),
+        relation: "HAS".to_owned(),
+        target_id: "process:cooling".to_owned(),
+        properties: Default::default(),
+    });
+    graph.refresh_counts();
+    write_graph(&path, &graph);
+
+    let output = exec_ok(
+        &["kg", "graph", "fridge", "check", "--limit", "50"],
+        dir.path(),
+    );
+    assert!(output.contains("status: INVALID"));
+    assert!(output.contains("edge source type invalid for relation"));
+    assert!(output.contains("edge target type invalid for relation"));
+    assert!(output.contains("datastore:settings_storage HAS process:cooling"));
 }

@@ -52,6 +52,7 @@ pub fn validate_node(node: &Node) -> Result<()> {
     } else {
         bail!("node id '{}' must be in format prefix:identifier", node.id);
     }
+    validate_importance(node.properties.importance)?;
     Ok(())
 }
 
@@ -79,6 +80,7 @@ pub fn modify_node(
     provenance: Option<String>,
     confidence: Option<f64>,
     created_at: Option<String>,
+    importance: Option<u8>,
     facts: Vec<String>,
     aliases: Vec<String>,
     sources: Vec<String>,
@@ -108,6 +110,10 @@ pub fn modify_node(
     if let Some(v) = created_at {
         node.properties.created_at = v;
     }
+    if let Some(v) = importance {
+        validate_importance(v)?;
+        node.properties.importance = v;
+    }
     for fact in facts {
         push_unique(&mut node.properties.key_facts, fact);
     }
@@ -120,6 +126,13 @@ pub fn modify_node(
 
     graph.refresh_counts();
     Ok(())
+}
+
+fn validate_importance(value: u8) -> Result<()> {
+    if (1..=6).contains(&value) {
+        return Ok(());
+    }
+    bail!("importance must be in range 1..=6, got {value}")
 }
 
 pub fn remove_node(graph: &mut GraphFile, id: &str) -> Result<usize> {

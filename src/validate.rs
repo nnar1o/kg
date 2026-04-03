@@ -200,6 +200,12 @@ pub fn validate_graph(
                 ));
             }
         }
+        if !(1..=6).contains(&node.properties.importance) {
+            errors.push(format!(
+                "node {} importance out of range: {}",
+                node.id, node.properties.importance
+            ));
+        }
     }
     for (node_id, count) in &id_counts {
         if *count > 1 {
@@ -237,22 +243,22 @@ pub fn validate_graph(
             ));
         }
 
-        // ontology source/target type advisory warnings
+        // Enforce relation semantics from decision table rules.
         if let (Some(src_type), Some(tgt_type)) = (
             node_type_map.get(edge.source_id.as_str()),
             node_type_map.get(edge.target_id.as_str()),
         ) {
             if let Some((valid_src, valid_tgt)) = edge_rules.get(edge.relation.as_str()) {
                 if !valid_src.is_empty() && !valid_src.contains(src_type) {
-                    warnings.push(format!(
-                        "edge source type unusual: {} {} {} ({})",
-                        edge.source_id, edge.relation, edge.target_id, src_type
+                    errors.push(format!(
+                        "edge source type invalid for relation: {} {} {} (got {}, expected one of {:?})",
+                        edge.source_id, edge.relation, edge.target_id, src_type, valid_src
                     ));
                 }
                 if !valid_tgt.is_empty() && !valid_tgt.contains(tgt_type) {
-                    warnings.push(format!(
-                        "edge target type unusual: {} {} {} ({})",
-                        edge.source_id, edge.relation, edge.target_id, tgt_type
+                    errors.push(format!(
+                        "edge target type invalid for relation: {} {} {} (got {}, expected one of {:?})",
+                        edge.source_id, edge.relation, edge.target_id, tgt_type, valid_tgt
                     ));
                 }
             }

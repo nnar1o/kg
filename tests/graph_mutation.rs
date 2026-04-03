@@ -27,6 +27,8 @@ fn add_persists_node_in_existing_graph() {
             "0.9",
             "--created-at",
             "2026-03-20T01:00:00Z",
+            "--importance",
+            "5",
             "--fact",
             "Wytwarza kostki lodu co 2 godziny",
             "--alias",
@@ -44,6 +46,7 @@ fn add_persists_node_in_existing_graph() {
     assert_eq!(node.properties.provenance, "manual");
     assert_eq!(node.properties.confidence, Some(0.9));
     assert_eq!(node.properties.created_at, "2026-03-20T01:00:00Z");
+    assert_eq!(node.properties.importance, 5);
     assert_eq!(graph.metadata.node_count, graph.nodes.len());
 }
 
@@ -68,6 +71,8 @@ fn modify_updates_existing_node_without_duplicate_values() {
             "0.75",
             "--created-at",
             "2026-03-20T01:05:00Z",
+            "--importance",
+            "6",
             "--fact",
             "Alarm po 15 minutach odchylenia",
             "--fact",
@@ -90,6 +95,7 @@ fn modify_updates_existing_node_without_duplicate_values() {
     assert_eq!(node.properties.provenance, "service_manual");
     assert_eq!(node.properties.confidence, Some(0.75));
     assert_eq!(node.properties.created_at, "2026-03-20T01:05:00Z");
+    assert_eq!(node.properties.importance, 6);
     assert_eq!(
         node.properties
             .key_facts

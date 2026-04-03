@@ -96,6 +96,7 @@ impl GraphSchema {
                     "domain_area" => !node.properties.domain_area.trim().is_empty(),
                     "provenance" => !node.properties.provenance.trim().is_empty(),
                     "confidence" => node.properties.confidence.is_some(),
+                    "importance" => (1..=6).contains(&node.properties.importance),
                     "key_facts" => !node.properties.key_facts.is_empty(),
                     "alias" => !node.properties.alias.is_empty(),
                     "source_files" => !node.source_files.is_empty(),

@@ -443,6 +443,7 @@ fn matches_node(node: &Node, filter: &Filter) -> bool {
                 false
             }
         }
+        "importance" => compare(&node.properties.importance.to_string(), filter),
         _ => false,
     }
 }
@@ -715,6 +716,7 @@ fn aggregate(graph: &GraphFile, kind: &str, group_by: &str) -> Result<Vec<(Strin
                             node.properties.provenance.clone()
                         }
                     }
+                    "importance" => node.properties.importance.to_string(),
                     _ => node.r#type.clone(),
                 };
                 *counts.entry(key).or_insert(0) += 1;

@@ -31,6 +31,7 @@ struct Frontmatter {
     domain_area: Option<String>,
     provenance: Option<String>,
     confidence: Option<f64>,
+    importance: Option<u8>,
     created_at: Option<String>,
     alias: Option<Vec<String>>,
     key_facts: Option<Vec<String>>,
@@ -104,6 +105,7 @@ pub fn import_markdown_into_graph(
         node.properties.domain_area = frontmatter.domain_area.unwrap_or_default();
         node.properties.provenance = frontmatter.provenance.unwrap_or_default();
         node.properties.confidence = frontmatter.confidence;
+        node.properties.importance = frontmatter.importance.unwrap_or(4);
         node.properties.created_at = frontmatter.created_at.unwrap_or_default();
         node.properties.alias = frontmatter.alias.unwrap_or_default();
         node.properties.key_facts = frontmatter.key_facts.unwrap_or_default();

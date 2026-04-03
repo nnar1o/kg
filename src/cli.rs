@@ -36,6 +36,8 @@ pub enum Command {
     FeedbackLog(FeedbackLogArgs),
     Graph {
         graph: String,
+        #[arg(long)]
+        legacy: bool,
         #[command(subcommand)]
         command: GraphCommand,
     },
@@ -589,6 +591,8 @@ pub struct AddNodeArgs {
     pub confidence: Option<f64>,
     #[arg(long, default_value = "")]
     pub created_at: String,
+    #[arg(long, default_value_t = 4)]
+    pub importance: u8,
     #[arg(long = "fact")]
     pub fact: Vec<String>,
     #[arg(long = "alias")]
@@ -614,6 +618,8 @@ pub struct ModifyNodeArgs {
     pub confidence: Option<f64>,
     #[arg(long)]
     pub created_at: Option<String>,
+    #[arg(long)]
+    pub importance: Option<u8>,
     #[arg(long = "fact")]
     pub fact: Vec<String>,
     #[arg(long = "alias")]
