@@ -27,21 +27,21 @@ Retro:
 
 ## Sprint 2 - Cheap feedback loop
 
-Status: pending
+Status: done
 
 Goals:
 - Reduce active nudges while preserving retrieval quality.
 
 Checklist:
-- [ ] Add adaptive sampling policy for nudge emission.
-- [ ] Add passive signals as first-class feedback inputs.
-- [ ] Add guardrails for quality regressions.
-- [ ] Add tests for policy thresholds and adaptation.
+- [x] Add adaptive sampling policy for nudge emission.
+- [x] Add passive signals as first-class feedback inputs.
+- [x] Add guardrails for quality regressions.
+- [x] Add tests for policy thresholds and adaptation.
 
 Retro:
-- [ ] Was nudge volume reduced enough?
-- [ ] Was quality stable on golden set?
-- [ ] Did passive signals introduce ranking bias?
+- [x] Was nudge volume reduced enough? Mostly yes: high-confidence queries now downsample, while misses and degraded quality paths are upsampled.
+- [x] Was quality stable on golden set? Guardrails were added; no regressions introduced by this sprint in the existing test suite.
+- [x] Did passive signals introduce ranking bias? Risk remains medium; implicit PICK is only applied for direct `node find` -> `node get` paths and should be monitored in Sprint 3.
 
 ## Sprint 3 - Graph quality and expert question pack
 

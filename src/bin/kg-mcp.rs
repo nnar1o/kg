@@ -1,9 +1,10 @@
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
+use std::fs::File;
 use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -318,10 +319,77 @@ struct FindContext {
     candidate_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct QueryFeedbackStats {
+    yes: u64,
+    no: u64,
+    nil: u64,
+    pick: u64,
+}
+
+impl QueryFeedbackStats {
+    fn events(&self) -> u64 {
+        self.yes + self.no + self.nil + self.pick
+    }
+
+    fn negative_ratio(&self) -> f64 {
+        let total = self.events();
+        if total == 0 {
+            0.0
+        } else {
+            (self.no + self.nil) as f64 / total as f64
+        }
+    }
+
+    fn positive_ratio(&self) -> f64 {
+        let total = self.events();
+        if total == 0 {
+            0.0
+        } else {
+            (self.yes + self.pick) as f64 / total as f64
+        }
+    }
+
+    fn add_action(&mut self, action: &str) {
+        match action {
+            "YES" => self.yes = self.yes.saturating_add(1),
+            "NO" => self.no = self.no.saturating_add(1),
+            "NIL" => self.nil = self.nil.saturating_add(1),
+            "PICK" => self.pick = self.pick.saturating_add(1),
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct GlobalFeedbackStats {
+    events: u64,
+    negative_events: u64,
+}
+
+impl GlobalFeedbackStats {
+    fn negative_ratio(&self) -> f64 {
+        if self.events == 0 {
+            0.0
+        } else {
+            self.negative_events as f64 / self.events as f64
+        }
+    }
+
+    fn add_action(&mut self, action: &str) {
+        self.events = self.events.saturating_add(1);
+        if matches!(action, "NO" | "NIL") {
+            self.negative_events = self.negative_events.saturating_add(1);
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct FeedbackState {
     counter: u64,
     finds: HashMap<String, FindContext>,
+    query_stats: HashMap<String, QueryFeedbackStats>,
+    global_stats: GlobalFeedbackStats,
 }
 
 struct FeedbackBatchRun {
@@ -337,6 +405,12 @@ struct FeedbackUpdate {
     node_id: String,
     delta: f64,
     ts_ms: u128,
+}
+
+#[derive(Debug, Clone)]
+struct PendingFindFeedback {
+    uid: String,
+    candidate_ids: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -355,11 +429,12 @@ struct KgMcpServer {
 impl KgMcpServer {
     fn new(cwd: PathBuf) -> anyhow::Result<Self> {
         let nudge_percent = kg::feedback_nudge_percent(&cwd)?;
+        let feedback_state = initialize_feedback_state(&cwd);
         Ok(Self {
             cwd,
             nudge_percent,
             exec_lock: Arc::new(Mutex::new(())),
-            feedback_state: Arc::new(Mutex::new(FeedbackState::default())),
+            feedback_state: Arc::new(Mutex::new(feedback_state)),
             trace_counter: Arc::new(AtomicU64::new(0)),
             debug_from_env: env_flag_enabled("KG_MCP_DEBUG"),
             tool_router: Self::tool_router(),
@@ -549,6 +624,26 @@ impl KgMcpServer {
         Ok(s)
     }
 
+    fn adaptive_nudge_percent(
+        &self,
+        queries: &[String],
+        total_results: usize,
+    ) -> Result<u8, McpError> {
+        let state = self.feedback_state.lock().map_err(|_| {
+            McpError::internal_error(
+                "kg feedback state lock poisoned",
+                Some(json!({ "reason": "previous tool panicked" })),
+            )
+        })?;
+        Ok(compute_adaptive_nudge_percent(
+            self.nudge_percent,
+            queries,
+            total_results,
+            &state.query_stats,
+            &state.global_stats,
+        ))
+    }
+
     fn append_feedback_log_line(&self, line: &str) {
         // Best-effort logging; never fail tool calls due to IO.
         let path = self.cwd.join("kg-mcp.feedback.log");
@@ -705,6 +800,11 @@ impl KgMcpServer {
             cleanup_old_finds(&mut state.finds, now_ms, 10 * 60 * 1000);
 
             for (line, parsed) in entries {
+                let source = if line.contains("passive=1") {
+                    "passive"
+                } else {
+                    "active"
+                };
                 match parsed {
                     Some(parsed) => {
                         let (graph, queries, selected) =
@@ -731,8 +831,10 @@ impl KgMcpServer {
                         let delta = feedback_delta(parsed.action.as_str());
                         let pick = parsed.pick;
 
+                        update_feedback_stats(&mut state, &queries_v, &action);
+
                         let log_line = format!(
-                            "ts_ms={}\tuid={}\taction={}\tpick={}\tselected={}\tgraph={}\tqueries={}\n",
+                            "ts_ms={}\tuid={}\taction={}\tpick={}\tselected={}\tgraph={}\tqueries={}\tsource={}\n",
                             now_ms,
                             uid,
                             action,
@@ -743,6 +845,7 @@ impl KgMcpServer {
                             selected_s,
                             graph_s,
                             queries_v.join(" | ").replace('\t', " "),
+                            source,
                         );
                         log_lines.push_str(&log_line);
 
@@ -756,6 +859,7 @@ impl KgMcpServer {
                             "selected": selected_s,
                             "graph": graph_s,
                             "queries": queries_v,
+                            "source": source,
                         }));
 
                         if let (Some(graph), Some(selected), Some(delta)) = (graph, selected, delta)
@@ -879,7 +983,7 @@ impl KgMcpServer {
                 FindContext {
                     created_at_ms: Self::now_ms(),
                     graph,
-                    queries,
+                    queries: queries.clone(),
                     candidate_ids: candidate_ids.clone(),
                 },
             );
@@ -915,7 +1019,8 @@ impl KgMcpServer {
             )
         };
 
-        let show_nudge = should_emit_nudge(self.nudge_percent, &uid);
+        let adaptive_percent = self.adaptive_nudge_percent(&queries, total)?;
+        let show_nudge = should_emit_nudge(adaptive_percent, &uid);
         let mut output = String::new();
         if show_nudge {
             output.push_str(&nudge);
@@ -950,6 +1055,7 @@ impl KgMcpServer {
         if show_nudge {
             requires_feedback["nudge"] = json!(nudge);
         }
+        requires_feedback["sample_percent"] = json!(adaptive_percent);
 
         Ok(CallToolResult {
             content: vec![Content::text(output)],
@@ -996,7 +1102,7 @@ impl KgMcpServer {
                     created_at_ms: Self::now_ms(),
                     graph,
                     queries: vec![format!("node_get:{node_id}")],
-                    candidate_ids: vec![node_id],
+                    candidate_ids: vec![node_id.clone()],
                 },
             );
         }
@@ -1004,7 +1110,8 @@ impl KgMcpServer {
         let nudge = format!(
             "NUDGE: Useful? Reply: kg_feedback_batch lines=[\"uid={uid} YES\"] or [\"uid={uid} NO\"]"
         );
-        let show_nudge = should_emit_nudge(self.nudge_percent, &uid);
+        let adaptive_percent = self.adaptive_nudge_percent(&[format!("node_get:{node_id}")], 1)?;
+        let show_nudge = should_emit_nudge(adaptive_percent, &uid);
         let mut output = String::new();
         if show_nudge {
             output.push_str(&nudge);
@@ -1024,6 +1131,7 @@ impl KgMcpServer {
         if show_nudge {
             requires_feedback["nudge"] = json!(nudge);
         }
+        requires_feedback["sample_percent"] = json!(adaptive_percent);
 
         Ok(CallToolResult {
             content: vec![Content::text(output)],
@@ -1062,6 +1170,8 @@ impl KgMcpServer {
         let mut steps: Vec<serde_json::Value> = Vec::new();
         let mut requires_feedback: Vec<serde_json::Value> = Vec::new();
         let mut feedback_buffer: Vec<String> = Vec::new();
+        let mut pending_find_feedback: HashMap<String, PendingFindFeedback> = HashMap::new();
+        let mut auto_resolved_feedback_uids: HashSet<String> = HashSet::new();
 
         let flush_feedback = |this: &KgMcpServer,
                               steps: &mut Vec<serde_json::Value>,
@@ -1197,6 +1307,29 @@ impl KgMcpServer {
                             .and_then(|v| v.get("requires_feedback"))
                             .cloned()
                         {
+                            if req
+                                .get("mode")
+                                .and_then(|v| v.as_str())
+                                .is_some_and(|mode| mode == "pick")
+                            {
+                                if let Some(uid) = req
+                                    .get("uid")
+                                    .and_then(|v| v.as_str())
+                                    .map(|v| v.to_owned())
+                                {
+                                    let find_candidate_ids = parse_find_candidate_ids(&stdout);
+                                    if !find_candidate_ids.is_empty() {
+                                        let graph_name = args.first().cloned().unwrap_or_default();
+                                        pending_find_feedback.insert(
+                                            graph_name,
+                                            PendingFindFeedback {
+                                                uid,
+                                                candidate_ids: find_candidate_ids,
+                                            },
+                                        );
+                                    }
+                                }
+                            }
                             requires_feedback.push(req);
                         }
                     }
@@ -1224,6 +1357,27 @@ impl KgMcpServer {
                 if let Some(get_args) = parse_node_get_args(&args) {
                     let result = match get_args {
                         Ok(mut get_args) => {
+                            if let Some(pending) = pending_find_feedback.get(&get_args.graph) {
+                                if let Some(index) = pending
+                                    .candidate_ids
+                                    .iter()
+                                    .position(|candidate_id| candidate_id == &get_args.id)
+                                {
+                                    let passive_line =
+                                        format!("uid={} PICK {} passive=1", pending.uid, index + 1);
+                                    feedback_buffer.push(passive_line.clone());
+                                    auto_resolved_feedback_uids.insert(pending.uid.clone());
+                                    steps.push(json!({
+                                        "cmd": trimmed,
+                                        "kind": "passive_feedback",
+                                        "ok": true,
+                                        "source": "node_get_after_find",
+                                        "line": passive_line,
+                                    }));
+                                }
+                            }
+                            pending_find_feedback.remove(&get_args.graph);
+                            flush_feedback(self, &mut steps, &mut output, &mut feedback_buffer)?;
                             get_args.debug = request_debug;
                             self.handle_node_get(get_args)
                         }
@@ -1320,6 +1474,15 @@ impl KgMcpServer {
 
         flush_feedback(self, &mut steps, &mut output, &mut feedback_buffer)?;
 
+        if !auto_resolved_feedback_uids.is_empty() {
+            requires_feedback.retain(|item| {
+                item.get("uid")
+                    .and_then(|v| v.as_str())
+                    .map(|uid| !auto_resolved_feedback_uids.contains(uid))
+                    .unwrap_or(true)
+            });
+        }
+
         Ok(CallToolResult {
             content: vec![Content::text(output)],
             structured_content: Some(json!({
@@ -1378,6 +1541,8 @@ impl KgMcpServer {
             })?;
             cleanup_old_finds(&mut state.finds, now_ms, 10 * 60 * 1000);
             if let Some(ctx) = state.finds.get(&parsed.uid) {
+                let ctx_graph = ctx.graph.clone();
+                let ctx_queries = ctx.queries.clone();
                 let selected = match (parsed.action.as_str(), parsed.pick) {
                     ("PICK", Some(n)) if n >= 1 && n <= ctx.candidate_ids.len() => {
                         Some(ctx.candidate_ids[n - 1].clone())
@@ -1387,7 +1552,8 @@ impl KgMcpServer {
                     }
                     _ => None,
                 };
-                (Some(ctx.graph.clone()), Some(ctx.queries.clone()), selected)
+                update_feedback_stats(&mut state, &ctx_queries, &parsed.action);
+                (Some(ctx_graph), Some(ctx_queries), selected)
             } else {
                 (None, None, None)
             }
@@ -2783,6 +2949,94 @@ fn env_flag_enabled(name: &str) -> bool {
     }
 }
 
+fn normalize_query_key(queries: &[String]) -> Option<String> {
+    let key = queries
+        .iter()
+        .map(|q| q.trim().to_ascii_lowercase())
+        .filter(|q| !q.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if key.is_empty() { None } else { Some(key) }
+}
+
+fn update_feedback_stats(state: &mut FeedbackState, queries: &[String], action: &str) {
+    state.global_stats.add_action(action);
+    if let Some(key) = normalize_query_key(queries) {
+        state.query_stats.entry(key).or_default().add_action(action);
+    }
+}
+
+fn parse_feedback_log_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.split('\t')
+        .find_map(|part| part.strip_prefix(&format!("{key}=")))
+}
+
+fn initialize_feedback_state(cwd: &Path) -> FeedbackState {
+    let path = cwd.join("kg-mcp.feedback.log");
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(_) => return FeedbackState::default(),
+    };
+
+    let mut query_stats: HashMap<String, QueryFeedbackStats> = HashMap::new();
+    let mut global_stats = GlobalFeedbackStats::default();
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let action = match parse_feedback_log_field(&line, "action") {
+            Some(action) if matches!(action, "YES" | "NO" | "NIL" | "PICK") => action,
+            _ => continue,
+        };
+        global_stats.add_action(action);
+        if let Some(queries) = parse_feedback_log_field(&line, "queries") {
+            let query_values: Vec<String> = queries
+                .split(" | ")
+                .map(|q| q.trim().to_owned())
+                .filter(|q| !q.is_empty() && q != "-")
+                .collect();
+            if let Some(key) = normalize_query_key(&query_values) {
+                query_stats.entry(key).or_default().add_action(action);
+            }
+        }
+    }
+
+    FeedbackState {
+        counter: 0,
+        finds: HashMap::new(),
+        query_stats,
+        global_stats,
+    }
+}
+
+fn compute_adaptive_nudge_percent(
+    base_percent: u8,
+    queries: &[String],
+    total_results: usize,
+    query_stats: &HashMap<String, QueryFeedbackStats>,
+    global_stats: &GlobalFeedbackStats,
+) -> u8 {
+    let mut effective = i32::from(base_percent);
+
+    if total_results == 0 {
+        effective = effective.max(40);
+    }
+
+    if let Some(key) = normalize_query_key(queries)
+        && let Some(stats) = query_stats.get(&key)
+    {
+        let events = stats.events();
+        if events >= 3 && stats.negative_ratio() >= 0.5 {
+            effective += 25;
+        } else if events >= 5 && stats.positive_ratio() >= 0.8 {
+            effective -= 20;
+        }
+    }
+
+    if global_stats.events >= 20 && global_stats.negative_ratio() >= 0.4 {
+        effective += 10;
+    }
+
+    effective.clamp(0, 100) as u8
+}
+
 fn should_emit_nudge(percent: u8, salt: &str) -> bool {
     match percent {
         0 => false,
@@ -3083,6 +3337,81 @@ mod tests {
         let first = should_emit_nudge(20, "abc123");
         let second = should_emit_nudge(20, "abc123");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn parse_feedback_line_allows_passive_suffix() {
+        let parsed = parse_feedback_line("uid=abc123 PICK 2 passive=1").expect("parse");
+        assert_eq!(parsed.uid, "abc123");
+        assert_eq!(parsed.action, "PICK");
+        assert_eq!(parsed.pick, Some(2));
+    }
+
+    #[test]
+    fn adaptive_nudge_guardrail_for_zero_results() {
+        let percent = compute_adaptive_nudge_percent(
+            5,
+            &["missing query".to_owned()],
+            0,
+            &HashMap::new(),
+            &GlobalFeedbackStats::default(),
+        );
+        assert_eq!(percent, 40);
+    }
+
+    #[test]
+    fn adaptive_nudge_increases_on_negative_history() {
+        let mut query_stats = HashMap::new();
+        query_stats.insert(
+            "smart fridge".to_owned(),
+            QueryFeedbackStats {
+                yes: 1,
+                no: 2,
+                nil: 1,
+                pick: 0,
+            },
+        );
+        let percent = compute_adaptive_nudge_percent(
+            10,
+            &["smart fridge".to_owned()],
+            3,
+            &query_stats,
+            &GlobalFeedbackStats::default(),
+        );
+        assert_eq!(percent, 35);
+    }
+
+    #[test]
+    fn adaptive_nudge_decreases_on_positive_history() {
+        let mut query_stats = HashMap::new();
+        query_stats.insert(
+            "smart fridge".to_owned(),
+            QueryFeedbackStats {
+                yes: 4,
+                no: 0,
+                nil: 0,
+                pick: 1,
+            },
+        );
+        let percent = compute_adaptive_nudge_percent(
+            25,
+            &["smart fridge".to_owned()],
+            3,
+            &query_stats,
+            &GlobalFeedbackStats::default(),
+        );
+        assert_eq!(percent, 5);
+    }
+
+    #[test]
+    fn adaptive_nudge_adds_global_guardrail() {
+        let global = GlobalFeedbackStats {
+            events: 25,
+            negative_events: 12,
+        };
+        let percent =
+            compute_adaptive_nudge_percent(10, &["query".to_owned()], 3, &HashMap::new(), &global);
+        assert_eq!(percent, 20);
     }
 }
 
