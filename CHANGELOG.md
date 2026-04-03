@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.15] - 2026-04-04
+
+### Added
+- native text `.kg` parser/serializer with deterministic ordering, native note blocks, and edge validity fields (`i`/`x`)
+- `.kg` sidecars: `<graph>.kgindex` (lazy rebuild + invalidation) and `<graph>.kglog` (`H`/`F` events)
+- config-backed persistent `user_short_uid` in `.kg.toml` used by sidecar logging and MCP feedback writes
+- smart JSON->KG migration report at `<graph>.migration.log` with mapping and rewrite statistics
+- optional strict KG format mode via `KG_STRICT_FORMAT=1` (field order + length enforcement)
+- onboarding docs: getting started guide, troubleshooting guide, doc-to-graph playbook, and ready AI prompt for `kg-mcp`
+
+### Changed
+- enforce relation semantic source/target compatibility as validation errors
+- default runtime migration now performs semantic conversion from JSON to native text `.kg` instead of raw file copy
+- node get path uses kgindex lookup hint with sorted-ID fast path fallback
+- README and MCP docs now emphasize `kg graph <graph> ...` command shape and link project AI skills
+- repository skills updated to current runtime and supported relation set
+
+### Fixed
+- access-log path compatibility between `.json` and `.kg` after migration
+- graceful behavior when sidecar paths are missing or unwritable (best-effort sidecar updates)
+
 ## [0.1.14] - 2026-03-31
 
 ### Fixed
