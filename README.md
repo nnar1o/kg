@@ -1,4 +1,5 @@
 # kg — local knowledge graph CLI
+<img width="434" height="369" alt="image" src="https://github.com/user-attachments/assets/f53bf36f-ac6e-4f83-afaf-00ea9ef12b7e" />
 
 ![CI](https://img.shields.io/github/actions/workflow/status/nnar1o/kg/ci.yml?branch=master)
 ![Release](https://img.shields.io/github/v/release/nnar1o/kg?display_name=tag&sort=semver)
