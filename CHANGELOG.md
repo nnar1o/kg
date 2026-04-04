@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.17] - 2026-04-04
+
+### Fixed
+- publish crate under the correct crates.io package name: `kg-cli`
+
 ## [0.1.16] - 2026-04-04
 
 ### Fixed
