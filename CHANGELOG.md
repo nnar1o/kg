@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.16] - 2026-04-04
+
+### Fixed
+- preserve full node IDs (including type prefix) in `.kgindex` for both native and legacy header shapes
+- create new graphs as `.kg` by default (instead of `.json`) in the JSON-compatible runtime
+- skip empty `E` and `P` lines when serializing `.kg` nodes
+
+### Changed
+- make installer script (`curl ... | sh`) the first install option in README for end-user onboarding
+
 ## [0.1.15] - 2026-04-04
 
 ### Added

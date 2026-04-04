@@ -19,11 +19,13 @@ A fast CLI for managing local knowledge graphs (`.kg` and `.json`) with native M
 
 ## Install
 
-### Option 1: install from source (recommended for contributors)
+### Option 1: quick installer script (recommended for end users)
 
 ```sh
-cargo install --path .
+curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
 ```
+
+The installer auto-detects Linux x86_64, macOS x86_64, and macOS Apple Silicon releases.
 
 ### Option 2: install from crates.io
 
@@ -31,13 +33,11 @@ cargo install --path .
 cargo install kg-cli
 ```
 
-### Option 3: quick installer script
+### Option 3: install from source (recommended for contributors)
 
 ```sh
-curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
+cargo install --path .
 ```
-
-The installer auto-detects Linux x86_64, macOS x86_64, and macOS Apple Silicon releases.
 
 ## 60-second quick start
 

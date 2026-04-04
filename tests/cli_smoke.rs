@@ -16,7 +16,8 @@ fn kg_create_writes_graph() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("+ created"));
-    assert!(dir.path().join(".kg/graphs/fridge.json").exists());
+    assert!(dir.path().join(".kg/graphs/fridge.kg").exists());
+    assert!(!dir.path().join(".kg/graphs/fridge.json").exists());
 }
 
 #[test]

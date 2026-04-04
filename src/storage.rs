@@ -371,7 +371,13 @@ impl RedbGraphStore {
 impl GraphStore for JsonGraphStore {
     fn create_graph(&self, graph_name: &str) -> Result<PathBuf> {
         std::fs::create_dir_all(&self.graph_root)?;
-        let path = self.graph_root.join(format!("{graph_name}.json"));
+        let ext = if self.force_legacy_json { "json" } else { "kg" };
+        let path = self.graph_root.join(format!("{graph_name}.{ext}"));
+        let legacy_json_path = self.graph_root.join(format!("{graph_name}.json"));
+        let native_kg_path = self.graph_root.join(format!("{graph_name}.kg"));
+        if legacy_json_path.exists() || native_kg_path.exists() {
+            bail!("graph already exists: {}", graph_name);
+        }
         if path.exists() {
             bail!("graph already exists: {}", path.display());
         }

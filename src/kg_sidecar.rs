@@ -140,8 +140,14 @@ pub fn rebuild_kgindex(graph_path: &Path) -> Result<()> {
 
 fn parse_node_id_from_header(line: &str) -> Option<&str> {
     let rest = line.strip_prefix("@ ")?;
-    let (_, node_id) = rest.split_once(':')?;
-    let node_id = node_id.trim();
+    let rest = rest.trim();
+    let first_colon = rest.find(':')?;
+    let after_first = rest[first_colon + 1..].trim();
+    let node_id = if after_first.contains(':') {
+        after_first
+    } else {
+        rest
+    };
     if node_id.is_empty() {
         None
     } else {
@@ -241,5 +247,23 @@ mod tests {
         );
         assert_eq!(lookup_node_line(&graph_path, "process:cooling"), Some(4));
         assert_eq!(lookup_node_line(&graph_path, "concept:missing"), None);
+    }
+
+    #[test]
+    fn rebuild_kgindex_keeps_full_id_for_legacy_header_shape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let graph_path = dir.path().join("legacy.kg");
+        std::fs::write(
+            &graph_path,
+            "@ concept:refrigerator\nN Lodowka\nD Desc\n@ process:cooling\nN Cooling\nD Desc\n",
+        )
+        .expect("write graph");
+
+        rebuild_kgindex(&graph_path).expect("build index");
+        assert_eq!(
+            lookup_node_line(&graph_path, "concept:refrigerator"),
+            Some(1)
+        );
+        assert_eq!(lookup_node_line(&graph_path, "process:cooling"), Some(4));
     }
 }

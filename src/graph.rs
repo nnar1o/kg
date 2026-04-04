@@ -640,12 +640,16 @@ fn serialize_kg(graph: &GraphFile) -> String {
             out.push_str(&format!("F {}\n", fact));
         }
 
-        out.push_str(&format!("E {}\n", node.properties.created_at));
+        if !node.properties.created_at.is_empty() {
+            out.push_str(&format!("E {}\n", node.properties.created_at));
+        }
         if let Some(confidence) = node.properties.confidence {
             out.push_str(&format!("C {}\n", confidence));
         }
         out.push_str(&format!("V {}\n", node.properties.importance));
-        out.push_str(&format!("P {}\n", node.properties.provenance));
+        if !node.properties.provenance.is_empty() {
+            out.push_str(&format!("P {}\n", node.properties.provenance));
+        }
         if !node.properties.domain_area.is_empty() {
             out.push_str(&format!("- domain_area {}\n", node.properties.domain_area));
         }
@@ -1149,5 +1153,30 @@ mod tests {
         assert!(format!("{strict_err:#}").contains("invalid N length"));
 
         parse_kg(&raw, "x", false).expect("compat mode keeps permissive behavior");
+    }
+
+    #[test]
+    fn save_kg_skips_empty_e_and_p_fields() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("no-empty-ep.kg");
+
+        let mut graph = GraphFile::new("graph");
+        graph.nodes.push(crate::Node {
+            id: "concept:x".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "X".to_owned(),
+            properties: crate::NodeProperties {
+                description: "Desc".to_owned(),
+                provenance: String::new(),
+                created_at: String::new(),
+                ..Default::default()
+            },
+            source_files: vec!["docs/a.md".to_owned()],
+        });
+
+        graph.save(&path).expect("save kg");
+        let raw = std::fs::read_to_string(&path).expect("read kg");
+        assert!(!raw.contains("\nE \n"));
+        assert!(!raw.contains("\nP \n"));
     }
 }
