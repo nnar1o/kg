@@ -1363,7 +1363,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg",
-        description = "Run one or more kg commands separated by ';' or newlines. Supports feedback lines like `uid=abc123 YES`. Example: `uid=aa01bc YES; fridge node find \"smart fridge\"; fridge node get concept:refrigerator`."
+        description = "Run one or more kg commands separated by ';' or newlines. Supports feedback lines like `uid=abc123 YES`. Example: `uid=aa01bc YES; graph fridge node find \"smart fridge\"; graph fridge node get concept:refrigerator`."
     )]
     fn kg(&self, Parameters(args): Parameters<KgScriptArgs>) -> Result<CallToolResult, McpError> {
         let request_debug = args.debug;
@@ -1829,7 +1829,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_node_add_batch",
-        description = "Add multiple nodes to a graph (atomic or best_effort). Prefer `kg` when mixing writes with other commands."
+        description = "Add multiple nodes to a graph (atomic or best_effort) with optional on_conflict=skip. Prefer `kg` when mixing writes with other commands."
     )]
     fn kg_node_add_batch(
         &self,
@@ -2162,7 +2162,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_edge_add_batch",
-        description = "Add multiple edges to a graph (atomic or best_effort). Prefer `kg` when combining multiple actions."
+        description = "Add multiple edges to a graph (atomic or best_effort) and optionally validate with dry_run=true before writing. Prefer `kg` when combining multiple actions."
     )]
     fn kg_edge_add_batch(
         &self,

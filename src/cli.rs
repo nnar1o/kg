@@ -5,7 +5,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
     name = "kg",
     version,
     about = "Knowledge graph CLI for AI chat workflows",
-    after_help = "Examples:\n  kg create fridge\n  kg list\n  kg fridge node find lodowka\n  kg fridge node get concept:refrigerator\n  kg fridge list --type Process\n  kg graph fridge stats\n  kg graph fridge quality duplicates"
+    after_help = "Examples:\n  kg create fridge\n  kg list\n  kg graph fridge node find lodowka\n  kg graph fridge node get concept:refrigerator\n  kg graph fridge list --type Process\n  kg graph fridge stats\n  kg graph fridge quality duplicates"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -16,24 +16,27 @@ pub struct Cli {
 pub enum Command {
     #[command(about = "Print init prompts/snippets")]
     Init(InitArgs),
-    Create {
-        graph_name: String,
-    },
+    #[command(about = "Create a new graph")]
+    Create { graph_name: String },
+    #[command(about = "Compare two graph snapshots/files")]
     Diff {
         left: String,
         right: String,
         #[arg(long)]
         json: bool,
     },
+    #[command(about = "Merge one graph into another")]
     Merge {
         target: String,
         source: String,
         #[arg(long, value_enum, default_value_t = MergeStrategy::PreferNew)]
         strategy: MergeStrategy,
     },
+    #[command(about = "List available graphs")]
     List(ListGraphsArgs),
     #[command(name = "feedback-log", about = "Show recent kg-mcp feedback events")]
     FeedbackLog(FeedbackLogArgs),
+    #[command(about = "Run commands against a graph")]
     Graph {
         graph: String,
         #[arg(long)]
@@ -98,28 +101,39 @@ pub enum TemporalSource {
 
 #[derive(Debug, Subcommand)]
 pub enum GraphCommand {
+    #[command(about = "Find, inspect, and edit nodes")]
     Node {
         #[command(subcommand)]
         command: NodeCommand,
     },
+    #[command(about = "Add and remove graph edges")]
     Edge {
         #[command(subcommand)]
         command: EdgeCommand,
     },
+    #[command(about = "Manage node notes")]
     Note {
         #[command(subcommand)]
         command: NoteCommand,
     },
+    #[command(about = "Show graph statistics")]
     Stats(StatsArgs),
+    #[command(about = "Run integrity validation checks")]
     Check(CheckArgs),
+    #[command(about = "Run deep audit validation checks")]
     Audit(AuditArgs),
+    #[command(about = "Run graph quality reports")]
     Quality {
         #[command(subcommand)]
         command: QualityCommand,
     },
+    #[command(about = "List nodes missing descriptions")]
     MissingDescriptions(MissingDescriptionsArgs),
+    #[command(about = "List nodes missing facts")]
     MissingFacts(MissingFactsArgs),
+    #[command(about = "Detect likely duplicate nodes")]
     Duplicates(DuplicatesArgs),
+    #[command(about = "Find missing expected edges")]
     EdgeGaps(EdgeGapsArgs),
     #[command(
         name = "export-html",
@@ -170,6 +184,7 @@ pub enum GraphCommand {
         about = "Compute quality and feedback baseline metrics"
     )]
     Baseline(BaselineArgs),
+    #[command(about = "List graph nodes")]
     List(ListNodesArgs),
 }
 
@@ -351,6 +366,7 @@ pub struct ExportHtmlArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum NodeCommand {
+    #[command(about = "Search nodes by query")]
     Find {
         queries: Vec<String>,
         #[arg(long, default_value_t = 5)]
@@ -369,6 +385,7 @@ pub enum NodeCommand {
         #[arg(long, value_delimiter = ',')]
         vector_query: Option<Vec<f32>>,
     },
+    #[command(about = "Get a node by ID")]
     Get {
         id: String,
         #[arg(long)]
@@ -380,15 +397,15 @@ pub enum NodeCommand {
         #[arg(long)]
         json: bool,
     },
+    #[command(about = "Add a new node")]
     Add(AddNodeArgs),
+    #[command(about = "Modify an existing node")]
     Modify(ModifyNodeArgs),
-    Rename {
-        from: String,
-        to: String,
-    },
-    Remove {
-        id: String,
-    },
+    #[command(about = "Rename a node ID")]
+    Rename { from: String, to: String },
+    #[command(about = "Remove a node and its incident edges")]
+    Remove { id: String },
+    #[command(about = "List nodes")]
     List(ListNodesArgs),
 }
 
@@ -415,16 +432,21 @@ pub struct ListNodesArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum EdgeCommand {
+    #[command(about = "Add an edge between two nodes")]
     Add(AddEdgeArgs),
     #[command(name = "add-batch", about = "Add multiple edges from CSV/JSON")]
     AddBatch(AddEdgeBatchArgs),
+    #[command(about = "Remove an edge between two nodes")]
     Remove(RemoveEdgeArgs),
 }
 
 #[derive(Debug, Subcommand)]
 pub enum NoteCommand {
+    #[command(about = "Add a note to a node")]
     Add(NoteAddArgs),
+    #[command(about = "List notes")]
     List(NoteListArgs),
+    #[command(about = "Remove a note")]
     Remove { id: String },
 }
 
@@ -457,12 +479,16 @@ pub struct NoteListArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum QualityCommand {
-    #[command(name = "missing-descriptions")]
+    #[command(
+        name = "missing-descriptions",
+        about = "List nodes missing descriptions"
+    )]
     MissingDescriptions(MissingDescriptionsArgs),
-    #[command(name = "missing-facts")]
+    #[command(name = "missing-facts", about = "List nodes missing facts")]
     MissingFacts(MissingFactsArgs),
+    #[command(about = "Detect likely duplicate nodes")]
     Duplicates(DuplicatesArgs),
-    #[command(name = "edge-gaps")]
+    #[command(name = "edge-gaps", about = "Find missing expected edges")]
     EdgeGaps(EdgeGapsArgs),
 }
 

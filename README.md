@@ -110,7 +110,7 @@ Config for OpenCode/Claude Desktop:
 }
 ```
 
-Tools: `kg_schema`, node find/get/add/modify/remove, edge add/remove, stats, check, audit, quality, export-html, feedback, and a shell-like `kg` tool for multi-command scripts.
+Primary tools: `kg`, `kg_command`, `kg_create_graph`, `kg_schema`, `kg_node_find`, `kg_node_get`, `kg_node_add`, `kg_node_add_batch`, `kg_node_modify`, `kg_node_remove`, `kg_edge_add`, `kg_edge_add_batch`, `kg_edge_remove`, `kg_stats`, `kg_feedback`, `kg_feedback_batch`, and `kg_gap_summary`. Compatibility tools such as `kg_check`, `kg_audit`, `kg_quality`, `kg_export_html`, `kg_access_log`, and `kg_access_stats` remain available but are deprecated in favor of the `kg` script tool.
 
 When creating edges through MCP, call `kg_schema` first to inspect valid relations, allowed source/target types, and ID prefixes. `kg_edge_add_batch` also supports `dry_run=true` for preflight validation before writing changes.
 

@@ -16,7 +16,7 @@ For edge work, start with `kg_schema` so you can see valid relations, allowed so
 Example first command through MCP shell tool:
 
 ```text
-kg fridge node find refrigerator
+graph fridge node find refrigerator
 ```
 
 ## Running
@@ -64,17 +64,25 @@ Tip: during local development, prefer `cargo run --quiet --bin kg-mcp` in client
 Good for compact workflows, for example:
 
 ```text
-kg create fridge; kg fridge node add concept:refrigerator --type Concept --name Refrigerator
+create fridge; graph fridge node add concept:refrigerator --type Concept --name Refrigerator
 ```
 
 The shell tool passes normal CLI flags through unchanged, including edge details such as `--detail "requires periodic defrost"`.
+
+### Core tools
+
+- `kg_command` — run one CLI command by passing argv-style arguments
+- `kg_create_graph` — create a new graph
+- `kg_schema` — inspect valid node types, relations, ID prefixes, and edge rules
+- `kg_stats` — graph statistics
+- `kg_gap_summary` — run a bundled quality sweep for collaborative cleanup
 
 ### Nodes
 
 - `kg_node_find` — search nodes by query
 - `kg_node_get` — get node by ID
 - `kg_node_add` — create single node
-- `kg_node_add_batch` — create multiple nodes
+- `kg_node_add_batch` — create multiple nodes, with `mode=atomic|best_effort` and optional `on_conflict=skip`
 - `kg_node_modify` — update node fields
 - `kg_node_remove` — delete node
 
@@ -104,12 +112,10 @@ Example batch preflight:
 
 ### Graph
 
-- `kg_schema` — inspect valid node types, relations, ID prefixes, and edge rules
-- `kg_stats` — graph statistics
-- `kg_check` — integrity validation
-- `kg_audit` — deep audit (errors/warnings)
-- `kg_quality` — quality gaps (missing descriptions, facts, duplicates, edge gaps)
-- `kg_export_html` — interactive HTML visualization
+- `kg_check` — deprecated compatibility tool for integrity validation
+- `kg_audit` — deprecated compatibility tool for deep audit (errors/warnings)
+- `kg_quality` — deprecated compatibility tool for quality subcommands
+- `kg_export_html` — deprecated compatibility tool for HTML export
 
 ### Feedback
 
@@ -118,8 +124,8 @@ Example batch preflight:
 
 ### Access
 
-- `kg_access_log` — search access history
-- `kg_access_stats` — access statistics
+- `kg_access_log` — deprecated compatibility tool for search access history
+- `kg_access_stats` — deprecated compatibility tool for access statistics
 
 ### Passthrough
 

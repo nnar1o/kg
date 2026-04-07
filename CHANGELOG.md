@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.18] - 2026-04-07
+
+### Changed
+- refresh `kg --help` command descriptions and examples to match the current preferred `kg graph <graph> ...` workflow
+- update MCP tool descriptions and docs to reflect the current tool set, including batch options and deprecated compatibility tools
+
 ## [0.1.17] - 2026-04-04
 
 ### Fixed
