@@ -35,6 +35,7 @@ pub(crate) fn execute_node(
             include_features,
             mode,
             full,
+            target_chars,
             json,
             vector_query,
         } => {
@@ -106,7 +107,7 @@ pub(crate) fn execute_node(
                     find_mode,
                     bm25_index.as_ref(),
                 )
-            } else {
+            } else if full {
                 output::render_find_with_index(
                     context.graph_file,
                     &queries,
@@ -114,6 +115,16 @@ pub(crate) fn execute_node(
                     include_features,
                     find_mode,
                     full,
+                    bm25_index.as_ref(),
+                )
+            } else {
+                output::render_find_adaptive_with_index(
+                    context.graph_file,
+                    &queries,
+                    limit,
+                    include_features,
+                    find_mode,
+                    target_chars,
                     bm25_index.as_ref(),
                 )
             };
@@ -141,6 +152,7 @@ pub(crate) fn execute_node(
             id,
             include_features,
             full,
+            target_chars,
             json,
         } => {
             let timer = access_log::Timer::new();
@@ -159,8 +171,10 @@ pub(crate) fn execute_node(
             }
             let result = if json {
                 crate::render_node_json(node)
-            } else {
+            } else if full {
                 output::render_node(context.graph_file, node, full)
+            } else {
+                output::render_node_adaptive(context.graph_file, node, target_chars)
             };
 
             let duration_ms = timer.elapsed_ms();

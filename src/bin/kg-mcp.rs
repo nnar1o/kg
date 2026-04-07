@@ -61,6 +61,8 @@ struct NodeFindArgs {
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
+    target_chars: Option<usize>,
+    #[serde(default)]
     include_features: bool,
     #[serde(default)]
     mode: Option<String>,
@@ -76,6 +78,8 @@ struct NodeFindArgs {
 struct NodeGetArgs {
     graph: String,
     id: String,
+    #[serde(default)]
+    target_chars: Option<usize>,
     #[serde(default)]
     include_features: bool,
     #[serde(default)]
@@ -1120,6 +1124,10 @@ impl KgMcpServer {
             cmd.push("--limit".to_owned());
             cmd.push(limit.to_string());
         }
+        if let Some(target_chars) = args.target_chars {
+            cmd.push("--target-chars".to_owned());
+            cmd.push(target_chars.to_string());
+        }
         if args.include_features {
             cmd.push("--include-features".to_owned());
         }
@@ -1266,6 +1274,10 @@ impl KgMcpServer {
         let graph = args.graph.clone();
         let node_id = args.id.clone();
         let mut cmd = vec![args.graph, "node".to_owned(), "get".to_owned(), args.id];
+        if let Some(target_chars) = args.target_chars {
+            cmd.push("--target-chars".to_owned());
+            cmd.push(target_chars.to_string());
+        }
         if args.include_features {
             cmd.push("--include-features".to_owned());
         }
@@ -2930,6 +2942,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
     let graph = args[0].clone();
     let mut queries = Vec::new();
     let mut limit = None;
+    let mut target_chars = None;
     let mut include_features = false;
     let mut mode = None;
     let mut full = false;
@@ -2954,6 +2967,21 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
         }
         if token == "--include-features" {
             include_features = true;
+            i += 1;
+            continue;
+        }
+        if token == "--target-chars" {
+            i += 1;
+            if i >= args.len() {
+                return Some(Err("missing value for --target-chars".to_owned()));
+            }
+            let value = args[i]
+                .parse::<usize>()
+                .map_err(|_| "invalid value for --target-chars".to_owned());
+            match value {
+                Ok(n) => target_chars = Some(n),
+                Err(err) => return Some(Err(err)),
+            }
             i += 1;
             continue;
         }
@@ -2986,6 +3014,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
         graph,
         queries,
         limit,
+        target_chars,
         include_features,
         mode,
         full,
@@ -3008,6 +3037,7 @@ fn parse_node_get_args(args: &[String]) -> Option<Result<NodeGetArgs, String>> {
         return Some(Err("missing node id".to_owned()));
     }
 
+    let mut target_chars = None;
     let mut include_features = false;
     let mut full = false;
 
@@ -3016,6 +3046,21 @@ fn parse_node_get_args(args: &[String]) -> Option<Result<NodeGetArgs, String>> {
         let token = &args[i];
         if token == "--include-features" {
             include_features = true;
+            i += 1;
+            continue;
+        }
+        if token == "--target-chars" {
+            i += 1;
+            if i >= args.len() {
+                return Some(Err("missing value for --target-chars".to_owned()));
+            }
+            let value = args[i]
+                .parse::<usize>()
+                .map_err(|_| "invalid value for --target-chars".to_owned());
+            match value {
+                Ok(n) => target_chars = Some(n),
+                Err(err) => return Some(Err(err)),
+            }
             i += 1;
             continue;
         }
@@ -3033,6 +3078,7 @@ fn parse_node_get_args(args: &[String]) -> Option<Result<NodeGetArgs, String>> {
     Some(Ok(NodeGetArgs {
         graph,
         id,
+        target_chars,
         include_features,
         full,
         debug: false,
@@ -3486,6 +3532,34 @@ mod tests {
         ];
         let err = parse_node_get_args(&args).expect("match").unwrap_err();
         assert!(err.contains("unknown option"));
+    }
+
+    #[test]
+    fn parse_node_find_args_parses_target_chars() {
+        let args = vec![
+            "fridge".to_owned(),
+            "node".to_owned(),
+            "find".to_owned(),
+            "lodowka".to_owned(),
+            "--target-chars".to_owned(),
+            "900".to_owned(),
+        ];
+        let parsed = parse_node_find_args(&args).expect("match").expect("ok");
+        assert_eq!(parsed.target_chars, Some(900));
+    }
+
+    #[test]
+    fn parse_node_get_args_parses_target_chars() {
+        let args = vec![
+            "fridge".to_owned(),
+            "node".to_owned(),
+            "get".to_owned(),
+            "concept:refrigerator".to_owned(),
+            "--target-chars".to_owned(),
+            "750".to_owned(),
+        ];
+        let parsed = parse_node_get_args(&args).expect("match").expect("ok");
+        assert_eq!(parsed.target_chars, Some(750));
     }
 
     #[test]

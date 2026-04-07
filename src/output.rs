@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -9,6 +9,9 @@ use crate::index::Bm25Index;
 
 const BM25_K1: f64 = 1.5;
 const BM25_B: f64 = 0.75;
+const DEFAULT_TARGET_CHARS: usize = 1400;
+const MIN_TARGET_CHARS: usize = 300;
+const MAX_TARGET_CHARS: usize = 12_000;
 
 #[derive(Debug, Clone, Copy)]
 pub enum FindMode {
@@ -103,6 +106,396 @@ pub fn count_find_results_with_index(
 
 pub fn render_node(graph: &GraphFile, node: &Node, full: bool) -> String {
     format!("{}\n", render_node_block(graph, node, full))
+}
+
+pub fn render_node_adaptive(graph: &GraphFile, node: &Node, target_chars: Option<usize>) -> String {
+    let target = clamp_target_chars(target_chars);
+    let mut candidates = Vec::new();
+    for (depth, detail, edge_cap) in [
+        (0usize, DetailLevel::Rich, 8usize),
+        (1usize, DetailLevel::Compact, 6usize),
+        (2usize, DetailLevel::Compact, 4usize),
+        (2usize, DetailLevel::Minimal, 2usize),
+    ] {
+        let rendered = render_single_node_candidate(graph, node, depth, detail, edge_cap);
+        candidates.push(Candidate {
+            rendered,
+            depth,
+            shown_nodes: 1 + depth,
+        });
+    }
+    pick_best_candidate(candidates, target)
+}
+
+pub fn render_find_adaptive_with_index(
+    graph: &GraphFile,
+    queries: &[String],
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    target_chars: Option<usize>,
+    index: Option<&Bm25Index>,
+) -> String {
+    let target = clamp_target_chars(target_chars);
+    let mut sections = Vec::new();
+    for query in queries {
+        let matches = find_matches_with_index(graph, query, limit, include_features, mode, index);
+        let section = if matches.len() == 1 {
+            render_single_result_section(graph, query, matches[0], target)
+        } else {
+            render_multi_result_section(graph, query, &matches, target)
+        };
+        sections.push(section);
+    }
+    format!("{}\n", sections.join("\n\n"))
+}
+
+#[derive(Clone, Copy)]
+enum DetailLevel {
+    Rich,
+    Compact,
+    Minimal,
+}
+
+struct Candidate {
+    rendered: String,
+    depth: usize,
+    shown_nodes: usize,
+}
+
+fn clamp_target_chars(target_chars: Option<usize>) -> usize {
+    target_chars
+        .unwrap_or(DEFAULT_TARGET_CHARS)
+        .clamp(MIN_TARGET_CHARS, MAX_TARGET_CHARS)
+}
+
+fn render_single_result_section(
+    graph: &GraphFile,
+    query: &str,
+    node: &Node,
+    target: usize,
+) -> String {
+    let mut candidates = Vec::new();
+    for (depth, detail, edge_cap) in [
+        (0usize, DetailLevel::Rich, 8usize),
+        (1usize, DetailLevel::Compact, 6usize),
+        (2usize, DetailLevel::Compact, 4usize),
+        (2usize, DetailLevel::Minimal, 2usize),
+    ] {
+        let mut lines = vec![format!("? {query} (1)")];
+        lines.extend(render_single_node_candidate_lines(
+            graph, node, depth, detail, edge_cap,
+        ));
+        candidates.push(Candidate {
+            rendered: format!("{}\n", lines.join("\n")),
+            depth,
+            shown_nodes: 1 + depth,
+        });
+    }
+    pick_best_candidate(candidates, target)
+        .trim_end()
+        .to_owned()
+}
+
+fn render_multi_result_section(
+    graph: &GraphFile,
+    query: &str,
+    nodes: &[&Node],
+    target: usize,
+) -> String {
+    let total = nodes.len();
+    let mut candidates = Vec::new();
+    let full_cap = total;
+    let mid_cap = full_cap.min(5);
+    let low_cap = full_cap.min(3);
+
+    for (detail, edge_cap, result_cap, depth) in [
+        (DetailLevel::Compact, 3usize, full_cap, 0usize),
+        (DetailLevel::Compact, 1usize, full_cap, 0usize),
+        (DetailLevel::Minimal, 1usize, mid_cap, 0usize),
+        (DetailLevel::Minimal, 0usize, low_cap, 0usize),
+        (DetailLevel::Minimal, 0usize, low_cap.min(2), 1usize),
+    ] {
+        let shown = result_cap.min(nodes.len());
+        let mut lines = vec![format!("? {query} ({total})")];
+        for node in nodes.iter().take(shown) {
+            lines.extend(render_node_lines_with_edges(graph, node, detail, edge_cap));
+            if depth > 0 {
+                lines.extend(render_neighbor_layers(graph, node, depth, detail));
+            }
+        }
+        if total > shown {
+            lines.push(format!("... +{} more nodes omitted", total - shown));
+        }
+        candidates.push(Candidate {
+            rendered: format!("{}\n", lines.join("\n")),
+            depth,
+            shown_nodes: shown,
+        });
+    }
+
+    pick_best_candidate(candidates, target)
+        .trim_end()
+        .to_owned()
+}
+
+fn pick_best_candidate(candidates: Vec<Candidate>, target: usize) -> String {
+    let lower = (target as f64 * 0.7) as usize;
+    let mut best: Option<(usize, usize, usize, usize, String)> = None;
+
+    for candidate in candidates {
+        let chars = candidate.rendered.chars().count();
+        let overshoot = chars.saturating_sub(target);
+        let undershoot = lower.saturating_sub(chars);
+        let penalty = overshoot.saturating_mul(10).saturating_add(undershoot);
+        let utility = candidate
+            .depth
+            .saturating_mul(100)
+            .saturating_add(candidate.shown_nodes.saturating_mul(5));
+
+        let entry = (
+            penalty,
+            overshoot,
+            usize::MAX - utility,
+            usize::MAX - chars,
+            candidate.rendered,
+        );
+        if best.as_ref().is_none_or(|current| {
+            entry.0 < current.0
+                || (entry.0 == current.0 && entry.1 < current.1)
+                || (entry.0 == current.0 && entry.1 == current.1 && entry.2 < current.2)
+                || (entry.0 == current.0
+                    && entry.1 == current.1
+                    && entry.2 == current.2
+                    && entry.3 < current.3)
+        }) {
+            best = Some(entry);
+        }
+    }
+
+    best.map(|item| item.4).unwrap_or_else(|| "\n".to_owned())
+}
+
+fn render_single_node_candidate(
+    graph: &GraphFile,
+    node: &Node,
+    depth: usize,
+    detail: DetailLevel,
+    edge_cap: usize,
+) -> String {
+    let lines = render_single_node_candidate_lines(graph, node, depth, detail, edge_cap);
+    format!("{}\n", lines.join("\n"))
+}
+
+fn render_single_node_candidate_lines(
+    graph: &GraphFile,
+    node: &Node,
+    depth: usize,
+    detail: DetailLevel,
+    edge_cap: usize,
+) -> Vec<String> {
+    let mut lines = render_node_lines_with_edges(graph, node, detail, edge_cap);
+    if depth > 0 {
+        lines.extend(render_neighbor_layers(graph, node, depth, detail));
+    }
+    lines
+}
+
+fn render_neighbor_layers(
+    graph: &GraphFile,
+    root: &Node,
+    max_depth: usize,
+    detail: DetailLevel,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::from([root.id.clone()]);
+    let mut queue: VecDeque<(String, usize)> = VecDeque::from([(root.id.clone(), 0usize)]);
+    let mut layers: Vec<Vec<&Node>> = vec![Vec::new(); max_depth + 1];
+
+    while let Some((node_id, depth)) = queue.pop_front() {
+        if depth >= max_depth {
+            continue;
+        }
+        for incident in incident_edges(graph, &node_id) {
+            if seen.insert(incident.related.id.clone()) {
+                let next_depth = depth + 1;
+                if next_depth <= max_depth {
+                    layers[next_depth].push(incident.related);
+                    queue.push_back((incident.related.id.clone(), next_depth));
+                }
+            }
+        }
+    }
+
+    for depth in 1..=max_depth {
+        if layers[depth].is_empty() {
+            continue;
+        }
+        let cap = match detail {
+            DetailLevel::Rich => 6,
+            DetailLevel::Compact => 4,
+            DetailLevel::Minimal => 3,
+        };
+        let shown = layers[depth].len().min(cap);
+        out.push(format!(
+            "depth {depth}: {shown}/{} neighbors",
+            layers[depth].len()
+        ));
+        for node in layers[depth].iter().take(shown) {
+            out.extend(render_node_identity_lines(node, detail));
+        }
+        if layers[depth].len() > shown {
+            out.push(format!(
+                "... +{} more neighbors omitted",
+                layers[depth].len() - shown
+            ));
+        }
+    }
+
+    out
+}
+
+fn render_node_lines_with_edges(
+    graph: &GraphFile,
+    node: &Node,
+    detail: DetailLevel,
+    edge_cap: usize,
+) -> Vec<String> {
+    let mut lines = render_node_identity_lines(node, detail);
+    lines.extend(render_node_link_lines(graph, node, edge_cap));
+    lines
+}
+
+fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
+    let mut lines = Vec::new();
+    match detail {
+        DetailLevel::Rich => {
+            lines.push(format!("# {} | {}", node.id, node.name));
+            if !node.properties.alias.is_empty() {
+                lines.push(format!("aka: {}", node.properties.alias.join(", ")));
+            }
+            for fact in node.properties.key_facts.iter().take(2) {
+                lines.push(format!("- {fact}"));
+            }
+            if node.properties.key_facts.len() > 2 {
+                lines.push(format!("({} facts total)", node.properties.key_facts.len()));
+            }
+        }
+        DetailLevel::Compact => {
+            lines.push(format!("# {} | {}", node.id, node.name));
+            if let Some(fact) = node.properties.key_facts.first() {
+                lines.push(format!("- {fact}"));
+            }
+        }
+        DetailLevel::Minimal => {
+            lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
+        }
+    }
+    lines
+}
+
+fn render_node_link_lines(graph: &GraphFile, node: &Node, edge_cap: usize) -> Vec<String> {
+    let incident = incident_edges(graph, &node.id);
+    if incident.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    if incident.len() > 12 {
+        lines.push(format!("links: {} total", incident.len()));
+        let (out_summary, in_summary) = summarize_relations(&incident);
+        if !out_summary.is_empty() {
+            lines.push(format!("out: {out_summary}"));
+        }
+        if !in_summary.is_empty() {
+            lines.push(format!("in: {in_summary}"));
+        }
+    }
+
+    let shown = incident.len().min(edge_cap);
+    for edge in incident.into_iter().take(shown) {
+        let prefix = if edge.incoming { "<-" } else { "->" };
+        lines.push(format_edge(prefix, edge.edge, edge.related));
+    }
+    if edge_cap > 0 && incident_count(graph, &node.id) > shown {
+        lines.push(format!(
+            "... {} more links omitted",
+            incident_count(graph, &node.id) - shown
+        ));
+    }
+    lines
+}
+
+fn incident_count(graph: &GraphFile, node_id: &str) -> usize {
+    graph
+        .edges
+        .iter()
+        .filter(|edge| edge.source_id == node_id || edge.target_id == node_id)
+        .count()
+}
+
+struct IncidentEdge<'a> {
+    edge: &'a Edge,
+    related: &'a Node,
+    incoming: bool,
+}
+
+fn incident_edges<'a>(graph: &'a GraphFile, node_id: &str) -> Vec<IncidentEdge<'a>> {
+    let mut edges = Vec::new();
+    for edge in &graph.edges {
+        if edge.source_id == node_id {
+            if let Some(related) = graph.node_by_id(&edge.target_id) {
+                edges.push(IncidentEdge {
+                    edge,
+                    related,
+                    incoming: false,
+                });
+            }
+        } else if edge.target_id == node_id {
+            if let Some(related) = graph.node_by_id(&edge.source_id) {
+                edges.push(IncidentEdge {
+                    edge,
+                    related,
+                    incoming: true,
+                });
+            }
+        }
+    }
+    edges.sort_by(|left, right| {
+        right
+            .related
+            .properties
+            .importance
+            .cmp(&left.related.properties.importance)
+            .then_with(|| left.edge.relation.cmp(&right.edge.relation))
+            .then_with(|| left.related.id.cmp(&right.related.id))
+    });
+    edges
+}
+
+fn summarize_relations(edges: &[IncidentEdge<'_>]) -> (String, String) {
+    let mut out: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut incoming: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+
+    for edge in edges {
+        let bucket = if edge.incoming {
+            &mut incoming
+        } else {
+            &mut out
+        };
+        *bucket.entry(edge.edge.relation.clone()).or_insert(0) += 1;
+    }
+
+    (join_relation_counts(&out), join_relation_counts(&incoming))
+}
+
+fn join_relation_counts(counts: &std::collections::BTreeMap<String, usize>) -> String {
+    counts
+        .iter()
+        .take(3)
+        .map(|(relation, count)| format!("{relation} x{count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {

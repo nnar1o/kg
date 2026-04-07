@@ -362,6 +362,8 @@ pub enum NodeCommand {
         #[arg(long)]
         full: bool,
         #[arg(long)]
+        target_chars: Option<usize>,
+        #[arg(long)]
         json: bool,
         /// Query vector for --mode vector (comma-separated f32 values)
         #[arg(long, value_delimiter = ',')]
@@ -373,6 +375,8 @@ pub enum NodeCommand {
         include_features: bool,
         #[arg(long)]
         full: bool,
+        #[arg(long)]
+        target_chars: Option<usize>,
         #[arg(long)]
         json: bool,
     },
