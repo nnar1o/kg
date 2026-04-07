@@ -35,6 +35,8 @@ fn kg_help_shows_current_command_descriptions() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("▓ ▄▄"));
+    assert!(stdout.contains("▀▀▀       ▀▀▀█▓▓▓▓▓▓▓█▀▀▀"));
     assert!(stdout.contains("Create a new graph"));
     assert!(stdout.contains("List available graphs"));
     assert!(stdout.contains("Run commands against a graph"));

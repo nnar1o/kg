@@ -5,70 +5,84 @@
 ![Release](https://img.shields.io/github/v/release/nnar1o/kg?display_name=tag&sort=semver)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-> **Beta** - This software is in active development. APIs may change.
+> **Beta** - The tool is usable, but command details may still change.
 
-A fast CLI for managing local knowledge graphs (`.kg` and `.json`) with native MCP server support. Built for LLM chat workflows: readable text by default, `--json` for automation.
+`kg` helps you build a local knowledge graph from project docs, architecture notes, incidents, and system knowledge.
 
-## Why kg
+Use it when you want to:
 
-- **One local graph per domain** - store concepts, processes, rules, bugs, decisions
-- **Fast lookup and search** - fuzzy, BM25, vector modes
-- **Quality controls** - checks, audits, missing facts/descriptions, duplicate detection
-- **LLM integration** - native MCP server (`kg-mcp`) with graph-safe tools
-- **Flexible I/O** - import/export CSV, JSON, Markdown, KQL queries
-- **Backward compatible runtime** - legacy JSON mode via `--legacy`
+- keep one searchable graph per domain, project, or incident,
+- inspect concepts, processes, rules, bugs, decisions, and dependencies,
+- validate graph quality instead of storing loose notes,
+- let an AI assistant read and update the graph safely through MCP.
+
+The default UX is for humans: readable terminal output, local files, no external service required.
 
 ## Install
 
-### Option 1: quick installer script (recommended for end users)
+### Option 1: installer script
 
 ```sh
 curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
 ```
 
-The installer auto-detects Linux x86_64, macOS x86_64, and macOS Apple Silicon releases.
-
-### Option 2: install from crates.io
+### Option 2: crates.io
 
 ```sh
 cargo install kg-cli
 ```
 
-### Option 3: install from source (recommended for contributors)
+### Option 3: from source
 
 ```sh
 cargo install --path .
 ```
 
-## 60-second quick start
+Check installation:
 
 ```sh
-# 1) Create graph
+kg --version
+kg --help
+```
+
+## Quick start
+
+Create a graph:
+
+```sh
 kg create fridge
+```
 
-# 2) Add two nodes
-kg graph fridge node add concept:refrigerator --type Concept --name "Refrigerator"
-kg graph fridge node add process:defrost --type Process --name "Defrost cycle"
+Add a few nodes:
 
-# 3) Connect them
+```sh
+kg graph fridge node add concept:refrigerator --type Concept --name "Refrigerator" --description "Cooling appliance" --importance 5
+kg graph fridge node add process:defrost --type Process --name "Defrost cycle" --description "Periodic ice removal cycle" --importance 4
+```
+
+Connect them:
+
+```sh
 kg graph fridge edge add concept:refrigerator DEPENDS_ON process:defrost --detail "requires periodic defrost"
+```
 
-# 4) Search and inspect
+Search and inspect:
+
+```sh
 kg graph fridge node find refrigerator
 kg graph fridge node get concept:refrigerator --full
+kg graph fridge stats --by-type --by-relation
+```
 
-# 5) Validate quality
+Check graph quality:
+
+```sh
 kg graph fridge check
+kg graph fridge quality missing-descriptions
 kg graph fridge quality missing-facts
 ```
 
-See `kg --help` and `kg graph --help` for the full command tree.
-
-For a more complete onboarding flow, go to [`docs/getting-started.md`](docs/getting-started.md).
-
-## Command patterns (important)
-
-Most commands use this structure:
+Main command pattern:
 
 ```sh
 kg graph <graph-name> <command> [args...]
@@ -77,145 +91,184 @@ kg graph <graph-name> <command> [args...]
 Examples:
 
 ```sh
-kg graph fridge stats
-kg graph fridge node list --type Concept --limit 20
+kg graph fridge node find refrigerator --output-size 1200
 kg graph fridge kql "node type=Concept sort=name limit=10"
+kg graph fridge history
 ```
 
-There is also a backward-compatible shorthand still accepted in many places:
+## Build a graph from documentation
+
+There are two practical ways to do this.
+
+### Option 1: import prepared Markdown files
+
+If your docs are already normalized into Markdown files with YAML frontmatter, you can import them directly.
+
+Example file:
+
+```md
+---
+id: concept:refrigerator
+type: Concept
+name: Refrigerator
+description: Cooling appliance
+provenance: docs
+key_facts: ["Keeps food cold", "Has freezer compartment in some models"]
+source_files: [manual.md]
+---
+```
+
+Import:
 
 ```sh
-kg fridge node find cooling
+kg create docs-demo
+kg graph docs-demo import-md --path ./docs
+kg graph docs-demo check --errors-only
 ```
 
-## MCP Server
+See full format: [`docs/import-markdown.md`](docs/import-markdown.md)
 
-The primary way to integrate with LLMs:
+### Option 2: use an LLM with `kg-mcp` on raw docs
+
+This is the better option when you have raw architecture docs, specs, ADRs, runbooks, or mixed notes and want the AI to convert them into a clean graph.
+
+1. Start the MCP server:
 
 ```sh
-./target/release/kg-mcp
+kg-mcp
 ```
 
-`kg-mcp` uses stdio transport (no HTTP server to expose).
+2. Connect your AI client to `kg-mcp`.
 
-Config for OpenCode/Claude Desktop:
+Minimal config example:
 
 ```json
 {
   "mcpServers": {
     "kg": {
-      "command": "/path/to/kg-mcp"
+      "command": "/absolute/path/to/kg-mcp"
     }
   }
 }
 ```
 
-Primary tools: `kg`, `kg_command`, `kg_create_graph`, `kg_schema`, `kg_node_find`, `kg_node_get`, `kg_node_add`, `kg_node_add_batch`, `kg_node_modify`, `kg_node_remove`, `kg_edge_add`, `kg_edge_add_batch`, `kg_edge_remove`, `kg_stats`, `kg_feedback`, `kg_feedback_batch`, and `kg_gap_summary`. Compatibility tools such as `kg_check`, `kg_audit`, `kg_quality`, `kg_export_html`, `kg_access_log`, and `kg_access_stats` remain available but are deprecated in favor of the `kg` script tool.
-
-When creating edges through MCP, call `kg_schema` first to inspect valid relations, allowed source/target types, and ID prefixes. `kg_edge_add_batch` also supports `dry_run=true` for preflight validation before writing changes.
-
-See [`docs/mcp.md`](docs/mcp.md) for full docs.
-
-## Common workflows
+3. Create an empty graph:
 
 ```sh
-# List available graphs
-kg list --full
-
-# Show graph health quickly
-kg graph fridge stats --by-type --by-relation
-kg graph fridge check --errors-only
-
-# Use strict parser checks for .kg files (optional)
-KG_STRICT_FORMAT=1 kg graph fridge check
-
-# Keep JSON-first behavior for older pipelines
-kg graph fridge --legacy stats
+kg create payments
 ```
 
-## Documentation
+4. Give your AI assistant the source documents and an explicit ingestion instruction.
 
-Detailed guides in [`docs/`](docs/):
+Example prompt for an LLM connected to `kg-mcp`:
 
-- [`docs/getting-started.md`](docs/getting-started.md) - beginner guide with practical examples
-- [`docs/build-graph-from-docs.md`](docs/build-graph-from-docs.md) - step-by-step playbook to build a graph from raw documentation
-- [`docs/ai-prompt-graph-from-docs.md`](docs/ai-prompt-graph-from-docs.md) - ready-to-use AI prompt for `kg-mcp` graph construction
-- [`docs/troubleshooting.md`](docs/troubleshooting.md) - common problems and fixes
-- [`docs/sprint-plan.md`](docs/sprint-plan.md) — roadmap
-- [`docs/kql.md`](docs/kql.md) — KQL query language
-- [`docs/import-csv.md`](docs/import-csv.md) — CSV import
-- [`docs/import-markdown.md`](docs/import-markdown.md) — Markdown import
-- [`docs/mcp.md`](docs/mcp.md) — MCP server reference
-- [`docs/decision-backend.md`](docs/decision-backend.md) — backend selection
-- [`docs/eyg-rollout-notes.md`](docs/eyg-rollout-notes.md) - migration, strict mode, rollback notes
+```text
+Build a knowledge graph from my project documentation using kg-mcp.
 
-## Project skills (for AI workflows)
+Graph name: payments
+Scope: payment flow, retry rules, integrations, and datastore dependencies.
+Sources:
+- docs/payments/overview.md
+- docs/payments/retries.md
+- docs/payments/integrations.md
 
-If your AI client supports repo skills, these templates are available:
+Rules:
+1. Only add facts grounded in the provided documents.
+2. Use stable IDs in the form <type>:<snake_case_name>.
+3. Prefer a smaller correct graph over a larger speculative graph.
+4. Work in batches of at most 10 nodes.
+5. After each batch run:
+   - kg graph payments check --errors-only
+   - kg graph payments quality missing-descriptions
+   - kg graph payments quality missing-facts
+   Fix issues before continuing.
+6. For each node include type, name, description, importance, and source reference when available.
+7. Use notes for assumptions, not hard facts.
+8. Do not delete existing nodes or edges unless I ask.
 
-- [`skills/kg/SKILL.md`](skills/kg/SKILL.md) - core read/write graph operations
-- [`skills/kg-builder/SKILL.md`](skills/kg-builder/SKILL.md) - build graph from docs/code/specs
-- [`skills/kg-assistant/SKILL.md`](skills/kg-assistant/SKILL.md) - collaborative graph improvement with user
-- [`skills/kg-gardener/SKILL.md`](skills/kg-gardener/SKILL.md) - graph quality and maintenance workflow
+Workflow:
+- First show me the extraction plan: candidate nodes, candidate edges, and ambiguous items.
+- Wait for approval.
+- Then create or update the graph batch by batch.
+- At the end run:
+  - kg graph payments stats --by-type --by-relation
+  - kg graph payments node find "retry"
+  - kg graph payments node get <2-3 critical node ids> --full
+- Report what was added, remaining quality gaps, and which docs should be ingested next.
+```
+
+If you want a longer ready-to-copy version, use [`docs/ai-prompt-graph-from-docs.md`](docs/ai-prompt-graph-from-docs.md).
+
+If you want the full manual playbook, use [`docs/build-graph-from-docs.md`](docs/build-graph-from-docs.md).
+
+## Everyday commands
+
+```sh
+# list graphs
+kg list --full
+
+# inspect graph health
+kg graph payments stats --by-type --by-relation
+kg graph payments check --errors-only
+
+# inspect nodes
+kg graph payments node find "retry policy"
+kg graph payments node get process:authorize_payment --full
+
+# query with KQL
+kg graph payments kql "node type=Process sort=name limit=20"
+
+# export/import helpers
+kg graph payments export-json --help
+kg graph payments import-csv --help
+kg graph payments import-md --help
+```
+
+## AI / MCP usage
+
+`kg-mcp` exposes the graph to an AI assistant over stdio, so the assistant can search, read, add, and validate graph data without direct shell access.
+
+See full MCP reference: [`docs/mcp.md`](docs/mcp.md)
 
 ## FAQ
 
 ### Should I use `kg graph <name> ...` or `kg <name> ...`?
 
-Use `kg graph <name> ...` as the default pattern. The shorthand `kg <name> ...` is kept for backward compatibility.
+Use `kg graph <name> ...` as the default pattern. The shorter form is only for backward compatibility.
 
-### Why did my graph file change from `.json` to `.kg`?
+### What file format does `kg` use?
 
-Default runtime prefers `.kg` and can auto-migrate from `.json` side-by-side. Your original `.json` file is kept.
+Default runtime prefers `.kg`. Older `.json` graphs can still be read, and the runtime may migrate them side by side.
 
-### What are `.kgindex` and `.kglog` files?
+### What are `.kgindex` and `.kglog`?
 
-They are sidecars for `.kg` graphs: `.kgindex` helps fast node lookup, `.kglog` stores lightweight hit/feedback events.
+They are helper sidecars for `.kg` graphs. `kgindex` speeds up node lookup and `kglog` stores lightweight search/feedback events.
 
-### How do I keep old JSON-first behavior?
+### Which output should I use in scripts?
 
-Run graph commands with `--legacy`, for example: `kg graph fridge --legacy stats`.
+Use `--json` in scripts and CI. Use the default text output in interactive terminal work.
 
-### A command fails with validation errors. What now?
+### A command fails with validation errors. What should I do?
 
-Run `kg graph <graph> check --errors-only` first, fix the reported node/edge issues, then retry your command.
-
-### Which output format should I use in scripts?
-
-Use `--json` in automation and CI. Use default text output for interactive local usage.
-
-## Need help fast?
-
-If users are unsure how to start, share these three commands first:
+Run:
 
 ```sh
-kg --help
-kg graph --help
-kg graph <graph> node --help
+kg graph <graph-name> check --errors-only
 ```
 
-Then follow [`docs/getting-started.md`](docs/getting-started.md).
+Fix the reported node or edge issues, then rerun your original command.
 
-## Benchmarks (large graphs)
+## Documentation
 
-Generate a big synthetic graph JSON:
+- [`docs/getting-started.md`](docs/getting-started.md) - first-use guide
+- [`docs/build-graph-from-docs.md`](docs/build-graph-from-docs.md) - docs to graph playbook
+- [`docs/ai-prompt-graph-from-docs.md`](docs/ai-prompt-graph-from-docs.md) - ready prompt for LLM ingestion
+- [`docs/import-markdown.md`](docs/import-markdown.md) - Markdown import format
+- [`docs/import-csv.md`](docs/import-csv.md) - CSV import format
+- [`docs/kql.md`](docs/kql.md) - query language
+- [`docs/mcp.md`](docs/mcp.md) - MCP server reference
+- [`docs/troubleshooting.md`](docs/troubleshooting.md) - common issues
 
-```sh
-cargo run --release --example generate_large_graph -- --out ./big.json --nodes 100000 --edges-per-node 5
-```
+## Contact
 
-Run criterion benchmarks (sizes configurable via env vars):
-
-```sh
-KG_BENCH_NODES=20000 KG_BENCH_EDGES_PER_NODE=5 cargo bench --bench large_graph
-```
-
-Other benches:
-
-```sh
-# End-to-end CLI benchmarks (spawns `kg`, covers JSON + persisted BM25 index + redb backend)
-KG_BENCH_NODES=20000 KG_BENCH_EDGES_PER_NODE=5 cargo bench --bench cli_e2e
-
-# Persisted BM25 index benchmarks (build/save/load)
-KG_BENCH_NODES=20000 KG_BENCH_EDGES_PER_NODE=5 cargo bench --bench persistence
-```
+For questions or feedback: `nnar10@proton.me`
