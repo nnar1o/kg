@@ -2080,12 +2080,16 @@ pub(crate) fn render_node_list(graph: &GraphFile, args: &ListNodesArgs) -> Strin
     let (total, visible) = collect_node_list(graph, args);
 
     let mut lines = vec![format!("= nodes ({total})")];
-    for node in visible {
+    for node in &visible {
         if args.full {
             lines.push(output::render_node(graph, node, true).trim_end().to_owned());
         } else {
             lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
         }
+    }
+    let omitted = total.saturating_sub(visible.len());
+    if omitted > 0 {
+        lines.push(format!("... {omitted} more nodes omitted"));
     }
 
     format!("{}\n", lines.join("\n"))
@@ -2105,10 +2109,10 @@ pub(crate) fn render_note_list(graph: &GraphFile, args: &NoteListArgs) -> String
     });
 
     let total = notes.len();
-    let visible = notes.into_iter().take(args.limit);
+    let visible: Vec<&Note> = notes.into_iter().take(args.limit).collect();
 
     let mut lines = vec![format!("= notes ({total})")];
-    for note in visible {
+    for note in &visible {
         let mut line = format!(
             "- {} | {} | {} | {}",
             note.id,
@@ -2125,6 +2129,10 @@ pub(crate) fn render_note_list(graph: &GraphFile, args: &NoteListArgs) -> String
             line.push_str(&note.author);
         }
         lines.push(line);
+    }
+    let omitted = total.saturating_sub(visible.len());
+    if omitted > 0 {
+        lines.push(format!("... {omitted} more notes omitted"));
     }
 
     format!("{}\n", lines.join("\n"))
@@ -2974,6 +2982,7 @@ mod tests {
     fn help_lists_mvp_commands() {
         let help = Cli::try_parse_from(["kg", "--help"]).expect_err("help exits");
         let rendered = help.to_string();
+        assert!(rendered.contains("▓ ▄▄"));
         assert!(rendered.contains("create"));
         assert!(rendered.contains("list"));
         assert!(rendered.contains("feedback-log"));

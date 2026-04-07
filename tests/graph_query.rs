@@ -3,6 +3,15 @@ mod common;
 use common::{exec_ok, temp_workspace, test_graph_root, write_config, write_fixture};
 use std::fs;
 
+fn strip_find_wrapper(output: &str) -> String {
+    output
+        .lines()
+        .skip(1)
+        .filter(|line| !line.ends_with("more nodes omitted by limit"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn find_supports_multiple_queries() {
     let dir = temp_workspace();
@@ -59,6 +68,69 @@ fn find_includes_incoming_neighbor_context_by_default() {
 }
 
 #[test]
+fn find_single_result_matches_get_full_rendering() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let get_output = exec_ok(
+        &["kg", "fridge", "node", "get", "process:cooling", "--full"],
+        dir.path(),
+    );
+    let find_output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "find",
+            "process:cooling",
+            "--full",
+            "--limit",
+            "1",
+        ],
+        dir.path(),
+    );
+
+    let find_body = strip_find_wrapper(&find_output);
+    assert_eq!(find_body.trim(), get_output.trim());
+}
+
+#[test]
+fn find_single_result_matches_get_adaptive_rendering() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let get_output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "get",
+            "process:cooling",
+            "--target-chars",
+            "700",
+        ],
+        dir.path(),
+    );
+    let find_output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "find",
+            "process:cooling",
+            "--target-chars",
+            "700",
+            "--limit",
+            "1",
+        ],
+        dir.path(),
+    );
+
+    let find_body = strip_find_wrapper(&find_output);
+    assert_eq!(find_body.trim(), get_output.trim());
+}
+
+#[test]
 fn list_graphs_shows_available_graph_names() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));
@@ -79,6 +151,50 @@ fn list_nodes_supports_type_filter_and_limit() {
     assert!(output.contains("= nodes (3)"));
     assert!(output.contains("[Process]"));
     assert!(!output.contains("[Concept]"));
+    assert!(output.contains("... 2 more nodes omitted"));
+}
+
+#[test]
+fn note_list_shows_omitted_marker_with_limit() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "note",
+            "add",
+            "concept:refrigerator",
+            "--id",
+            "note:test_one",
+            "--text",
+            "Pierwsza notatka",
+        ],
+        dir.path(),
+    );
+    exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "note",
+            "add",
+            "concept:refrigerator",
+            "--id",
+            "note:test_two",
+            "--text",
+            "Druga notatka",
+        ],
+        dir.path(),
+    );
+
+    let output = exec_ok(
+        &["kg", "fridge", "note", "list", "--limit", "1"],
+        dir.path(),
+    );
+
+    assert!(output.contains("= notes (2)"));
+    assert!(output.contains("... 1 more notes omitted"));
 }
 
 #[test]
@@ -104,6 +220,69 @@ fn resolve_graph_path_uses_config_mapping() {
         dir.path(),
     );
     assert!(output.contains("# concept:refrigerator | Lodowka"));
+}
+
+#[test]
+fn get_with_large_target_chars_shows_richer_adaptive_output() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "get",
+            "concept:refrigerator",
+            "--target-chars",
+            "12000",
+        ],
+        dir.path(),
+    );
+
+    assert!(output.contains("desc: Glowne urzadzenie AGD do przechowywania zywnosci"));
+    assert!(output.contains("Klasa energetyczna: A++ lub wyzsza dla nowych modeli"));
+    assert!(output.contains("importance: 4"));
+    assert!(!output.contains("depth 1:"));
+}
+
+#[test]
+fn find_with_large_target_chars_shows_description_for_single_result() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "find",
+            "lodowka",
+            "--target-chars",
+            "12000",
+        ],
+        dir.path(),
+    );
+
+    assert!(output.contains("desc: Glowne urzadzenie AGD do przechowywania zywnosci"));
+    assert!(output.contains("importance: 4"));
+    assert!(!output.contains("depth 1:"));
+}
+
+#[test]
+fn find_shows_limit_omission_marker() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let output = exec_ok(
+        &[
+            "kg", "fridge", "node", "find", "lodowka", "--full", "--limit", "2",
+        ],
+        dir.path(),
+    );
+
+    assert!(output.contains("? lodowka (2/"));
+    assert!(output.contains("more nodes omitted by limit"));
 }
 
 #[test]
@@ -144,6 +323,59 @@ fn get_full_renders_new_properties() {
     assert!(output.contains("confidence: 0.88"));
     assert!(output.contains("importance: 4"));
     assert!(output.contains("created_at: 2026-03-20T01:10:00Z"));
+    assert!(output.contains("desc: Glowne urzadzenie AGD do przechowywania zywnosci"));
+    assert!(output.contains("sources: instrukcja_obslugi.md"));
+}
+
+#[test]
+fn get_full_renders_attached_notes() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+    exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "note",
+            "add",
+            "concept:refrigerator",
+            "--id",
+            "note:test_full_render",
+            "--text",
+            "Pelna notatka serwisowa",
+            "--tag",
+            "ops",
+            "--author",
+            "tester",
+            "--created-at",
+            "2026-04-07T12:00:00Z",
+            "--provenance",
+            "manual",
+            "--source",
+            "notes.md",
+        ],
+        dir.path(),
+    );
+
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "get",
+            "concept:refrigerator",
+            "--full",
+        ],
+        dir.path(),
+    );
+
+    assert!(output.contains("notes: 1"));
+    assert!(output.contains("! note:test_full_render"));
+    assert!(output.contains("note_body: Pelna notatka serwisowa"));
+    assert!(output.contains("note_tags: ops"));
+    assert!(output.contains("note_author: tester"));
+    assert!(output.contains("note_created_at: 2026-04-07T12:00:00Z"));
+    assert!(output.contains("note_provenance: manual"));
+    assert!(output.contains("note_sources: notes.md"));
 }
 
 #[test]

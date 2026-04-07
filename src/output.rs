@@ -41,11 +41,15 @@ pub fn render_find_with_index(
 ) -> String {
     let mut sections = Vec::new();
     for query in queries {
-        let matches = find_matches_with_index(graph, query, limit, include_features, mode, index);
-        let mut lines = vec![format!("? {query} ({})", matches.len())];
-        for node in matches {
+        let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+        let total = matches.len();
+        let visible: Vec<_> = matches.into_iter().take(limit).collect();
+        let shown = visible.len();
+        let mut lines = vec![render_result_header(query, shown, total)];
+        for node in visible {
             lines.push(render_node_block(graph, node, full));
         }
+        push_limit_omission_line(&mut lines, shown, total);
         sections.push(lines.join("\n"));
     }
     format!("{}\n", sections.join("\n\n"))
@@ -110,17 +114,23 @@ pub fn render_node(graph: &GraphFile, node: &Node, full: bool) -> String {
 
 pub fn render_node_adaptive(graph: &GraphFile, node: &Node, target_chars: Option<usize>) -> String {
     let target = clamp_target_chars(target_chars);
+    let full = format!("{}\n", render_node_block(graph, node, true));
+    if fits_target_chars(&full, target) {
+        return full;
+    }
     let mut candidates = Vec::new();
     for (depth, detail, edge_cap) in [
         (0usize, DetailLevel::Rich, 8usize),
-        (1usize, DetailLevel::Compact, 6usize),
-        (2usize, DetailLevel::Compact, 4usize),
+        (1usize, DetailLevel::Rich, 8usize),
+        (2usize, DetailLevel::Rich, 6usize),
+        (2usize, DetailLevel::Compact, 6usize),
         (2usize, DetailLevel::Minimal, 2usize),
     ] {
         let rendered = render_single_node_candidate(graph, node, depth, detail, edge_cap);
         candidates.push(Candidate {
             rendered,
             depth,
+            detail,
             shown_nodes: 1 + depth,
         });
     }
@@ -139,11 +149,13 @@ pub fn render_find_adaptive_with_index(
     let target = clamp_target_chars(target_chars);
     let mut sections = Vec::new();
     for query in queries {
-        let matches = find_matches_with_index(graph, query, limit, include_features, mode, index);
-        let section = if matches.len() == 1 {
-            render_single_result_section(graph, query, matches[0], target)
+        let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+        let total = matches.len();
+        let visible: Vec<_> = matches.into_iter().take(limit).collect();
+        let section = if visible.len() == 1 {
+            render_single_result_section(graph, query, visible[0], total, target)
         } else {
-            render_multi_result_section(graph, query, &matches, target)
+            render_multi_result_section(graph, query, &visible, total, target)
         };
         sections.push(section);
     }
@@ -160,7 +172,18 @@ enum DetailLevel {
 struct Candidate {
     rendered: String,
     depth: usize,
+    detail: DetailLevel,
     shown_nodes: usize,
+}
+
+impl DetailLevel {
+    fn utility_bonus(self) -> usize {
+        match self {
+            DetailLevel::Rich => 20,
+            DetailLevel::Compact => 10,
+            DetailLevel::Minimal => 0,
+        }
+    }
 }
 
 fn clamp_target_chars(target_chars: Option<usize>) -> usize {
@@ -173,22 +196,44 @@ fn render_single_result_section(
     graph: &GraphFile,
     query: &str,
     node: &Node,
+    total_available: usize,
     target: usize,
 ) -> String {
+    let header = render_result_header(query, 1, total_available);
+    let full = render_single_result_candidate(
+        graph,
+        &header,
+        node,
+        total_available,
+        0,
+        DetailLevel::Rich,
+        8,
+        true,
+    );
+    if fits_target_chars(&full, target) {
+        return full.trim_end().to_owned();
+    }
     let mut candidates = Vec::new();
     for (depth, detail, edge_cap) in [
         (0usize, DetailLevel::Rich, 8usize),
-        (1usize, DetailLevel::Compact, 6usize),
-        (2usize, DetailLevel::Compact, 4usize),
+        (1usize, DetailLevel::Rich, 8usize),
+        (2usize, DetailLevel::Rich, 6usize),
+        (2usize, DetailLevel::Compact, 6usize),
         (2usize, DetailLevel::Minimal, 2usize),
     ] {
-        let mut lines = vec![format!("? {query} (1)")];
-        lines.extend(render_single_node_candidate_lines(
-            graph, node, depth, detail, edge_cap,
-        ));
         candidates.push(Candidate {
-            rendered: format!("{}\n", lines.join("\n")),
+            rendered: render_single_result_candidate(
+                graph,
+                &header,
+                node,
+                total_available,
+                depth,
+                detail,
+                edge_cap,
+                false,
+            ),
             depth,
+            detail,
             shown_nodes: 1 + depth,
         });
     }
@@ -201,35 +246,46 @@ fn render_multi_result_section(
     graph: &GraphFile,
     query: &str,
     nodes: &[&Node],
+    total_available: usize,
     target: usize,
 ) -> String {
-    let total = nodes.len();
+    let visible_total = nodes.len();
+    let full = render_full_result_section(graph, query, nodes, total_available);
+    if fits_target_chars(&full, target) {
+        return full;
+    }
     let mut candidates = Vec::new();
-    let full_cap = total;
+    let full_cap = visible_total;
     let mid_cap = full_cap.min(5);
     let low_cap = full_cap.min(3);
 
     for (detail, edge_cap, result_cap, depth) in [
+        (DetailLevel::Rich, 4usize, full_cap.min(4), 0usize),
         (DetailLevel::Compact, 3usize, full_cap, 0usize),
+        (DetailLevel::Rich, 2usize, mid_cap, 1usize),
         (DetailLevel::Compact, 1usize, full_cap, 0usize),
         (DetailLevel::Minimal, 1usize, mid_cap, 0usize),
         (DetailLevel::Minimal, 0usize, low_cap, 0usize),
         (DetailLevel::Minimal, 0usize, low_cap.min(2), 1usize),
     ] {
         let shown = result_cap.min(nodes.len());
-        let mut lines = vec![format!("? {query} ({total})")];
+        let mut lines = vec![render_result_header(query, visible_total, total_available)];
         for node in nodes.iter().take(shown) {
-            lines.extend(render_node_lines_with_edges(graph, node, detail, edge_cap));
+            lines.extend(render_single_node_candidate_lines(
+                graph, node, 0, detail, edge_cap,
+            ));
             if depth > 0 {
                 lines.extend(render_neighbor_layers(graph, node, depth, detail));
             }
         }
-        if total > shown {
-            lines.push(format!("... +{} more nodes omitted", total - shown));
+        if visible_total > shown {
+            lines.push(format!("... +{} more nodes omitted", visible_total - shown));
         }
+        push_limit_omission_line(&mut lines, visible_total, total_available);
         candidates.push(Candidate {
             rendered: format!("{}\n", lines.join("\n")),
             depth,
+            detail,
             shown_nodes: shown,
         });
     }
@@ -251,7 +307,8 @@ fn pick_best_candidate(candidates: Vec<Candidate>, target: usize) -> String {
         let utility = candidate
             .depth
             .saturating_mul(100)
-            .saturating_add(candidate.shown_nodes.saturating_mul(5));
+            .saturating_add(candidate.shown_nodes.saturating_mul(5))
+            .saturating_add(candidate.detail.utility_bonus());
 
         let entry = (
             penalty,
@@ -276,6 +333,39 @@ fn pick_best_candidate(candidates: Vec<Candidate>, target: usize) -> String {
     best.map(|item| item.4).unwrap_or_else(|| "\n".to_owned())
 }
 
+fn render_full_result_section(
+    graph: &GraphFile,
+    query: &str,
+    nodes: &[&Node],
+    total_available: usize,
+) -> String {
+    let mut lines = vec![render_result_header(query, nodes.len(), total_available)];
+    for node in nodes {
+        lines.push(render_node_block(graph, node, true));
+    }
+    push_limit_omission_line(&mut lines, nodes.len(), total_available);
+    lines.join("\n")
+}
+
+fn render_result_header(query: &str, shown: usize, total: usize) -> String {
+    if shown < total {
+        format!("? {query} ({shown}/{total})")
+    } else {
+        format!("? {query} ({total})")
+    }
+}
+
+fn push_limit_omission_line(lines: &mut Vec<String>, shown: usize, total: usize) {
+    let omitted = total.saturating_sub(shown);
+    if omitted > 0 {
+        lines.push(format!("... {omitted} more nodes omitted by limit"));
+    }
+}
+
+fn fits_target_chars(rendered: &str, target: usize) -> bool {
+    rendered.chars().count() <= target
+}
+
 fn render_single_node_candidate(
     graph: &GraphFile,
     node: &Node,
@@ -284,6 +374,28 @@ fn render_single_node_candidate(
     edge_cap: usize,
 ) -> String {
     let lines = render_single_node_candidate_lines(graph, node, depth, detail, edge_cap);
+    format!("{}\n", lines.join("\n"))
+}
+
+fn render_single_result_candidate(
+    graph: &GraphFile,
+    header: &str,
+    node: &Node,
+    total_available: usize,
+    depth: usize,
+    detail: DetailLevel,
+    edge_cap: usize,
+    full: bool,
+) -> String {
+    let mut lines = vec![header.to_owned()];
+    if full {
+        lines.push(render_node_block(graph, node, true));
+    } else {
+        lines.extend(render_single_node_candidate_lines(
+            graph, node, depth, detail, edge_cap,
+        ));
+    }
+    push_limit_omission_line(&mut lines, 1, total_available);
     format!("{}\n", lines.join("\n"))
 }
 
@@ -370,19 +482,23 @@ fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
     let mut lines = Vec::new();
     match detail {
         DetailLevel::Rich => {
-            lines.push(format!("# {} | {}", node.id, node.name));
+            lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
             if !node.properties.alias.is_empty() {
                 lines.push(format!("aka: {}", node.properties.alias.join(", ")));
             }
-            for fact in node.properties.key_facts.iter().take(2) {
+            push_description_line(&mut lines, &node.properties.description, None);
+            let shown_facts = node.properties.key_facts.len().min(3);
+            for fact in node.properties.key_facts.iter().take(shown_facts) {
                 lines.push(format!("- {fact}"));
             }
-            if node.properties.key_facts.len() > 2 {
-                lines.push(format!("({} facts total)", node.properties.key_facts.len()));
+            let omitted = node.properties.key_facts.len().saturating_sub(shown_facts);
+            if omitted > 0 {
+                lines.push(format!("... {omitted} more facts omitted"));
             }
         }
         DetailLevel::Compact => {
-            lines.push(format!("# {} | {}", node.id, node.name));
+            lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
+            push_description_line(&mut lines, &node.properties.description, Some(140));
             if let Some(fact) = node.properties.key_facts.first() {
                 lines.push(format!("- {fact}"));
             }
@@ -415,7 +531,7 @@ fn render_node_link_lines(graph: &GraphFile, node: &Node, edge_cap: usize) -> Ve
     let shown = incident.len().min(edge_cap);
     for edge in incident.into_iter().take(shown) {
         let prefix = if edge.incoming { "<-" } else { "->" };
-        lines.push(format_edge(prefix, edge.edge, edge.related));
+        lines.extend(render_edge_lines(prefix, edge.edge, edge.related, false));
     }
     if edge_cap > 0 && incident_count(graph, &node.id) > shown {
         lines.push(format!(
@@ -500,11 +616,16 @@ fn join_relation_counts(counts: &std::collections::BTreeMap<String, usize>) -> S
 
 fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
     let mut lines = Vec::new();
-    lines.push(format!("# {} | {}", node.id, node.name));
+    lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
 
     if !node.properties.alias.is_empty() {
         lines.push(format!("aka: {}", node.properties.alias.join(", ")));
     }
+    push_description_line(
+        &mut lines,
+        &node.properties.description,
+        if full { None } else { Some(200) },
+    );
     if full {
         if !node.properties.domain_area.is_empty() {
             lines.push(format!("domain_area: {}", node.properties.domain_area));
@@ -529,27 +650,48 @@ fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
     for fact in node.properties.key_facts.iter().take(facts_to_show) {
         lines.push(format!("- {fact}"));
     }
-    if node.properties.key_facts.len() > facts_to_show || full {
-        lines.push(format!("({} facts total)", node.properties.key_facts.len()));
+    let omitted = node
+        .properties
+        .key_facts
+        .len()
+        .saturating_sub(facts_to_show);
+    if omitted > 0 {
+        lines.push(format!("... {omitted} more facts omitted"));
     }
 
-    let note_count = graph
+    if full {
+        if !node.source_files.is_empty() {
+            lines.push(format!("sources: {}", node.source_files.join(", ")));
+        }
+        push_feedback_lines(
+            &mut lines,
+            node.properties.feedback_score,
+            node.properties.feedback_count,
+            node.properties.feedback_last_ts_ms,
+            None,
+        );
+    }
+
+    let attached_notes: Vec<_> = graph
         .notes
         .iter()
         .filter(|note| note.node_id == node.id)
-        .count();
-    if full && note_count > 0 {
-        lines.push(format!("notes: {note_count}"));
+        .collect();
+    if full && !attached_notes.is_empty() {
+        lines.push(format!("notes: {}", attached_notes.len()));
+        for note in attached_notes {
+            lines.extend(render_attached_note_lines(note));
+        }
     }
 
     for edge in outgoing_edges(graph, &node.id, full) {
         if let Some(target) = graph.node_by_id(&edge.target_id) {
-            lines.push(format_edge("->", edge, target));
+            lines.extend(render_edge_lines("->", edge, target, full));
         }
     }
     for edge in incoming_edges(graph, &node.id, full) {
         if let Some(source) = graph.node_by_id(&edge.source_id) {
-            lines.push(format_edge("<-", edge, source));
+            lines.extend(render_edge_lines("<-", edge, source, full));
         }
     }
 
@@ -608,7 +750,7 @@ fn neighbor_nodes<'a>(graph: &'a GraphFile, node_id: &str) -> Vec<&'a Node> {
     nodes
 }
 
-fn format_edge(prefix: &str, edge: &Edge, related: &Node) -> String {
+fn render_edge_lines(prefix: &str, edge: &Edge, related: &Node, full: bool) -> Vec<String> {
     let (arrow, relation) = if edge.relation.starts_with("NOT_") {
         (
             format!("{prefix}!"),
@@ -621,9 +763,29 @@ fn format_edge(prefix: &str, edge: &Edge, related: &Node) -> String {
     let mut line = format!("{arrow} {relation} | {} | {}", related.id, related.name);
     if !edge.properties.detail.is_empty() {
         line.push_str(" | ");
-        line.push_str(&truncate(&edge.properties.detail, 80));
+        if full {
+            line.push_str(&edge.properties.detail);
+        } else {
+            line.push_str(&truncate(&edge.properties.detail, 80));
+        }
     }
-    line
+    let mut lines = vec![line];
+    if full {
+        push_feedback_lines(
+            &mut lines,
+            edge.properties.feedback_score,
+            edge.properties.feedback_count,
+            edge.properties.feedback_last_ts_ms,
+            Some("edge_"),
+        );
+        if !edge.properties.valid_from.is_empty() {
+            lines.push(format!("edge_valid_from: {}", edge.properties.valid_from));
+        }
+        if !edge.properties.valid_to.is_empty() {
+            lines.push(format!("edge_valid_to: {}", edge.properties.valid_to));
+        }
+    }
+    lines
 }
 
 fn truncate(value: &str, max_len: usize) -> String {
@@ -635,10 +797,75 @@ fn truncate(value: &str, max_len: usize) -> String {
     format!("{truncated}...")
 }
 
+fn push_description_line(lines: &mut Vec<String>, description: &str, max_len: Option<usize>) {
+    if description.is_empty() {
+        return;
+    }
+    let rendered = match max_len {
+        Some(limit) => truncate(description, limit),
+        None => description.to_owned(),
+    };
+    lines.push(format!("desc: {rendered}"));
+}
+
+fn push_feedback_lines(
+    lines: &mut Vec<String>,
+    score: f64,
+    count: u64,
+    last_ts_ms: Option<u64>,
+    prefix: Option<&str>,
+) {
+    let prefix = prefix.unwrap_or("");
+    if score != 0.0 {
+        lines.push(format!("{prefix}feedback_score: {score}"));
+    }
+    if count != 0 {
+        lines.push(format!("{prefix}feedback_count: {count}"));
+    }
+    if let Some(ts) = last_ts_ms {
+        lines.push(format!("{prefix}feedback_last_ts_ms: {ts}"));
+    }
+}
+
+fn render_attached_note_lines(note: &crate::graph::Note) -> Vec<String> {
+    let mut lines = vec![format!("! {}", note.id)];
+    if !note.body.is_empty() {
+        lines.push(format!("note_body: {}", note.body));
+    }
+    if !note.tags.is_empty() {
+        lines.push(format!("note_tags: {}", note.tags.join(", ")));
+    }
+    if !note.author.is_empty() {
+        lines.push(format!("note_author: {}", note.author));
+    }
+    if !note.created_at.is_empty() {
+        lines.push(format!("note_created_at: {}", note.created_at));
+    }
+    if !note.provenance.is_empty() {
+        lines.push(format!("note_provenance: {}", note.provenance));
+    }
+    if !note.source_files.is_empty() {
+        lines.push(format!("note_sources: {}", note.source_files.join(", ")));
+    }
+    lines
+}
+
 fn find_matches_with_index<'a>(
     graph: &'a GraphFile,
     query: &str,
     limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    index: Option<&Bm25Index>,
+) -> Vec<&'a Node> {
+    let mut matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+    matches.truncate(limit);
+    matches
+}
+
+fn find_all_matches_with_index<'a>(
+    graph: &'a GraphFile,
+    query: &str,
     include_features: bool,
     mode: FindMode,
     index: Option<&Bm25Index>,
@@ -664,11 +891,7 @@ fn find_matches_with_index<'a>(
     };
 
     scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
-    scored
-        .into_iter()
-        .take(limit)
-        .map(|(_, _, node)| node)
-        .collect()
+    scored.into_iter().map(|(_, _, node)| node).collect()
 }
 
 fn feedback_boost(node: &Node) -> i64 {
