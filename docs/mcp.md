@@ -11,6 +11,8 @@ If you are new to MCP, start with `kg-mcp` as a local stdio process (no network 
 3. Restart the client and verify tools appear.
 4. Run a simple tool call (`kg_node_find` or `kg`).
 
+For edge work, start with `kg_schema` so you can see valid relations, allowed source/target types, and ID prefixes before mutating the graph.
+
 Example first command through MCP shell tool:
 
 ```text
@@ -65,6 +67,8 @@ Good for compact workflows, for example:
 kg create fridge; kg fridge node add concept:refrigerator --type Concept --name Refrigerator
 ```
 
+The shell tool passes normal CLI flags through unchanged, including edge details such as `--detail "requires periodic defrost"`.
+
 ### Nodes
 
 - `kg_node_find` — search nodes by query
@@ -77,10 +81,30 @@ kg create fridge; kg fridge node add concept:refrigerator --type Concept --name 
 ### Edges
 
 - `kg_edge_add` — create edge
+- `kg_edge_add_batch` — create multiple edges, with `mode=atomic|best_effort` and optional `dry_run=true` preflight
 - `kg_edge_remove` — delete edge
+
+Example batch preflight:
+
+```json
+{
+  "graph": "fridge",
+  "mode": "best_effort",
+  "dry_run": true,
+  "edges": [
+    {
+      "source_id": "process:defrost",
+      "relation": "AVAILABLE_IN",
+      "target_id": "interface:smart_api",
+      "detail": "Proces rozmrazania dostepny z API"
+    }
+  ]
+}
+```
 
 ### Graph
 
+- `kg_schema` — inspect valid node types, relations, ID prefixes, and edge rules
 - `kg_stats` — graph statistics
 - `kg_check` — integrity validation
 - `kg_audit` — deep audit (errors/warnings)

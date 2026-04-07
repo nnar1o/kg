@@ -161,6 +161,62 @@ fn edge_add_persists_new_edge() {
 }
 
 #[test]
+fn edge_add_allows_rule_affected_by_bug() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "edge",
+            "add",
+            "rule:defrost_schedule_rule",
+            "AFFECTED_BY",
+            "bug:defrost_sensor_false_trigger",
+            "--detail",
+            "Regula rozmrazania wymaga poprawki po falszywym alarmie czujnika",
+        ],
+        dir.path(),
+    );
+    assert_eq!(
+        output,
+        "+ edge rule:defrost_schedule_rule AFFECTED_BY bug:defrost_sensor_false_trigger\n"
+    );
+    let graph = load_graph(&test_graph_root(dir.path()).join("fridge.json"));
+    assert!(graph.has_edge(
+        "rule:defrost_schedule_rule",
+        "AFFECTED_BY",
+        "bug:defrost_sensor_false_trigger"
+    ));
+}
+
+#[test]
+fn edge_add_allows_process_available_in_interface() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "edge",
+            "add",
+            "process:defrost",
+            "AVAILABLE_IN",
+            "interface:smart_api",
+            "--detail",
+            "Proces rozmrazania mozna uruchomic zdalnie przez API serwisowe",
+        ],
+        dir.path(),
+    );
+    assert_eq!(
+        output,
+        "+ edge process:defrost AVAILABLE_IN interface:smart_api\n"
+    );
+    let graph = load_graph(&test_graph_root(dir.path()).join("fridge.json"));
+    assert!(graph.has_edge("process:defrost", "AVAILABLE_IN", "interface:smart_api"));
+}
+
+#[test]
 fn edge_remove_deletes_existing_edge() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));

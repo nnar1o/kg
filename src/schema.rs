@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::validate::{format_edge_source_type_error, format_edge_target_type_error};
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct GraphSchema {
     #[serde(default)]
@@ -169,8 +171,15 @@ impl GraphSchema {
                     violations.push(SchemaViolation {
                         kind: ViolationKind::EdgeTypeConstraint,
                         message: format!(
-                            "edge {} {} {} has invalid source type '{}' (allowed: {:?})",
-                            source_id, relation, target_id, source_type, rule.source_types
+                            "edge {} {} {} invalid: {}",
+                            source_id,
+                            relation,
+                            target_id,
+                            format_edge_source_type_error(
+                                source_type,
+                                relation,
+                                &rule.source_types
+                            )
                         ),
                         entity_id: Some(format!("{} {} {}", source_id, relation, target_id)),
                         entity_type: Some("edge".to_owned()),
@@ -182,8 +191,15 @@ impl GraphSchema {
                     violations.push(SchemaViolation {
                         kind: ViolationKind::EdgeTypeConstraint,
                         message: format!(
-                            "edge {} {} {} has invalid target type '{}' (allowed: {:?})",
-                            source_id, relation, target_id, target_type, rule.target_types
+                            "edge {} {} {} invalid: {}",
+                            source_id,
+                            relation,
+                            target_id,
+                            format_edge_target_type_error(
+                                target_type,
+                                relation,
+                                &rule.target_types
+                            )
                         ),
                         entity_id: Some(format!("{} {} {}", source_id, relation, target_id)),
                         entity_type: Some("edge".to_owned()),

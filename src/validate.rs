@@ -76,12 +76,31 @@ pub const EDGE_TYPE_RULES: &[(&str, &[&str], &[&str])] = &[
     ),
     (
         "AFFECTED_BY",
-        &["Concept", "Process", "Decision"],
-        &["Bug", "Rule", "Decision"],
+        &[
+            "Concept",
+            "Process",
+            "DataStore",
+            "Interface",
+            "Rule",
+            "Feature",
+            "Decision",
+            "Bug",
+        ],
+        &[
+            "Concept",
+            "Process",
+            "DataStore",
+            "Interface",
+            "Rule",
+            "Feature",
+            "Decision",
+            "Convention",
+            "Bug",
+        ],
     ),
     (
         "AVAILABLE_IN",
-        &["Feature", "DataStore", "Concept"],
+        &["Feature", "DataStore", "Concept", "Process"],
         &["Interface"],
     ),
     (
@@ -111,6 +130,49 @@ pub const EDGE_TYPE_RULES: &[(&str, &[&str], &[&str])] = &[
 // Core validation
 // ---------------------------------------------------------------------------
 
+pub fn edge_type_rule(
+    relation: &str,
+) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    EDGE_TYPE_RULES
+        .iter()
+        .find(|(rule_relation, _, _)| *rule_relation == relation)
+        .map(|(_, source_types, target_types)| (*source_types, *target_types))
+}
+
+pub fn format_edge_source_type_error(
+    source_type: &str,
+    relation: &str,
+    allowed_source_types: &[impl AsRef<str>],
+) -> String {
+    format!(
+        "{} cannot be source of {} (allowed: {})",
+        source_type,
+        relation,
+        allowed_source_types
+            .iter()
+            .map(|value| value.as_ref())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+pub fn format_edge_target_type_error(
+    target_type: &str,
+    relation: &str,
+    allowed_target_types: &[impl AsRef<str>],
+) -> String {
+    format!(
+        "{} cannot be target of {} (allowed: {})",
+        target_type,
+        relation,
+        allowed_target_types
+            .iter()
+            .map(|value| value.as_ref())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 pub fn validate_graph(
     graph: &GraphFile,
     cwd: &Path,
@@ -121,11 +183,6 @@ pub fn validate_graph(
     let mut warnings = Vec::new();
 
     let type_to_prefix: HashMap<&str, &str> = TYPE_TO_PREFIX.iter().copied().collect();
-    let edge_rules: HashMap<&str, (&[&str], &[&str])> = EDGE_TYPE_RULES
-        .iter()
-        .map(|(rel, src, tgt)| (*rel, (*src, *tgt)))
-        .collect();
-
     // -- metadata --
     if graph.metadata.name.trim().is_empty() {
         errors.push("metadata.name missing".to_owned());
@@ -248,17 +305,23 @@ pub fn validate_graph(
             node_type_map.get(edge.source_id.as_str()),
             node_type_map.get(edge.target_id.as_str()),
         ) {
-            if let Some((valid_src, valid_tgt)) = edge_rules.get(edge.relation.as_str()) {
+            if let Some((valid_src, valid_tgt)) = edge_type_rule(edge.relation.as_str()) {
                 if !valid_src.is_empty() && !valid_src.contains(src_type) {
                     errors.push(format!(
-                        "edge source type invalid for relation: {} {} {} (got {}, expected one of {:?})",
-                        edge.source_id, edge.relation, edge.target_id, src_type, valid_src
+                        "edge {} {} {} invalid: {}",
+                        edge.source_id,
+                        edge.relation,
+                        edge.target_id,
+                        format_edge_source_type_error(src_type, edge.relation.as_str(), valid_src)
                     ));
                 }
                 if !valid_tgt.is_empty() && !valid_tgt.contains(tgt_type) {
                     errors.push(format!(
-                        "edge target type invalid for relation: {} {} {} (got {}, expected one of {:?})",
-                        edge.source_id, edge.relation, edge.target_id, tgt_type, valid_tgt
+                        "edge {} {} {} invalid: {}",
+                        edge.source_id,
+                        edge.relation,
+                        edge.target_id,
+                        format_edge_target_type_error(tgt_type, edge.relation.as_str(), valid_tgt)
                     ));
                 }
             }

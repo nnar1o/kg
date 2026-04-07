@@ -1,7 +1,10 @@
 use anyhow::{Result, anyhow, bail};
 
 use crate::graph::{Edge, GraphFile, Node};
-use crate::validate::{EDGE_TYPE_RULES, TYPE_TO_PREFIX, VALID_TYPES};
+use crate::validate::{
+    TYPE_TO_PREFIX, VALID_TYPES, edge_type_rule, format_edge_source_type_error,
+    format_edge_target_type_error,
+};
 
 // ---------------------------------------------------------------------------
 // Node mutations
@@ -169,25 +172,18 @@ pub fn validate_edge(graph: &GraphFile, edge: &Edge) -> Result<()> {
     let tgt_node = graph.node_by_id(&edge.target_id);
 
     if let (Some(src), Some(tgt)) = (src_node, tgt_node) {
-        for (rel, src_types, tgt_types) in EDGE_TYPE_RULES {
-            if *rel == edge.relation {
-                if !src_types.is_empty() && !src_types.contains(&src.r#type.as_str()) {
-                    bail!(
-                        "edge relation '{}' requires source type in {:?}, got '{}'",
-                        edge.relation,
-                        src_types,
-                        src.r#type
-                    );
-                }
-                if !tgt_types.is_empty() && !tgt_types.contains(&tgt.r#type.as_str()) {
-                    bail!(
-                        "edge relation '{}' requires target type in {:?}, got '{}'",
-                        edge.relation,
-                        tgt_types,
-                        tgt.r#type
-                    );
-                }
-                break;
+        if let Some((src_types, tgt_types)) = edge_type_rule(edge.relation.as_str()) {
+            if !src_types.is_empty() && !src_types.contains(&src.r#type.as_str()) {
+                bail!(
+                    "{}",
+                    format_edge_source_type_error(&src.r#type, edge.relation.as_str(), src_types)
+                );
+            }
+            if !tgt_types.is_empty() && !tgt_types.contains(&tgt.r#type.as_str()) {
+                bail!(
+                    "{}",
+                    format_edge_target_type_error(&tgt.r#type, edge.relation.as_str(), tgt_types)
+                );
             }
         }
     }

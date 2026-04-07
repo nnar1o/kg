@@ -37,6 +37,28 @@ fn find_uses_fuzzy_matching_for_imperfect_queries() {
 }
 
 #[test]
+fn find_includes_outgoing_neighbor_context_by_default() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let output = exec_ok(&["kg", "fridge", "node", "find", "REST"], dir.path());
+
+    assert!(output.contains("# interface:smart_api | Smart Home API (REST)"));
+    assert!(output.contains("# concept:refrigerator | Lodowka"));
+}
+
+#[test]
+fn find_includes_incoming_neighbor_context_by_default() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let output = exec_ok(&["kg", "fridge", "node", "find", "Chlodziarka"], dir.path());
+
+    assert!(output.contains("# concept:refrigerator | Lodowka"));
+    assert!(output.contains("# interface:smart_api | Smart Home API (REST)"));
+}
+
+#[test]
 fn list_graphs_shows_available_graph_names() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));

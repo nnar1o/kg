@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::collections::HashSet;
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -188,6 +189,32 @@ fn incoming_edges<'a>(graph: &'a GraphFile, node_id: &str, full: bool) -> Vec<&'
     edges
 }
 
+fn neighbor_nodes<'a>(graph: &'a GraphFile, node_id: &str) -> Vec<&'a Node> {
+    let mut seen = HashSet::new();
+    let mut nodes = Vec::new();
+
+    for edge in &graph.edges {
+        let related_id = if edge.source_id == node_id {
+            Some(edge.target_id.as_str())
+        } else if edge.target_id == node_id {
+            Some(edge.source_id.as_str())
+        } else {
+            None
+        };
+
+        if let Some(related_id) = related_id {
+            if seen.insert(related_id) {
+                if let Some(node) = graph.node_by_id(related_id) {
+                    nodes.push(node);
+                }
+            }
+        }
+    }
+
+    nodes.sort_by(|left, right| left.id.cmp(&right.id));
+    nodes
+}
+
 fn format_edge(prefix: &str, edge: &Edge, related: &Node) -> String {
     let (arrow, relation) = if edge.relation.starts_with("NOT_") {
         (
@@ -232,7 +259,7 @@ fn find_matches_with_index<'a>(
                 .iter()
                 .filter(|node| include_features || node.r#type != "Feature")
                 .filter_map(|node| {
-                    score_node(node, query, &pattern, &mut matcher).map(|score| {
+                    score_node(graph, node, query, &pattern, &mut matcher).map(|score| {
                         let base = score as i64;
                         let boost = feedback_boost(node);
                         (base + boost, Reverse(node.id.as_str()), node)
@@ -363,6 +390,14 @@ fn node_document_text(graph: &GraphFile, node: &Node) -> String {
             push_field(&mut out, tag);
         }
     }
+    for neighbor in neighbor_nodes(graph, &node.id) {
+        push_field(&mut out, &neighbor.id);
+        push_field(&mut out, &neighbor.name);
+        push_field(&mut out, &neighbor.properties.description);
+        for alias in &neighbor.properties.alias {
+            push_field(&mut out, alias);
+        }
+    }
     out
 }
 
@@ -393,7 +428,13 @@ fn tokenize(text: &str) -> Vec<String> {
     tokens
 }
 
-fn score_node(node: &Node, query: &str, pattern: &Pattern, matcher: &mut Matcher) -> Option<u32> {
+fn score_node(
+    graph: &GraphFile,
+    node: &Node,
+    query: &str,
+    pattern: &Pattern,
+    matcher: &mut Matcher,
+) -> Option<u32> {
     let mut total = 0;
     let mut primary_hits = 0;
 
@@ -419,9 +460,35 @@ fn score_node(node: &Node, query: &str, pattern: &Pattern, matcher: &mut Matcher
 
     if primary_hits > 0 {
         total += score_secondary_field(query, pattern, matcher, &node.properties.description, 1);
+    } else {
+        total += score_neighbor_context(graph, node, query, pattern, matcher);
     }
 
     (total > 0).then_some(total)
+}
+
+fn score_neighbor_context(
+    graph: &GraphFile,
+    node: &Node,
+    query: &str,
+    pattern: &Pattern,
+    matcher: &mut Matcher,
+) -> u32 {
+    let mut best = 0;
+
+    for neighbor in neighbor_nodes(graph, &node.id) {
+        let mut score = score_secondary_field(query, pattern, matcher, &neighbor.id, 1)
+            + score_secondary_field(query, pattern, matcher, &neighbor.name, 1)
+            + score_secondary_field(query, pattern, matcher, &neighbor.properties.description, 1);
+
+        for alias in &neighbor.properties.alias {
+            score += score_secondary_field(query, pattern, matcher, alias, 1);
+        }
+
+        best = best.max(score);
+    }
+
+    best
 }
 
 fn score_field(pattern: &Pattern, matcher: &mut Matcher, value: &str) -> Option<u32> {

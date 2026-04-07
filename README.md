@@ -110,7 +110,9 @@ Config for OpenCode/Claude Desktop:
 }
 ```
 
-Tools: node find/get/add/modify/remove, edge add/remove, stats, check, audit, quality, export-html, feedback, and a shell-like `kg` tool for multi-command scripts.
+Tools: `kg_schema`, node find/get/add/modify/remove, edge add/remove, stats, check, audit, quality, export-html, feedback, and a shell-like `kg` tool for multi-command scripts.
+
+When creating edges through MCP, call `kg_schema` first to inspect valid relations, allowed source/target types, and ID prefixes. `kg_edge_add_batch` also supports `dry_run=true` for preflight validation before writing changes.
 
 See [`docs/mcp.md`](docs/mcp.md) for full docs.
 

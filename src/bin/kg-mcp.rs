@@ -169,6 +169,8 @@ struct EdgeAddBatchArgs {
     edges: Vec<EdgeAddBatchItem>,
     #[serde(default)]
     mode: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -190,6 +192,12 @@ struct GraphStatsArgs {
     by_relation: bool,
     #[serde(default)]
     show_sources: bool,
+}
+
+#[derive(Debug, Clone)]
+struct EdgePreflightFailure {
+    message: String,
+    data: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -548,6 +556,167 @@ impl KgMcpServer {
 
     fn execute_kg(&self, args: Vec<String>) -> Result<CallToolResult, McpError> {
         self.execute_kg_for("kg_typed", args, false)
+    }
+
+    fn load_graph_file(&self, graph: &str) -> Result<kg::GraphFile, McpError> {
+        let graph_root = kg::default_graph_root(&self.cwd);
+        let path = kg::resolve_graph_path(&self.cwd, &graph_root, graph).map_err(|error| {
+            McpError::invalid_params(
+                "graph not found",
+                Some(json!({
+                    "graph": graph,
+                    "hint": error.to_string(),
+                })),
+            )
+        })?;
+
+        kg::GraphFile::load(&path).map_err(|error| {
+            McpError::internal_error(
+                "failed to load graph",
+                Some(json!({
+                    "graph": graph,
+                    "path": path.display().to_string(),
+                    "error": error.to_string(),
+                })),
+            )
+        })
+    }
+
+    fn preflight_edge(
+        &self,
+        graph: &kg::GraphFile,
+        source_id: &str,
+        relation: &str,
+        target_id: &str,
+    ) -> Result<(), EdgePreflightFailure> {
+        if !kg::VALID_RELATIONS.contains(&relation) {
+            return Err(EdgePreflightFailure {
+                message: format!(
+                    "invalid relation '{}' (allowed: {})",
+                    relation,
+                    kg::VALID_RELATIONS.join(", ")
+                ),
+                data: json!({
+                    "relation": relation,
+                    "valid_relations": kg::VALID_RELATIONS,
+                    "hint": "Call kg_schema before adding edges to inspect allowed relations and edge rules.",
+                }),
+            });
+        }
+
+        let source_node = graph.node_by_id(source_id);
+        let target_node = graph.node_by_id(target_id);
+
+        if source_node.is_none() || target_node.is_none() {
+            return Err(EdgePreflightFailure {
+                message: format!(
+                    "source/target node missing: {} {} {}",
+                    source_id, relation, target_id
+                ),
+                data: json!({
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "source_found": source_node.is_some(),
+                    "target_found": target_node.is_some(),
+                }),
+            });
+        }
+
+        let source_node = source_node.expect("source checked above");
+        let target_node = target_node.expect("target checked above");
+
+        if let Some((valid_src, valid_tgt)) = kg::edge_type_rule(relation) {
+            if !valid_src.is_empty() && !valid_src.contains(&source_node.r#type.as_str()) {
+                return Err(EdgePreflightFailure {
+                    message: kg::format_edge_source_type_error(
+                        &source_node.r#type,
+                        relation,
+                        valid_src,
+                    ),
+                    data: json!({
+                        "relation": relation,
+                        "source_id": source_id,
+                        "source_type": source_node.r#type,
+                        "valid_source_types": valid_src,
+                        "hint": "Call kg_schema before adding edges to inspect allowed relations and edge rules.",
+                    }),
+                });
+            }
+            if !valid_tgt.is_empty() && !valid_tgt.contains(&target_node.r#type.as_str()) {
+                return Err(EdgePreflightFailure {
+                    message: kg::format_edge_target_type_error(
+                        &target_node.r#type,
+                        relation,
+                        valid_tgt,
+                    ),
+                    data: json!({
+                        "relation": relation,
+                        "target_id": target_id,
+                        "target_type": target_node.r#type,
+                        "valid_target_types": valid_tgt,
+                        "hint": "Call kg_schema before adding edges to inspect allowed relations and edge rules.",
+                    }),
+                });
+            }
+        }
+
+        if graph.has_edge(source_id, relation, target_id) {
+            return Err(EdgePreflightFailure {
+                message: format!(
+                    "edge already exists: {} {} {}",
+                    source_id, relation, target_id
+                ),
+                data: json!({
+                    "source_id": source_id,
+                    "relation": relation,
+                    "target_id": target_id,
+                }),
+            });
+        }
+
+        Ok(())
+    }
+
+    fn apply_edge_to_graph(graph: &mut kg::GraphFile, edge: &EdgeAddBatchItem) {
+        graph.edges.push(kg::Edge {
+            source_id: edge.source_id.clone(),
+            relation: edge.relation.clone(),
+            target_id: edge.target_id.clone(),
+            properties: kg::EdgeProperties {
+                detail: edge.detail.clone().unwrap_or_default(),
+                ..kg::EdgeProperties::default()
+            },
+        });
+        graph.refresh_counts();
+    }
+
+    fn format_edge_batch_output(
+        &self,
+        dry_run: bool,
+        ok_count: usize,
+        failed_count: usize,
+        results: &[serde_json::Value],
+    ) -> String {
+        let mut lines = vec![if dry_run {
+            format!(
+                "OK (dry_run would_add={} failed={})",
+                ok_count, failed_count
+            )
+        } else {
+            format!("OK (added={} failed={})", ok_count, failed_count)
+        }];
+
+        for result in results.iter().filter(|result| result["ok"] == false) {
+            lines.push(format!(
+                "- edge {} {} {} failed: {}",
+                result["source_id"].as_str().unwrap_or("?"),
+                result["relation"].as_str().unwrap_or("?"),
+                result["target_id"].as_str().unwrap_or("?"),
+                result["error"].as_str().unwrap_or("unknown error")
+            ));
+        }
+
+        format!("{}\n", lines.join("\n"))
     }
 
     fn execute_kg_for(
@@ -1954,87 +2123,14 @@ impl KgMcpServer {
         &self,
         Parameters(args): Parameters<EdgeAddArgs>,
     ) -> Result<CallToolResult, McpError> {
-        if !kg::VALID_RELATIONS.contains(&args.relation.as_str()) {
-            return Err(McpError::invalid_params(
-                "invalid relation",
-                Some(json!({
-                    "expected": kg::VALID_RELATIONS,
-                    "got": args.relation,
-                })),
-            ));
-        }
-
-        let graph_root = kg::default_graph_root(&self.cwd);
-        let path = match kg::resolve_graph_path(&self.cwd, &graph_root, &args.graph) {
-            Ok(p) => p,
-            Err(_) => {
-                return Err(McpError::invalid_params(
-                    "graph not found",
-                    Some(json!({ "graph": args.graph })),
-                ));
-            }
-        };
-
-        let graph_file = match kg::GraphFile::load(&path) {
-            Ok(g) => g,
-            Err(_) => {
-                return Err(McpError::invalid_params(
-                    "cannot load graph",
-                    Some(json!({ "graph": args.graph })),
-                ));
-            }
-        };
-
-        let node_type_map: HashMap<&str, &str> = graph_file
-            .nodes
-            .iter()
-            .map(|n| (n.id.as_str(), n.r#type.as_str()))
-            .collect();
-
-        let source_type = node_type_map.get(args.source_id.as_str());
-        let target_type = node_type_map.get(args.target_id.as_str());
-
-        if source_type.is_none() || target_type.is_none() {
-            return Err(McpError::invalid_params(
-                "source or target node not found",
-                Some(json!({
-                    "source_id": args.source_id,
-                    "target_id": args.target_id,
-                    "source_found": source_type.is_some(),
-                    "target_found": target_type.is_some(),
-                })),
-            ));
-        }
-
-        let edge_rules: HashMap<&str, (&[&str], &[&str])> = kg::EDGE_TYPE_RULES
-            .iter()
-            .map(|(r, s, t)| (*r, (*s, *t)))
-            .collect();
-
-        if let Some((valid_src, valid_tgt)) = edge_rules.get(args.relation.as_str()) {
-            let src_type = source_type.unwrap();
-            let tgt_type = target_type.unwrap();
-
-            if !valid_src.is_empty() && !valid_src.contains(src_type) {
-                return Err(McpError::invalid_params(
-                    "invalid source node type for relation",
-                    Some(json!({
-                        "relation": args.relation,
-                        "source_type": src_type,
-                        "valid_source_types": valid_src,
-                    })),
-                ));
-            }
-            if !valid_tgt.is_empty() && !valid_tgt.contains(tgt_type) {
-                return Err(McpError::invalid_params(
-                    "invalid target node type for relation",
-                    Some(json!({
-                        "relation": args.relation,
-                        "target_type": tgt_type,
-                        "valid_target_types": valid_tgt,
-                    })),
-                ));
-            }
+        let graph_file = self.load_graph_file(&args.graph)?;
+        if let Err(error) = self.preflight_edge(
+            &graph_file,
+            &args.source_id,
+            &args.relation,
+            &args.target_id,
+        ) {
+            return Err(McpError::invalid_params(error.message, Some(error.data)));
         }
 
         let mut cmd = vec![
@@ -2072,10 +2168,46 @@ impl KgMcpServer {
             ));
         }
 
+        let dry_run = args.dry_run;
+        let mut working_graph = self.load_graph_file(&graph)?;
+
         let mut results = Vec::new();
-        let mut errors = Vec::new();
 
         for (i, edge) in args.edges.iter().enumerate() {
+            if let Err(error) = self.preflight_edge(
+                &working_graph,
+                &edge.source_id,
+                &edge.relation,
+                &edge.target_id,
+            ) {
+                if mode == "atomic" && !dry_run {
+                    return Err(McpError::invalid_params(error.message, Some(error.data)));
+                }
+                results.push(json!({
+                    "index": i,
+                    "source_id": edge.source_id,
+                    "relation": edge.relation,
+                    "target_id": edge.target_id,
+                    "ok": false,
+                    "error": error.message,
+                    "dry_run": dry_run,
+                }));
+                continue;
+            }
+
+            if dry_run {
+                Self::apply_edge_to_graph(&mut working_graph, edge);
+                results.push(json!({
+                    "index": i,
+                    "source_id": edge.source_id,
+                    "relation": edge.relation,
+                    "target_id": edge.target_id,
+                    "ok": true,
+                    "dry_run": true,
+                }));
+                continue;
+            }
+
             let mut cmd = vec![
                 graph.clone(),
                 "edge".to_owned(),
@@ -2092,19 +2224,20 @@ impl KgMcpServer {
 
             match result {
                 Ok(_) => {
+                    Self::apply_edge_to_graph(&mut working_graph, edge);
                     results.push(json!({
                         "index": i,
                         "source_id": edge.source_id,
                         "relation": edge.relation,
                         "target_id": edge.target_id,
                         "ok": true,
+                        "dry_run": false,
                     }));
                 }
                 Err(e) => {
                     if mode == "atomic" {
                         return Err(e);
                     }
-                    errors.push(format!("edge {} failed: {}", i, e.message));
                     results.push(json!({
                         "index": i,
                         "source_id": edge.source_id,
@@ -2112,6 +2245,7 @@ impl KgMcpServer {
                         "target_id": edge.target_id,
                         "ok": false,
                         "error": e.message,
+                        "dry_run": false,
                     }));
                 }
             }
@@ -2119,15 +2253,15 @@ impl KgMcpServer {
 
         let ok_count = results.iter().filter(|r| r["ok"] == true).count();
         let failed_count = results.len() - ok_count;
+        let summary = self.format_edge_batch_output(dry_run, ok_count, failed_count, &results);
 
         Ok(CallToolResult {
-            content: vec![Content::text(format!(
-                "OK (added={} failed={})\n",
-                ok_count, failed_count
-            ))],
+            content: vec![Content::text(summary)],
             structured_content: Some(json!({
-                "added": ok_count,
+                "added": if dry_run { 0 } else { ok_count },
+                "would_add": if dry_run { ok_count } else { 0 },
                 "failed": failed_count,
+                "dry_run": dry_run,
                 "results": results,
             })),
             is_error: Some(failed_count > 0),
@@ -3255,6 +3389,27 @@ mod tests {
     use super::*;
     use std::fs;
 
+    fn write_test_graph_workspace(cwd: &Path) {
+        fs::create_dir_all(cwd.join(".kg/graphs")).expect("create graph root");
+        fs::write(
+            cwd.join(".kg.toml"),
+            "graphs.fridge = \".kg/graphs/fridge.json\"\n",
+        )
+        .expect("write config");
+        fs::write(
+            cwd.join(".kg/graphs/fridge.json"),
+            include_str!("../../graph-example-fridge.json"),
+        )
+        .expect("write fixture");
+    }
+
+    fn load_test_graph(cwd: &Path) -> kg::GraphFile {
+        let kg_path = cwd.join(".kg/graphs/fridge.kg");
+        let json_path = cwd.join(".kg/graphs/fridge.json");
+        let path = if kg_path.exists() { kg_path } else { json_path };
+        kg::GraphFile::load(&path).expect("load graph")
+    }
+
     #[test]
     fn split_script_handles_semicolons_and_newlines() {
         let script = "a;b\nc";
@@ -3476,6 +3631,81 @@ mod tests {
 
         let kglog_raw = fs::read_to_string(cwd.join("fridge.kglog")).expect("read kglog");
         assert!(kglog_raw.contains(" tester01 F concept:refrigerator YES"));
+    }
+
+    #[test]
+    fn kg_script_edge_add_supports_detail_flag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let result = server
+            .kg(Parameters(KgScriptArgs {
+                script: "fridge edge add process:defrost AVAILABLE_IN interface:smart_api --detail \"Proces rozmrazania dostepny z API\"".to_owned(),
+                mode: None,
+                debug: false,
+            }))
+            .expect("kg script result");
+
+        assert_eq!(result.is_error, Some(false));
+        let graph = load_test_graph(cwd);
+        let edge = graph
+            .edges
+            .iter()
+            .find(|edge| {
+                edge.source_id == "process:defrost"
+                    && edge.relation == "AVAILABLE_IN"
+                    && edge.target_id == "interface:smart_api"
+            })
+            .expect("edge added");
+        assert_eq!(edge.properties.detail, "Proces rozmrazania dostepny z API");
+    }
+
+    #[test]
+    fn kg_edge_add_batch_dry_run_reports_failures_without_mutation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let result = server
+            .kg_edge_add_batch(Parameters(EdgeAddBatchArgs {
+                graph: "fridge".to_owned(),
+                edges: vec![
+                    EdgeAddBatchItem {
+                        source_id: "process:defrost".to_owned(),
+                        relation: "AVAILABLE_IN".to_owned(),
+                        target_id: "interface:smart_api".to_owned(),
+                        detail: Some("Proces rozmrazania dostepny z API".to_owned()),
+                    },
+                    EdgeAddBatchItem {
+                        source_id: "process:defrost".to_owned(),
+                        relation: "AVAILABLE_IN".to_owned(),
+                        target_id: "datastore:temperature_log".to_owned(),
+                        detail: None,
+                    },
+                ],
+                mode: Some("best_effort".to_owned()),
+                dry_run: true,
+            }))
+            .expect("batch dry run");
+
+        assert_eq!(result.is_error, Some(true));
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(structured["dry_run"], true);
+        assert_eq!(structured["would_add"], 1);
+        assert_eq!(structured["added"], 0);
+        assert_eq!(structured["failed"], 1);
+        assert!(
+            structured["results"][1]["error"]
+                .as_str()
+                .expect("error text")
+                .contains("DataStore cannot be target of AVAILABLE_IN")
+        );
+
+        let graph = load_test_graph(cwd);
+        assert!(!graph.has_edge("process:defrost", "AVAILABLE_IN", "interface:smart_api"));
     }
 }
 

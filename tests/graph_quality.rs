@@ -213,7 +213,7 @@ fn graph_check_reports_relation_semantic_type_mismatch() {
         dir.path(),
     );
     assert!(output.contains("status: INVALID"));
-    assert!(output.contains("edge source type invalid for relation"));
-    assert!(output.contains("edge target type invalid for relation"));
+    assert!(output.contains("DataStore cannot be source of HAS"));
+    assert!(output.contains("Process cannot be target of HAS"));
     assert!(output.contains("datastore:settings_storage HAS process:cooling"));
 }
