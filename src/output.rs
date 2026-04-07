@@ -82,6 +82,20 @@ pub fn find_nodes_with_index(
         .collect()
 }
 
+pub fn find_nodes_and_total_with_index(
+    graph: &GraphFile,
+    query: &str,
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    index: Option<&Bm25Index>,
+) -> (usize, Vec<Node>) {
+    let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+    let total = matches.len();
+    let nodes = matches.into_iter().take(limit).cloned().collect();
+    (total, nodes)
+}
+
 pub fn count_find_results(
     graph: &GraphFile,
     queries: &[String],
@@ -95,15 +109,14 @@ pub fn count_find_results(
 pub fn count_find_results_with_index(
     graph: &GraphFile,
     queries: &[String],
-    limit: usize,
+    _limit: usize,
     include_features: bool,
     mode: FindMode,
     index: Option<&Bm25Index>,
 ) -> usize {
     let mut total = 0;
     for query in queries {
-        let matches = find_matches_with_index(graph, query, limit, include_features, mode, index);
-        total += matches.len();
+        total += find_all_matches_with_index(graph, query, include_features, mode, index).len();
     }
     total
 }
@@ -269,7 +282,7 @@ fn render_multi_result_section(
         (DetailLevel::Minimal, 0usize, low_cap.min(2), 1usize),
     ] {
         let shown = result_cap.min(nodes.len());
-        let mut lines = vec![render_result_header(query, visible_total, total_available)];
+        let mut lines = vec![render_result_header(query, shown, total_available)];
         for node in nodes.iter().take(shown) {
             lines.extend(render_single_node_candidate_lines(
                 graph, node, 0, detail, edge_cap,
@@ -348,6 +361,7 @@ fn render_full_result_section(
 }
 
 fn render_result_header(query: &str, shown: usize, total: usize) -> String {
+    let query = escape_cli_text(query);
     if shown < total {
         format!("? {query} ({shown}/{total})")
     } else {
@@ -482,14 +496,27 @@ fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
     let mut lines = Vec::new();
     match detail {
         DetailLevel::Rich => {
-            lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
+            lines.push(format!(
+                "# {} | {} [{}]",
+                node.id,
+                escape_cli_text(&node.name),
+                node.r#type
+            ));
             if !node.properties.alias.is_empty() {
-                lines.push(format!("aka: {}", node.properties.alias.join(", ")));
+                lines.push(format!(
+                    "aka: {}",
+                    node.properties
+                        .alias
+                        .iter()
+                        .map(|alias| escape_cli_text(alias))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
             push_description_line(&mut lines, &node.properties.description, None);
             let shown_facts = node.properties.key_facts.len().min(3);
             for fact in node.properties.key_facts.iter().take(shown_facts) {
-                lines.push(format!("- {fact}"));
+                lines.push(format!("- {}", escape_cli_text(fact)));
             }
             let omitted = node.properties.key_facts.len().saturating_sub(shown_facts);
             if omitted > 0 {
@@ -497,14 +524,24 @@ fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
             }
         }
         DetailLevel::Compact => {
-            lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
+            lines.push(format!(
+                "# {} | {} [{}]",
+                node.id,
+                escape_cli_text(&node.name),
+                node.r#type
+            ));
             push_description_line(&mut lines, &node.properties.description, Some(140));
             if let Some(fact) = node.properties.key_facts.first() {
-                lines.push(format!("- {fact}"));
+                lines.push(format!("- {}", escape_cli_text(fact)));
             }
         }
         DetailLevel::Minimal => {
-            lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
+            lines.push(format!(
+                "# {} | {} [{}]",
+                node.id,
+                escape_cli_text(&node.name),
+                node.r#type
+            ));
         }
     }
     lines
@@ -616,10 +653,23 @@ fn join_relation_counts(counts: &std::collections::BTreeMap<String, usize>) -> S
 
 fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
     let mut lines = Vec::new();
-    lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
+    lines.push(format!(
+        "# {} | {} [{}]",
+        node.id,
+        escape_cli_text(&node.name),
+        node.r#type
+    ));
 
     if !node.properties.alias.is_empty() {
-        lines.push(format!("aka: {}", node.properties.alias.join(", ")));
+        lines.push(format!(
+            "aka: {}",
+            node.properties
+                .alias
+                .iter()
+                .map(|alias| escape_cli_text(alias))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     push_description_line(
         &mut lines,
@@ -628,10 +678,16 @@ fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
     );
     if full {
         if !node.properties.domain_area.is_empty() {
-            lines.push(format!("domain_area: {}", node.properties.domain_area));
+            lines.push(format!(
+                "domain_area: {}",
+                escape_cli_text(&node.properties.domain_area)
+            ));
         }
         if !node.properties.provenance.is_empty() {
-            lines.push(format!("provenance: {}", node.properties.provenance));
+            lines.push(format!(
+                "provenance: {}",
+                escape_cli_text(&node.properties.provenance)
+            ));
         }
         if let Some(confidence) = node.properties.confidence {
             lines.push(format!("confidence: {confidence}"));
@@ -648,7 +704,7 @@ fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
         node.properties.key_facts.len().min(2)
     };
     for fact in node.properties.key_facts.iter().take(facts_to_show) {
-        lines.push(format!("- {fact}"));
+        lines.push(format!("- {}", escape_cli_text(fact)));
     }
     let omitted = node
         .properties
@@ -661,7 +717,14 @@ fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
 
     if full {
         if !node.source_files.is_empty() {
-            lines.push(format!("sources: {}", node.source_files.join(", ")));
+            lines.push(format!(
+                "sources: {}",
+                node.source_files
+                    .iter()
+                    .map(|source| escape_cli_text(source))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
         push_feedback_lines(
             &mut lines,
@@ -760,13 +823,18 @@ fn render_edge_lines(prefix: &str, edge: &Edge, related: &Node, full: bool) -> V
         (prefix.to_owned(), edge.relation.as_str())
     };
 
-    let mut line = format!("{arrow} {relation} | {} | {}", related.id, related.name);
+    let mut line = format!(
+        "{arrow} {relation} | {} | {}",
+        related.id,
+        escape_cli_text(&related.name)
+    );
     if !edge.properties.detail.is_empty() {
         line.push_str(" | ");
+        let detail = escape_cli_text(&edge.properties.detail);
         if full {
-            line.push_str(&edge.properties.detail);
+            line.push_str(&detail);
         } else {
-            line.push_str(&truncate(&edge.properties.detail, 80));
+            line.push_str(&truncate(&detail, 80));
         }
     }
     let mut lines = vec![line];
@@ -797,13 +865,28 @@ fn truncate(value: &str, max_len: usize) -> String {
     format!("{truncated}...")
 }
 
+fn escape_cli_text(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 fn push_description_line(lines: &mut Vec<String>, description: &str, max_len: Option<usize>) {
     if description.is_empty() {
         return;
     }
+    let escaped = escape_cli_text(description);
     let rendered = match max_len {
-        Some(limit) => truncate(description, limit),
-        None => description.to_owned(),
+        Some(limit) => truncate(&escaped, limit),
+        None => escaped,
     };
     lines.push(format!("desc: {rendered}"));
 }
@@ -830,22 +913,39 @@ fn push_feedback_lines(
 fn render_attached_note_lines(note: &crate::graph::Note) -> Vec<String> {
     let mut lines = vec![format!("! {}", note.id)];
     if !note.body.is_empty() {
-        lines.push(format!("note_body: {}", note.body));
+        lines.push(format!("note_body: {}", escape_cli_text(&note.body)));
     }
     if !note.tags.is_empty() {
-        lines.push(format!("note_tags: {}", note.tags.join(", ")));
+        lines.push(format!(
+            "note_tags: {}",
+            note.tags
+                .iter()
+                .map(|tag| escape_cli_text(tag))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     if !note.author.is_empty() {
-        lines.push(format!("note_author: {}", note.author));
+        lines.push(format!("note_author: {}", escape_cli_text(&note.author)));
     }
     if !note.created_at.is_empty() {
         lines.push(format!("note_created_at: {}", note.created_at));
     }
     if !note.provenance.is_empty() {
-        lines.push(format!("note_provenance: {}", note.provenance));
+        lines.push(format!(
+            "note_provenance: {}",
+            escape_cli_text(&note.provenance)
+        ));
     }
     if !note.source_files.is_empty() {
-        lines.push(format!("note_sources: {}", note.source_files.join(", ")));
+        lines.push(format!(
+            "note_sources: {}",
+            note.source_files
+                .iter()
+                .map(|source| escape_cli_text(source))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     lines
 }

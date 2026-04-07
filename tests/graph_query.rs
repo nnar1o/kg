@@ -1,6 +1,7 @@
 mod common;
 
-use common::{exec_ok, temp_workspace, test_graph_root, write_config, write_fixture};
+use common::{exec_ok, load_graph, temp_workspace, test_graph_root, write_config, write_fixture};
+use serde_json::Value;
 use std::fs;
 
 fn strip_find_wrapper(output: &str) -> String {
@@ -10,6 +11,24 @@ fn strip_find_wrapper(output: &str) -> String {
         .filter(|line| !line.ends_with("more nodes omitted by limit"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn parse_find_header_counts(output: &str) -> (usize, usize) {
+    let header = output.lines().next().expect("find header");
+    let counts = header
+        .split('(')
+        .nth(1)
+        .and_then(|rest| rest.strip_suffix(')'))
+        .expect("header counts");
+    if let Some((shown, total)) = counts.split_once('/') {
+        (
+            shown.parse::<usize>().expect("shown count"),
+            total.parse::<usize>().expect("total count"),
+        )
+    } else {
+        let total = counts.parse::<usize>().expect("total count");
+        (total, total)
+    }
 }
 
 #[test]
@@ -195,6 +214,154 @@ fn note_list_shows_omitted_marker_with_limit() {
 
     assert!(output.contains("= notes (2)"));
     assert!(output.contains("... 1 more notes omitted"));
+}
+
+#[test]
+fn note_add_preserves_multiline_text_in_kg() {
+    let dir = temp_workspace();
+    let graph_path = write_fixture(&test_graph_root(dir.path()));
+
+    exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "note",
+            "add",
+            "concept:refrigerator",
+            "--id",
+            "note:test_multiline",
+            "--text",
+            "line1\nline2\\nkeep",
+        ],
+        dir.path(),
+    );
+
+    let kg_path = graph_path.with_extension("kg");
+    let raw = fs::read_to_string(&kg_path).expect("read kg");
+    assert!(raw.contains("b line1\\nline2\\\\nkeep"));
+
+    let graph = load_graph(&graph_path);
+    let note = graph
+        .notes
+        .iter()
+        .find(|note| note.id == "note:test_multiline")
+        .expect("multiline note");
+    assert_eq!(note.body, "line1\nline2\\nkeep");
+
+    let output = exec_ok(&["kg", "fridge", "note", "list"], dir.path());
+    assert!(output.contains("note:test_multiline"));
+    assert!(output.contains("line1\\nline2\\\\nkeep"));
+    assert!(!output.contains("line1\nline2\\nkeep"));
+}
+
+#[test]
+fn get_full_escapes_multiline_text_fields_for_cli() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "modify",
+            "concept:refrigerator",
+            "--description",
+            "Opis 1\nOpis 2\\nkeep",
+            "--provenance",
+            "manual\nentry",
+        ],
+        dir.path(),
+    );
+    exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "note",
+            "add",
+            "concept:refrigerator",
+            "--id",
+            "note:test_multiline_render",
+            "--text",
+            "body1\nbody2\\nkeep",
+            "--author",
+            "alice\nbob",
+        ],
+        dir.path(),
+    );
+
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "get",
+            "concept:refrigerator",
+            "--full",
+        ],
+        dir.path(),
+    );
+
+    assert!(output.contains("desc: Opis 1\\nOpis 2\\\\nkeep"));
+    assert!(output.contains("provenance: manual\\nentry"));
+    assert!(output.contains("note_body: body1\\nbody2\\\\nkeep"));
+    assert!(output.contains("note_author: alice\\nbob"));
+}
+
+#[test]
+fn find_json_reports_total_matches_not_just_shown_rows() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let output = exec_ok(
+        &[
+            "kg", "fridge", "node", "find", "lodowka", "--limit", "1", "--json",
+        ],
+        dir.path(),
+    );
+    let payload: Value = serde_json::from_str(&output).expect("parse json");
+    let total = payload["total"].as_u64().expect("total") as usize;
+    let query = &payload["queries"][0];
+    let count = query["count"].as_u64().expect("count") as usize;
+    let shown = query["nodes"].as_array().expect("nodes").len();
+
+    assert!(count > shown);
+    assert_eq!(total, count);
+}
+
+#[test]
+fn adaptive_find_header_matches_rendered_result_count() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "find",
+            "lodowka",
+            "--limit",
+            "5",
+            "--target-chars",
+            "300",
+        ],
+        dir.path(),
+    );
+
+    let (shown, total) = parse_find_header_counts(&output);
+    let adaptive_omitted = output
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("... +")
+                .and_then(|rest| rest.strip_suffix(" more nodes omitted"))
+        })
+        .expect("adaptive omission line")
+        .parse::<usize>()
+        .expect("adaptive omitted count");
+
+    assert_eq!(shown + adaptive_omitted, 5);
+    assert!(total >= 5);
 }
 
 #[test]

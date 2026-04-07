@@ -427,9 +427,14 @@ pub(crate) fn render_find_json_with_index(
     let mut total = 0usize;
     let mut results = Vec::new();
     for query in queries {
-        let nodes =
-            output::find_nodes_with_index(graph, query, limit, include_features, mode, index);
-        let count = nodes.len();
+        let (count, nodes) = output::find_nodes_and_total_with_index(
+            graph,
+            query,
+            limit,
+            include_features,
+            mode,
+            index,
+        );
         total += count;
         results.push(FindQueryResult {
             query: query.clone(),
@@ -2084,7 +2089,12 @@ pub(crate) fn render_node_list(graph: &GraphFile, args: &ListNodesArgs) -> Strin
         if args.full {
             lines.push(output::render_node(graph, node, true).trim_end().to_owned());
         } else {
-            lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
+            lines.push(format!(
+                "# {} | {} [{}]",
+                node.id,
+                escape_cli_text(&node.name),
+                node.r#type
+            ));
         }
     }
     let omitted = total.saturating_sub(visible.len());
@@ -2118,15 +2128,22 @@ pub(crate) fn render_note_list(graph: &GraphFile, args: &NoteListArgs) -> String
             note.id,
             note.node_id,
             note.created_at,
-            truncate_note(&note.body, 80)
+            truncate_note(&escape_cli_text(&note.body), 80)
         );
         if !note.tags.is_empty() {
             line.push_str(" | tags: ");
-            line.push_str(&note.tags.join(", "));
+            line.push_str(
+                &note
+                    .tags
+                    .iter()
+                    .map(|tag| escape_cli_text(tag))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
         }
         if !note.author.is_empty() {
             line.push_str(" | by: ");
-            line.push_str(&note.author);
+            line.push_str(&escape_cli_text(&note.author));
         }
         lines.push(line);
     }
@@ -2164,6 +2181,20 @@ fn truncate_note(value: &str, max_len: usize) -> String {
     }
     let truncated: String = value.chars().take(max_len.saturating_sub(3)).collect();
     format!("{truncated}...")
+}
+
+fn escape_cli_text(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn now_ms() -> u128 {

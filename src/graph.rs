@@ -180,8 +180,50 @@ fn sort_case_insensitive(values: &[String]) -> Vec<String> {
     sorted
 }
 
-fn normalize_text(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+fn decode_kg_text(value: &str) -> String {
+    let mut out = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+fn escape_kg_text(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn parse_text_field(value: &str) -> String {
+    decode_kg_text(value)
+}
+
+fn push_text_line(out: &mut String, key: &str, value: &str) {
+    out.push_str(key);
+    out.push(' ');
+    out.push_str(&escape_kg_text(value));
+    out.push('\n');
 }
 
 fn dedupe_case_insensitive(values: Vec<String>) -> Vec<String> {
@@ -304,7 +346,8 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
 
     for (idx, line) in raw.lines().enumerate() {
         let line_no = idx + 1;
-        let trimmed = line.trim();
+        let raw_line = line.strip_suffix('\r').unwrap_or(line);
+        let trimmed = raw_line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
@@ -357,37 +400,37 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
         }
 
         if let Some(note) = current_note.as_mut() {
-            if let Some(rest) = field_value(trimmed, "b") {
+            if let Some(rest) = field_value(raw_line, "b") {
                 enforce_field_order(line_no, "b", 1, &mut last_note_rank, "note", strict)?;
-                note.body = normalize_text(rest.trim());
+                note.body = parse_text_field(rest);
                 continue;
             }
-            if let Some(rest) = field_value(trimmed, "t") {
+            if let Some(rest) = field_value(raw_line, "t") {
                 enforce_field_order(line_no, "t", 2, &mut last_note_rank, "note", strict)?;
-                let value = normalize_text(rest.trim());
+                let value = parse_text_field(rest);
                 if !value.is_empty() {
                     note.tags.push(value);
                 }
                 continue;
             }
-            if let Some(rest) = field_value(trimmed, "a") {
+            if let Some(rest) = field_value(raw_line, "a") {
                 enforce_field_order(line_no, "a", 3, &mut last_note_rank, "note", strict)?;
-                note.author = normalize_text(rest.trim());
+                note.author = parse_text_field(rest);
                 continue;
             }
-            if let Some(rest) = field_value(trimmed, "e") {
+            if let Some(rest) = field_value(raw_line, "e") {
                 enforce_field_order(line_no, "e", 4, &mut last_note_rank, "note", strict)?;
                 note.created_at = rest.trim().to_owned();
                 continue;
             }
-            if let Some(rest) = field_value(trimmed, "p") {
+            if let Some(rest) = field_value(raw_line, "p") {
                 enforce_field_order(line_no, "p", 5, &mut last_note_rank, "note", strict)?;
-                note.provenance = normalize_text(rest.trim());
+                note.provenance = parse_text_field(rest);
                 continue;
             }
-            if let Some(rest) = field_value(trimmed, "s") {
+            if let Some(rest) = field_value(raw_line, "s") {
                 enforce_field_order(line_no, "s", 6, &mut last_note_rank, "note", strict)?;
-                let value = normalize_text(rest.trim());
+                let value = parse_text_field(rest);
                 if !value.is_empty() {
                     note.source_files.push(value);
                 }
@@ -404,35 +447,35 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
             ));
         };
 
-        if let Some(rest) = field_value(trimmed, "N") {
+        if let Some(rest) = field_value(raw_line, "N") {
             enforce_field_order(line_no, "N", 1, &mut last_node_rank, "node", strict)?;
-            let value = normalize_text(rest.trim());
+            let value = parse_text_field(rest);
             validate_len(line_no, "N", &value, 1, 120, strict)?;
             node.name = value;
             continue;
         }
-        if let Some(rest) = field_value(trimmed, "D") {
+        if let Some(rest) = field_value(raw_line, "D") {
             enforce_field_order(line_no, "D", 2, &mut last_node_rank, "node", strict)?;
-            let value = normalize_text(rest.trim());
+            let value = parse_text_field(rest);
             validate_len(line_no, "D", &value, 1, 200, strict)?;
             node.properties.description = value;
             continue;
         }
-        if let Some(rest) = field_value(trimmed, "A") {
+        if let Some(rest) = field_value(raw_line, "A") {
             enforce_field_order(line_no, "A", 3, &mut last_node_rank, "node", strict)?;
-            let value = normalize_text(rest.trim());
+            let value = parse_text_field(rest);
             validate_len(line_no, "A", &value, 1, 80, strict)?;
             node.properties.alias.push(value);
             continue;
         }
-        if let Some(rest) = field_value(trimmed, "F") {
+        if let Some(rest) = field_value(raw_line, "F") {
             enforce_field_order(line_no, "F", 4, &mut last_node_rank, "node", strict)?;
-            let value = normalize_text(rest.trim());
+            let value = parse_text_field(rest);
             validate_len(line_no, "F", &value, 1, 200, strict)?;
             node.properties.key_facts.push(value);
             continue;
         }
-        if let Some(rest) = field_value(trimmed, "E") {
+        if let Some(rest) = field_value(raw_line, "E") {
             enforce_field_order(line_no, "E", 5, &mut last_node_rank, "node", strict)?;
             let value = rest.trim();
             if !value.is_empty() && !parse_utc_timestamp(value) {
@@ -443,28 +486,28 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
             node.properties.created_at = value.to_owned();
             continue;
         }
-        if let Some(rest) = field_value(trimmed, "C") {
+        if let Some(rest) = field_value(raw_line, "C") {
             enforce_field_order(line_no, "C", 6, &mut last_node_rank, "node", strict)?;
             if !rest.trim().is_empty() {
                 node.properties.confidence = rest.trim().parse::<f64>().ok();
             }
             continue;
         }
-        if let Some(rest) = field_value(trimmed, "V") {
+        if let Some(rest) = field_value(raw_line, "V") {
             enforce_field_order(line_no, "V", 7, &mut last_node_rank, "node", strict)?;
             if let Ok(value) = rest.trim().parse::<u8>() {
                 node.properties.importance = value;
             }
             continue;
         }
-        if let Some(rest) = field_value(trimmed, "P") {
+        if let Some(rest) = field_value(raw_line, "P") {
             enforce_field_order(line_no, "P", 8, &mut last_node_rank, "node", strict)?;
-            node.properties.provenance = normalize_text(rest.trim());
+            node.properties.provenance = parse_text_field(rest);
             continue;
         }
-        if let Some(rest) = field_value(trimmed, "S") {
+        if let Some(rest) = field_value(raw_line, "S") {
             enforce_field_order(line_no, "S", 10, &mut last_node_rank, "node", strict)?;
-            let value = normalize_text(rest.trim());
+            let value = parse_text_field(rest);
             validate_len(line_no, "S", &value, 1, 200, strict)?;
             node.source_files.push(value);
             continue;
@@ -489,18 +532,18 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
             continue;
         }
 
-        if let Some(rest) = field_value(trimmed, "d") {
+        if let Some(rest) = field_value(raw_line, "d") {
             enforce_field_order(line_no, "d", 1, &mut last_edge_rank, "edge", strict)?;
             let edge_idx = current_edge_index.ok_or_else(|| {
                 anyhow::anyhow!("edge detail without preceding edge at line {line_no}")
             })?;
-            let value = normalize_text(rest.trim());
+            let value = parse_text_field(rest);
             validate_len(line_no, "d", &value, 1, 200, strict)?;
             graph.edges[edge_idx].properties.detail = value;
             continue;
         }
 
-        if let Some(rest) = field_value(trimmed, "i") {
+        if let Some(rest) = field_value(raw_line, "i") {
             enforce_field_order(line_no, "i", 2, &mut last_edge_rank, "edge", strict)?;
             let edge_idx = current_edge_index.ok_or_else(|| {
                 anyhow::anyhow!("edge valid_from without preceding edge at line {line_no}")
@@ -515,7 +558,7 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
             continue;
         }
 
-        if let Some(rest) = field_value(trimmed, "x") {
+        if let Some(rest) = field_value(raw_line, "x") {
             enforce_field_order(line_no, "x", 3, &mut last_edge_rank, "edge", strict)?;
             let edge_idx = current_edge_index.ok_or_else(|| {
                 anyhow::anyhow!("edge valid_to without preceding edge at line {line_no}")
@@ -530,10 +573,11 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
             continue;
         }
 
-        if let Some(rest) = field_value(trimmed, "-") {
-            let mut parts = rest.trim().splitn(2, char::is_whitespace);
-            let key = parts.next().unwrap_or("").trim();
-            let value = parts.next().unwrap_or("").trim();
+        if let Some(rest) = field_value(raw_line, "-") {
+            let (key, value) = rest
+                .split_once(char::is_whitespace)
+                .map(|(key, value)| (key.trim(), value))
+                .unwrap_or((rest.trim(), ""));
             let is_edge_custom = matches!(
                 key,
                 "edge_feedback_score" | "edge_feedback_count" | "edge_feedback_last_ts_ms"
@@ -544,32 +588,32 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
                 enforce_field_order(line_no, "-", 9, &mut last_node_rank, "node", strict)?;
             }
             match key {
-                "domain_area" => node.properties.domain_area = value.to_owned(),
+                "domain_area" => node.properties.domain_area = parse_text_field(value),
                 "feedback_score" => {
-                    node.properties.feedback_score = value.parse::<f64>().unwrap_or(0.0)
+                    node.properties.feedback_score = value.trim().parse::<f64>().unwrap_or(0.0)
                 }
                 "feedback_count" => {
-                    node.properties.feedback_count = value.parse::<u64>().unwrap_or(0)
+                    node.properties.feedback_count = value.trim().parse::<u64>().unwrap_or(0)
                 }
                 "feedback_last_ts_ms" => {
-                    node.properties.feedback_last_ts_ms = value.parse::<u64>().ok()
+                    node.properties.feedback_last_ts_ms = value.trim().parse::<u64>().ok()
                 }
                 "edge_feedback_score" => {
                     if let Some(edge_idx) = current_edge_index {
                         graph.edges[edge_idx].properties.feedback_score =
-                            value.parse::<f64>().unwrap_or(0.0);
+                            value.trim().parse::<f64>().unwrap_or(0.0);
                     }
                 }
                 "edge_feedback_count" => {
                     if let Some(edge_idx) = current_edge_index {
                         graph.edges[edge_idx].properties.feedback_count =
-                            value.parse::<u64>().unwrap_or(0);
+                            value.trim().parse::<u64>().unwrap_or(0);
                     }
                 }
                 "edge_feedback_last_ts_ms" => {
                     if let Some(edge_idx) = current_edge_index {
                         graph.edges[edge_idx].properties.feedback_last_ts_ms =
-                            value.parse::<u64>().ok();
+                            value.trim().parse::<u64>().ok();
                     }
                 }
                 _ => {}
@@ -630,14 +674,14 @@ fn serialize_kg(graph: &GraphFile) -> String {
             node_type_to_code(&node.r#type),
             node.id
         ));
-        out.push_str(&format!("N {}\n", node.name));
-        out.push_str(&format!("D {}\n", node.properties.description));
+        push_text_line(&mut out, "N", &node.name);
+        push_text_line(&mut out, "D", &node.properties.description);
 
         for alias in sort_case_insensitive(&node.properties.alias) {
-            out.push_str(&format!("A {}\n", alias));
+            push_text_line(&mut out, "A", &alias);
         }
         for fact in sort_case_insensitive(&node.properties.key_facts) {
-            out.push_str(&format!("F {}\n", fact));
+            push_text_line(&mut out, "F", &fact);
         }
 
         if !node.properties.created_at.is_empty() {
@@ -648,10 +692,12 @@ fn serialize_kg(graph: &GraphFile) -> String {
         }
         out.push_str(&format!("V {}\n", node.properties.importance));
         if !node.properties.provenance.is_empty() {
-            out.push_str(&format!("P {}\n", node.properties.provenance));
+            push_text_line(&mut out, "P", &node.properties.provenance);
         }
         if !node.properties.domain_area.is_empty() {
-            out.push_str(&format!("- domain_area {}\n", node.properties.domain_area));
+            out.push_str("- domain_area ");
+            out.push_str(&escape_kg_text(&node.properties.domain_area));
+            out.push('\n');
         }
         if node.properties.feedback_score != 0.0 {
             out.push_str(&format!(
@@ -670,7 +716,7 @@ fn serialize_kg(graph: &GraphFile) -> String {
         }
 
         for source in sort_case_insensitive(&node.source_files) {
-            out.push_str(&format!("S {}\n", source));
+            push_text_line(&mut out, "S", &source);
         }
 
         let mut edges: Vec<Edge> = graph
@@ -693,7 +739,7 @@ fn serialize_kg(graph: &GraphFile) -> String {
                 edge.target_id
             ));
             if !edge.properties.detail.is_empty() {
-                out.push_str(&format!("d {}\n", edge.properties.detail));
+                push_text_line(&mut out, "d", &edge.properties.detail);
             }
             if !edge.properties.valid_from.is_empty() {
                 out.push_str(&format!("i {}\n", edge.properties.valid_from));
@@ -729,21 +775,21 @@ fn serialize_kg(graph: &GraphFile) -> String {
     });
     for note in notes {
         out.push_str(&format!("! {} {}\n", note.id, note.node_id));
-        out.push_str(&format!("b {}\n", note.body));
+        push_text_line(&mut out, "b", &note.body);
         for tag in sort_case_insensitive(&note.tags) {
-            out.push_str(&format!("t {}\n", tag));
+            push_text_line(&mut out, "t", &tag);
         }
         if !note.author.is_empty() {
-            out.push_str(&format!("a {}\n", note.author));
+            push_text_line(&mut out, "a", &note.author);
         }
         if !note.created_at.is_empty() {
             out.push_str(&format!("e {}\n", note.created_at));
         }
         if !note.provenance.is_empty() {
-            out.push_str(&format!("p {}\n", note.provenance));
+            push_text_line(&mut out, "p", &note.provenance);
         }
         for source in sort_case_insensitive(&note.source_files) {
-            out.push_str(&format!("s {}\n", source));
+            push_text_line(&mut out, "s", &source);
         }
         out.push('\n');
     }
@@ -1072,21 +1118,21 @@ mod tests {
     }
 
     #[test]
-    fn load_kg_normalizes_and_dedupes_multivalue_fields() {
+    fn load_kg_preserves_whitespace_and_dedupes_exact_duplicates() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("normalize.kg");
         std::fs::write(
             &path,
-            "@ K:concept:x\nN  Name   With   Spaces \nD  Desc   with   spaces \nA Alias\nA alias\nF fact one\nF FACT   one\nS docs/a.md\nS docs/a.md\nE 2026-04-04T12:00:00Z\nV 4\nP U\n",
+            "@ K:concept:x\nN  Name   With   Spaces \nD  Desc   with   spaces \nA Alias\nA Alias\nF fact one\nF FACT   one\nS docs/a.md\nS docs/a.md\nE 2026-04-04T12:00:00Z\nV 4\nP U\n",
         )
         .expect("write kg");
 
         let loaded = GraphFile::load(&path).expect("load kg");
         let node = &loaded.nodes[0];
-        assert_eq!(node.name, "Name With Spaces");
-        assert_eq!(node.properties.description, "Desc with spaces");
+        assert_eq!(node.name, " Name   With   Spaces ");
+        assert_eq!(node.properties.description, " Desc   with   spaces ");
         assert_eq!(node.properties.alias.len(), 1);
-        assert_eq!(node.properties.key_facts.len(), 1);
+        assert_eq!(node.properties.key_facts.len(), 2);
         assert_eq!(node.source_files.len(), 1);
     }
 
@@ -1132,6 +1178,76 @@ mod tests {
         assert_eq!(note.body, "Important maintenance insight");
         assert_eq!(note.tags.len(), 1);
         assert_eq!(note.source_files.len(), 1);
+    }
+
+    #[test]
+    fn save_and_load_kg_roundtrip_preserves_multiline_text_fields() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("graph-multiline.kg");
+
+        let mut graph = GraphFile::new("graph-multiline");
+        graph.nodes.push(crate::Node {
+            id: "concept:refrigerator".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Lodowka\nSmart".to_owned(),
+            properties: crate::NodeProperties {
+                description: "Linia 1\nLinia 2\\nliteral".to_owned(),
+                provenance: "user\nimport".to_owned(),
+                created_at: "2026-04-04T12:00:00Z".to_owned(),
+                importance: 5,
+                key_facts: vec!["Fakt 1\nFakt 2".to_owned()],
+                alias: vec!["Alias\nA".to_owned()],
+                domain_area: "ops\nfield".to_owned(),
+                ..Default::default()
+            },
+            source_files: vec!["docs/fridge\nnotes.md".to_owned()],
+        });
+        graph.edges.push(crate::Edge {
+            source_id: "concept:refrigerator".to_owned(),
+            relation: "READS_FROM".to_owned(),
+            target_id: "datastore:settings".to_owned(),
+            properties: crate::EdgeProperties {
+                detail: "runtime\nread".to_owned(),
+                valid_from: "2026-04-04T12:00:00Z".to_owned(),
+                valid_to: "2026-04-05T12:00:00Z".to_owned(),
+                ..Default::default()
+            },
+        });
+        graph.notes.push(crate::Note {
+            id: "note:1".to_owned(),
+            node_id: "concept:refrigerator".to_owned(),
+            body: "line1\nline2\\nkeep".to_owned(),
+            tags: vec!["multi\nline".to_owned()],
+            author: "alice\nbob".to_owned(),
+            created_at: "1712345678".to_owned(),
+            provenance: "manual\nentry".to_owned(),
+            source_files: vec!["docs/a\nb.md".to_owned()],
+        });
+
+        graph.save(&path).expect("save kg");
+        let raw = std::fs::read_to_string(&path).expect("read kg");
+        assert!(raw.contains("N Lodowka\\nSmart"));
+        assert!(raw.contains("D Linia 1\\nLinia 2\\\\nliteral"));
+        assert!(raw.contains("- domain_area ops\\nfield"));
+        assert!(raw.contains("d runtime\\nread"));
+        assert!(raw.contains("b line1\\nline2\\\\nkeep"));
+
+        let loaded = GraphFile::load(&path).expect("load kg");
+        let node = &loaded.nodes[0];
+        assert_eq!(node.name, "Lodowka\nSmart");
+        assert_eq!(node.properties.description, "Linia 1\nLinia 2\\nliteral");
+        assert_eq!(node.properties.provenance, "user\nimport");
+        assert_eq!(node.properties.alias, vec!["Alias\nA".to_owned()]);
+        assert_eq!(node.properties.key_facts, vec!["Fakt 1\nFakt 2".to_owned()]);
+        assert_eq!(node.properties.domain_area, "ops\nfield");
+        assert_eq!(node.source_files, vec!["docs/fridge\nnotes.md".to_owned()]);
+        assert_eq!(loaded.edges[0].properties.detail, "runtime\nread");
+        let note = &loaded.notes[0];
+        assert_eq!(note.body, "line1\nline2\\nkeep");
+        assert_eq!(note.tags, vec!["multi\nline".to_owned()]);
+        assert_eq!(note.author, "alice\nbob");
+        assert_eq!(note.provenance, "manual\nentry");
+        assert_eq!(note.source_files, vec!["docs/a\nb.md".to_owned()]);
     }
 
     #[test]
