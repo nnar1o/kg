@@ -56,3 +56,55 @@ fn kg_graph_help_shows_nested_command_descriptions() {
     assert!(stdout.contains("Add and remove graph edges"));
     assert!(stdout.contains("Run graph quality reports"));
 }
+
+#[test]
+fn kg_reports_underlying_graph_read_error_details() {
+    let dir = tempdir().expect("tempdir");
+    let graph_root = dir.path().join(".kg").join("graphs");
+    std::fs::create_dir_all(&graph_root).expect("create graph root");
+    std::fs::write(graph_root.join("broken.kg"), "{").expect("write broken graph");
+
+    let output = Command::new(cargo_bin("kg"))
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .args(["graph", "broken", "stats"])
+        .output()
+        .expect("run kg");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: invalid legacy JSON payload in .kg file"));
+    assert!(stderr.contains("line 1, column 1"));
+    assert!(stderr.contains("EOF while parsing an object"));
+    assert!(stderr.contains("fragment: {"));
+}
+
+#[test]
+fn kg_ignores_invalid_kg_entry_and_warns_with_line_fragment() {
+    let dir = tempdir().expect("tempdir");
+    let graph_root = dir.path().join(".kg").join("graphs");
+    let kglog_path = graph_root.join("broken.kglog");
+    std::fs::create_dir_all(&graph_root).expect("create graph root");
+    std::fs::write(
+        graph_root.join("broken.kg"),
+        "@ K:concept:test\nN Test\nE not-a-timestamp\n",
+    )
+    .expect("write broken kg graph");
+
+    let output = Command::new(cargo_bin("kg"))
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .args(["graph", "broken", "stats"])
+        .output()
+        .expect("run kg");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("nodes: 1"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.trim().is_empty());
+    let kglog = std::fs::read_to_string(&kglog_path).expect("read kglog");
+    assert!(kglog.contains(" kgparse0 W - ignored invalid graph entry"));
+    assert!(kglog.contains("invalid E timestamp at line 3"));
+    assert!(kglog.contains("fragment: E not-a-timestamp"));
+}

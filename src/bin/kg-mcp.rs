@@ -497,7 +497,7 @@ impl KgMcpServer {
         match result {
             Ok(Ok(rendered)) => Ok(rendered),
             Ok(Err(err)) => {
-                let stderr = err.to_string();
+                let stderr = kg::format_error_chain(&err);
                 let duration_ms = started_at.elapsed().as_millis();
                 let (code, message, kind, exit_code) = classify_kg_error(&stderr);
                 let mut data = json!({
@@ -565,12 +565,13 @@ impl KgMcpServer {
         })?;
 
         kg::GraphFile::load(&path).map_err(|error| {
+            let detail = kg::format_error_chain(&error);
             McpError::internal_error(
-                "failed to load graph",
+                format!("failed to load graph: {detail}"),
                 Some(json!({
                     "graph": graph,
                     "path": path.display().to_string(),
-                    "error": error.to_string(),
+                    "error": detail,
                 })),
             )
         })
@@ -1776,9 +1777,10 @@ impl KgMcpServer {
         })?;
 
         let mut graph_file = kg::GraphFile::load(&path).map_err(|err| {
+            let detail = kg::format_error_chain(&err);
             McpError::internal_error(
-                "failed to load graph",
-                Some(json!({ "path": path.display().to_string(), "error": err.to_string() })),
+                format!("failed to load graph: {detail}"),
+                Some(json!({ "path": path.display().to_string(), "error": detail })),
             )
         })?;
 

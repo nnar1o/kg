@@ -290,10 +290,48 @@ fn strict_kg_mode() -> bool {
     )
 }
 
+fn abbreviated_line(line: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    let trimmed = line.trim();
+    let mut out = String::new();
+    for (idx, ch) in trimmed.chars().enumerate() {
+        if idx >= MAX_CHARS {
+            out.push_str("...");
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn line_fragment(line: &str) -> String {
+    let snippet = abbreviated_line(line);
+    if snippet.is_empty() {
+        "fragment: <empty line>".to_owned()
+    } else {
+        format!("fragment: {snippet}")
+    }
+}
+
+fn json_error_detail(label: &str, path: &Path, raw: &str, error: &serde_json::Error) -> String {
+    let line_no = error.line();
+    let column = error.column();
+    let fragment = raw
+        .lines()
+        .nth(line_no.saturating_sub(1))
+        .map(line_fragment)
+        .unwrap_or_else(|| "fragment: <unavailable>".to_owned());
+    format!(
+        "{label}: {} at line {line_no}, column {column}: {error}\n{fragment}",
+        path.display()
+    )
+}
+
 fn validate_len(
     line_no: usize,
     field: &str,
     value: &str,
+    raw_line: &str,
     min: usize,
     max: usize,
     strict: bool,
@@ -301,7 +339,8 @@ fn validate_len(
     let len = value.chars().count();
     if strict && (len < min || len > max) {
         return Err(anyhow::anyhow!(
-            "invalid {field} length at line {line_no}: expected {min}..={max}, got {len}"
+            "invalid {field} length at line {line_no}: expected {min}..={max}, got {len}\n{}",
+            line_fragment(raw_line)
         ));
     }
     Ok(())
@@ -313,11 +352,13 @@ fn enforce_field_order(
     rank: u8,
     last_rank: &mut u8,
     section: &str,
+    raw_line: &str,
     strict: bool,
 ) -> Result<()> {
     if strict && rank < *last_rank {
         return Err(anyhow::anyhow!(
-            "invalid field order at line {line_no}: {key} in {section} block"
+            "invalid field order at line {line_no}: {key} in {section} block\n{}",
+            line_fragment(raw_line)
         ));
     }
     if rank > *last_rank {
@@ -335,8 +376,27 @@ fn field_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     }
 }
 
+fn fail_or_warn(strict: bool, warnings: &mut Vec<String>, message: String) -> Result<()> {
+    if strict {
+        Err(anyhow::anyhow!(message))
+    } else {
+        warnings.push(message);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
+    Ok(parse_kg_with_warnings(raw, graph_name, strict)?.0)
+}
+
+fn parse_kg_with_warnings(
+    raw: &str,
+    graph_name: &str,
+    strict: bool,
+) -> Result<(GraphFile, Vec<String>)> {
     let mut graph = GraphFile::new(graph_name);
+    let mut warnings = Vec::new();
     let mut current_node: Option<Node> = None;
     let mut current_note: Option<Note> = None;
     let mut current_edge_index: Option<usize> = None;
@@ -359,9 +419,15 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
             if let Some(node) = current_node.take() {
                 graph.nodes.push(node);
             }
-            let (type_code, node_id) = rest.split_once(':').ok_or_else(|| {
-                anyhow::anyhow!("invalid node header at line {line_no}: {trimmed}")
-            })?;
+            let Some((type_code, node_id)) = rest.split_once(':') else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!("invalid node header at line {line_no}: {trimmed}"),
+                )?;
+                current_edge_index = None;
+                continue;
+            };
             current_node = Some(Node {
                 id: node_id.trim().to_owned(),
                 r#type: code_to_node_type(type_code.trim()).to_owned(),
@@ -383,12 +449,24 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
                 graph.notes.push(note);
             }
             let mut parts = rest.split_whitespace();
-            let id = parts.next().ok_or_else(|| {
-                anyhow::anyhow!("invalid note header at line {line_no}: {trimmed}")
-            })?;
-            let node_id = parts.next().ok_or_else(|| {
-                anyhow::anyhow!("invalid note header at line {line_no}: {trimmed}")
-            })?;
+            let Some(id) = parts.next() else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!("invalid note header at line {line_no}: {trimmed}"),
+                )?;
+                current_edge_index = None;
+                continue;
+            };
+            let Some(node_id) = parts.next() else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!("invalid note header at line {line_no}: {trimmed}"),
+                )?;
+                current_edge_index = None;
+                continue;
+            };
             current_note = Some(Note {
                 id: id.to_owned(),
                 node_id: node_id.to_owned(),
@@ -401,12 +479,28 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
 
         if let Some(note) = current_note.as_mut() {
             if let Some(rest) = field_value(raw_line, "b") {
-                enforce_field_order(line_no, "b", 1, &mut last_note_rank, "note", strict)?;
+                enforce_field_order(
+                    line_no,
+                    "b",
+                    1,
+                    &mut last_note_rank,
+                    "note",
+                    raw_line,
+                    strict,
+                )?;
                 note.body = parse_text_field(rest);
                 continue;
             }
             if let Some(rest) = field_value(raw_line, "t") {
-                enforce_field_order(line_no, "t", 2, &mut last_note_rank, "note", strict)?;
+                enforce_field_order(
+                    line_no,
+                    "t",
+                    2,
+                    &mut last_note_rank,
+                    "note",
+                    raw_line,
+                    strict,
+                )?;
                 let value = parse_text_field(rest);
                 if !value.is_empty() {
                     note.tags.push(value);
@@ -414,113 +508,241 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
                 continue;
             }
             if let Some(rest) = field_value(raw_line, "a") {
-                enforce_field_order(line_no, "a", 3, &mut last_note_rank, "note", strict)?;
+                enforce_field_order(
+                    line_no,
+                    "a",
+                    3,
+                    &mut last_note_rank,
+                    "note",
+                    raw_line,
+                    strict,
+                )?;
                 note.author = parse_text_field(rest);
                 continue;
             }
             if let Some(rest) = field_value(raw_line, "e") {
-                enforce_field_order(line_no, "e", 4, &mut last_note_rank, "note", strict)?;
+                enforce_field_order(
+                    line_no,
+                    "e",
+                    4,
+                    &mut last_note_rank,
+                    "note",
+                    raw_line,
+                    strict,
+                )?;
                 note.created_at = rest.trim().to_owned();
                 continue;
             }
             if let Some(rest) = field_value(raw_line, "p") {
-                enforce_field_order(line_no, "p", 5, &mut last_note_rank, "note", strict)?;
+                enforce_field_order(
+                    line_no,
+                    "p",
+                    5,
+                    &mut last_note_rank,
+                    "note",
+                    raw_line,
+                    strict,
+                )?;
                 note.provenance = parse_text_field(rest);
                 continue;
             }
             if let Some(rest) = field_value(raw_line, "s") {
-                enforce_field_order(line_no, "s", 6, &mut last_note_rank, "note", strict)?;
+                enforce_field_order(
+                    line_no,
+                    "s",
+                    6,
+                    &mut last_note_rank,
+                    "note",
+                    raw_line,
+                    strict,
+                )?;
                 let value = parse_text_field(rest);
                 if !value.is_empty() {
                     note.source_files.push(value);
                 }
                 continue;
             }
-            return Err(anyhow::anyhow!(
-                "unrecognized note line at {line_no}: {trimmed}"
-            ));
+            fail_or_warn(
+                strict,
+                &mut warnings,
+                format!("unrecognized note line at {line_no}: {trimmed}"),
+            )?;
+            continue;
         }
 
         let Some(node) = current_node.as_mut() else {
-            return Err(anyhow::anyhow!(
-                "unexpected line before first node at line {line_no}: {trimmed}"
-            ));
+            fail_or_warn(
+                strict,
+                &mut warnings,
+                format!("unexpected line before first node at line {line_no}: {trimmed}"),
+            )?;
+            continue;
         };
 
         if let Some(rest) = field_value(raw_line, "N") {
-            enforce_field_order(line_no, "N", 1, &mut last_node_rank, "node", strict)?;
+            enforce_field_order(
+                line_no,
+                "N",
+                1,
+                &mut last_node_rank,
+                "node",
+                raw_line,
+                strict,
+            )?;
             let value = parse_text_field(rest);
-            validate_len(line_no, "N", &value, 1, 120, strict)?;
+            validate_len(line_no, "N", &value, raw_line, 1, 120, strict)?;
             node.name = value;
             continue;
         }
         if let Some(rest) = field_value(raw_line, "D") {
-            enforce_field_order(line_no, "D", 2, &mut last_node_rank, "node", strict)?;
+            enforce_field_order(
+                line_no,
+                "D",
+                2,
+                &mut last_node_rank,
+                "node",
+                raw_line,
+                strict,
+            )?;
             let value = parse_text_field(rest);
-            validate_len(line_no, "D", &value, 1, 200, strict)?;
+            validate_len(line_no, "D", &value, raw_line, 1, 200, strict)?;
             node.properties.description = value;
             continue;
         }
         if let Some(rest) = field_value(raw_line, "A") {
-            enforce_field_order(line_no, "A", 3, &mut last_node_rank, "node", strict)?;
+            enforce_field_order(
+                line_no,
+                "A",
+                3,
+                &mut last_node_rank,
+                "node",
+                raw_line,
+                strict,
+            )?;
             let value = parse_text_field(rest);
-            validate_len(line_no, "A", &value, 1, 80, strict)?;
+            validate_len(line_no, "A", &value, raw_line, 1, 80, strict)?;
             node.properties.alias.push(value);
             continue;
         }
         if let Some(rest) = field_value(raw_line, "F") {
-            enforce_field_order(line_no, "F", 4, &mut last_node_rank, "node", strict)?;
+            enforce_field_order(
+                line_no,
+                "F",
+                4,
+                &mut last_node_rank,
+                "node",
+                raw_line,
+                strict,
+            )?;
             let value = parse_text_field(rest);
-            validate_len(line_no, "F", &value, 1, 200, strict)?;
+            validate_len(line_no, "F", &value, raw_line, 1, 200, strict)?;
             node.properties.key_facts.push(value);
             continue;
         }
         if let Some(rest) = field_value(raw_line, "E") {
-            enforce_field_order(line_no, "E", 5, &mut last_node_rank, "node", strict)?;
+            enforce_field_order(
+                line_no,
+                "E",
+                5,
+                &mut last_node_rank,
+                "node",
+                raw_line,
+                strict,
+            )?;
             let value = rest.trim();
             if !value.is_empty() && !parse_utc_timestamp(value) {
-                return Err(anyhow::anyhow!(
-                    "invalid E timestamp at line {line_no}: expected YYYY-MM-DDTHH:MM:SSZ"
-                ));
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!(
+                        "invalid E timestamp at line {line_no}: expected YYYY-MM-DDTHH:MM:SSZ\n{}",
+                        line_fragment(raw_line)
+                    ),
+                )?;
+                continue;
             }
             node.properties.created_at = value.to_owned();
             continue;
         }
         if let Some(rest) = field_value(raw_line, "C") {
-            enforce_field_order(line_no, "C", 6, &mut last_node_rank, "node", strict)?;
+            enforce_field_order(
+                line_no,
+                "C",
+                6,
+                &mut last_node_rank,
+                "node",
+                raw_line,
+                strict,
+            )?;
             if !rest.trim().is_empty() {
                 node.properties.confidence = rest.trim().parse::<f64>().ok();
             }
             continue;
         }
         if let Some(rest) = field_value(raw_line, "V") {
-            enforce_field_order(line_no, "V", 7, &mut last_node_rank, "node", strict)?;
+            enforce_field_order(
+                line_no,
+                "V",
+                7,
+                &mut last_node_rank,
+                "node",
+                raw_line,
+                strict,
+            )?;
             if let Ok(value) = rest.trim().parse::<u8>() {
                 node.properties.importance = value;
             }
             continue;
         }
         if let Some(rest) = field_value(raw_line, "P") {
-            enforce_field_order(line_no, "P", 8, &mut last_node_rank, "node", strict)?;
+            enforce_field_order(
+                line_no,
+                "P",
+                8,
+                &mut last_node_rank,
+                "node",
+                raw_line,
+                strict,
+            )?;
             node.properties.provenance = parse_text_field(rest);
             continue;
         }
         if let Some(rest) = field_value(raw_line, "S") {
-            enforce_field_order(line_no, "S", 10, &mut last_node_rank, "node", strict)?;
+            enforce_field_order(
+                line_no,
+                "S",
+                10,
+                &mut last_node_rank,
+                "node",
+                raw_line,
+                strict,
+            )?;
             let value = parse_text_field(rest);
-            validate_len(line_no, "S", &value, 1, 200, strict)?;
+            validate_len(line_no, "S", &value, raw_line, 1, 200, strict)?;
             node.source_files.push(value);
             continue;
         }
 
         if let Some(rest) = trimmed.strip_prefix("> ") {
             let mut parts = rest.split_whitespace();
-            let relation = parts.next().ok_or_else(|| {
-                anyhow::anyhow!("missing relation in edge at line {line_no}: {trimmed}")
-            })?;
-            let target_id = parts.next().ok_or_else(|| {
-                anyhow::anyhow!("missing target id in edge at line {line_no}: {trimmed}")
-            })?;
+            let Some(relation) = parts.next() else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!("missing relation in edge at line {line_no}: {trimmed}"),
+                )?;
+                current_edge_index = None;
+                continue;
+            };
+            let Some(target_id) = parts.next() else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!("missing target id in edge at line {line_no}: {trimmed}"),
+                )?;
+                current_edge_index = None;
+                continue;
+            };
             graph.edges.push(Edge {
                 source_id: node.id.clone(),
                 relation: code_to_relation(relation).to_owned(),
@@ -533,41 +755,101 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
         }
 
         if let Some(rest) = field_value(raw_line, "d") {
-            enforce_field_order(line_no, "d", 1, &mut last_edge_rank, "edge", strict)?;
-            let edge_idx = current_edge_index.ok_or_else(|| {
-                anyhow::anyhow!("edge detail without preceding edge at line {line_no}")
-            })?;
+            enforce_field_order(
+                line_no,
+                "d",
+                1,
+                &mut last_edge_rank,
+                "edge",
+                raw_line,
+                strict,
+            )?;
+            let Some(edge_idx) = current_edge_index else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!(
+                        "edge detail without preceding edge at line {line_no}\n{}",
+                        line_fragment(raw_line)
+                    ),
+                )?;
+                continue;
+            };
             let value = parse_text_field(rest);
-            validate_len(line_no, "d", &value, 1, 200, strict)?;
+            validate_len(line_no, "d", &value, raw_line, 1, 200, strict)?;
             graph.edges[edge_idx].properties.detail = value;
             continue;
         }
 
         if let Some(rest) = field_value(raw_line, "i") {
-            enforce_field_order(line_no, "i", 2, &mut last_edge_rank, "edge", strict)?;
-            let edge_idx = current_edge_index.ok_or_else(|| {
-                anyhow::anyhow!("edge valid_from without preceding edge at line {line_no}")
-            })?;
+            enforce_field_order(
+                line_no,
+                "i",
+                2,
+                &mut last_edge_rank,
+                "edge",
+                raw_line,
+                strict,
+            )?;
+            let Some(edge_idx) = current_edge_index else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!(
+                        "edge valid_from without preceding edge at line {line_no}\n{}",
+                        line_fragment(raw_line)
+                    ),
+                )?;
+                continue;
+            };
             let value = rest.trim();
             if !value.is_empty() && !parse_utc_timestamp(value) {
-                return Err(anyhow::anyhow!(
-                    "invalid i timestamp at line {line_no}: expected YYYY-MM-DDTHH:MM:SSZ"
-                ));
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!(
+                        "invalid i timestamp at line {line_no}: expected YYYY-MM-DDTHH:MM:SSZ\n{}",
+                        line_fragment(raw_line)
+                    ),
+                )?;
+                continue;
             }
             graph.edges[edge_idx].properties.valid_from = value.to_owned();
             continue;
         }
 
         if let Some(rest) = field_value(raw_line, "x") {
-            enforce_field_order(line_no, "x", 3, &mut last_edge_rank, "edge", strict)?;
-            let edge_idx = current_edge_index.ok_or_else(|| {
-                anyhow::anyhow!("edge valid_to without preceding edge at line {line_no}")
-            })?;
+            enforce_field_order(
+                line_no,
+                "x",
+                3,
+                &mut last_edge_rank,
+                "edge",
+                raw_line,
+                strict,
+            )?;
+            let Some(edge_idx) = current_edge_index else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!(
+                        "edge valid_to without preceding edge at line {line_no}\n{}",
+                        line_fragment(raw_line)
+                    ),
+                )?;
+                continue;
+            };
             let value = rest.trim();
             if !value.is_empty() && !parse_utc_timestamp(value) {
-                return Err(anyhow::anyhow!(
-                    "invalid x timestamp at line {line_no}: expected YYYY-MM-DDTHH:MM:SSZ"
-                ));
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!(
+                        "invalid x timestamp at line {line_no}: expected YYYY-MM-DDTHH:MM:SSZ\n{}",
+                        line_fragment(raw_line)
+                    ),
+                )?;
+                continue;
             }
             graph.edges[edge_idx].properties.valid_to = value.to_owned();
             continue;
@@ -583,9 +865,25 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
                 "edge_feedback_score" | "edge_feedback_count" | "edge_feedback_last_ts_ms"
             );
             if is_edge_custom {
-                enforce_field_order(line_no, "-", 4, &mut last_edge_rank, "edge", strict)?;
+                enforce_field_order(
+                    line_no,
+                    "-",
+                    4,
+                    &mut last_edge_rank,
+                    "edge",
+                    raw_line,
+                    strict,
+                )?;
             } else {
-                enforce_field_order(line_no, "-", 9, &mut last_node_rank, "node", strict)?;
+                enforce_field_order(
+                    line_no,
+                    "-",
+                    9,
+                    &mut last_node_rank,
+                    "node",
+                    raw_line,
+                    strict,
+                )?;
             }
             match key {
                 "domain_area" => node.properties.domain_area = parse_text_field(value),
@@ -621,7 +919,11 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
             continue;
         }
 
-        return Err(anyhow::anyhow!("unrecognized line at {line_no}: {trimmed}"));
+        fail_or_warn(
+            strict,
+            &mut warnings,
+            format!("unrecognized line at {line_no}: {trimmed}"),
+        )?;
     }
 
     if let Some(node) = current_node.take() {
@@ -660,7 +962,7 @@ fn parse_kg(raw: &str, graph_name: &str, strict: bool) -> Result<GraphFile> {
     });
 
     graph.refresh_counts();
-    Ok(graph)
+    Ok((graph, warnings))
 }
 
 fn serialize_kg(graph: &GraphFile) -> String {
@@ -945,22 +1247,36 @@ impl GraphFile {
             .unwrap_or("json");
         let mut graph = if ext == "kg" {
             if raw.trim_start().starts_with('{') {
-                serde_json::from_str(&raw).with_context(|| {
-                    format!(
-                        "invalid legacy JSON payload in .kg file: {}",
-                        path.display()
-                    )
+                serde_json::from_str(&raw).map_err(|error| {
+                    anyhow::anyhow!(json_error_detail(
+                        "invalid legacy JSON payload in .kg file",
+                        path,
+                        &raw,
+                        &error,
+                    ))
                 })?
             } else {
                 let graph_name = path
                     .file_stem()
                     .and_then(|stem| stem.to_str())
                     .unwrap_or("graph");
-                parse_kg(&raw, graph_name, strict_kg_mode())?
+                let (graph, warnings) = parse_kg_with_warnings(&raw, graph_name, strict_kg_mode())
+                    .with_context(|| format!("failed to parse .kg graph: {}", path.display()))?;
+                for warning in warnings {
+                    let _ = crate::kg_sidecar::append_warning(
+                        path,
+                        &format!(
+                            "ignored invalid graph entry in {}: {warning}",
+                            path.display()
+                        ),
+                    );
+                }
+                graph
             }
         } else {
-            serde_json::from_str(&raw)
-                .with_context(|| format!("invalid JSON: {}", path.display()))?
+            serde_json::from_str(&raw).map_err(|error| {
+                anyhow::anyhow!(json_error_detail("invalid JSON", path, &raw, &error))
+            })?
         };
         graph.refresh_counts();
         Ok(graph)
@@ -1088,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn load_kg_rejects_invalid_timestamp_format() {
+    fn load_kg_ignores_invalid_timestamp_format() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("invalid-ts.kg");
         std::fs::write(
@@ -1097,13 +1413,13 @@ mod tests {
         )
         .expect("write kg");
 
-        let err = GraphFile::load(&path).expect_err("invalid timestamp should fail");
-        let msg = format!("{err:#}");
-        assert!(msg.contains("invalid E timestamp"));
+        let loaded = GraphFile::load(&path).expect("invalid timestamp should be ignored");
+        assert_eq!(loaded.nodes.len(), 1);
+        assert!(loaded.nodes[0].properties.created_at.is_empty());
     }
 
     #[test]
-    fn load_kg_rejects_invalid_edge_timestamp_format() {
+    fn load_kg_ignores_invalid_edge_timestamp_format() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("invalid-edge-ts.kg");
         std::fs::write(
@@ -1112,9 +1428,9 @@ mod tests {
         )
         .expect("write kg");
 
-        let err = GraphFile::load(&path).expect_err("invalid edge timestamp should fail");
-        let msg = format!("{err:#}");
-        assert!(msg.contains("invalid i timestamp"));
+        let loaded = GraphFile::load(&path).expect("invalid edge timestamp should be ignored");
+        assert_eq!(loaded.edges.len(), 1);
+        assert!(loaded.edges[0].properties.valid_from.is_empty());
     }
 
     #[test]

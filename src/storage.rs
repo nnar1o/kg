@@ -593,8 +593,26 @@ impl GraphStore for RedbGraphStore {
             .context("failed to read graph entry")?
             .ok_or_else(|| anyhow::anyhow!("graph entry missing"))?;
         let raw_str = std::str::from_utf8(raw.value()).context("invalid UTF-8 in graph entry")?;
-        let mut graph: GraphFile =
-            serde_json::from_str(raw_str).context("invalid graph JSON in redb")?;
+        let mut graph: GraphFile = serde_json::from_str(raw_str).map_err(|error| {
+            anyhow::anyhow!(
+                "invalid graph JSON in redb: {} at line {}, column {}\n{}",
+                path.display(),
+                error.line(),
+                error.column(),
+                raw_str
+                    .lines()
+                    .nth(error.line().saturating_sub(1))
+                    .map(|line| {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            "fragment: <empty line>".to_owned()
+                        } else {
+                            format!("fragment: {trimmed}")
+                        }
+                    })
+                    .unwrap_or_else(|| "fragment: <unavailable>".to_owned())
+            )
+        })?;
         graph.refresh_counts();
         Ok(graph)
     }

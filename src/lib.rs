@@ -33,6 +33,7 @@ pub use validate::{
 pub use index::Bm25Index;
 
 use std::ffi::OsString;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -129,6 +130,18 @@ where
     let rendered = run_args(args, cwd)?;
     print!("{rendered}");
     Ok(())
+}
+
+pub fn format_error_chain(err: &anyhow::Error) -> String {
+    let mut rendered = err.to_string();
+    let mut causes = err.chain().skip(1).peekable();
+    if causes.peek().is_some() {
+        rendered.push_str("\ncaused by:");
+        for cause in causes {
+            let _ = write!(rendered, "\n  - {cause}");
+        }
+    }
+    rendered
 }
 
 /// Run kg with CLI arguments, returning the rendered output as a string.

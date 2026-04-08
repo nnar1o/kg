@@ -37,6 +37,18 @@ pub fn append_feedback_with_uid(
     append_kglog_line(graph_path, user_short_uid, 'F', node_id, Some(feedback))
 }
 
+pub fn append_warning(graph_path: &Path, warning: &str) -> Result<()> {
+    append_kglog_line(graph_path, "kgparse0", 'W', "-", Some(warning))
+}
+
+fn normalize_kglog_field(value: &str) -> String {
+    value
+        .trim()
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 fn append_kglog_line(
     graph_path: &Path,
     user_short_uid: &str,
@@ -57,7 +69,7 @@ fn append_kglog_line(
     );
     if let Some(value) = feedback {
         line.push(' ');
-        line.push_str(value.trim());
+        line.push_str(&normalize_kglog_field(value));
     }
     line.push('\n');
 
