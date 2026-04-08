@@ -1,4 +1,4 @@
-# kg - local knowledge graph for your AI assistant
+# kg - local knowledge graph for your AI assistants
 
 <img width="434" height="369" alt="image" src="https://github.com/user-attachments/assets/f53bf36f-ac6e-4f83-afaf-00ea9ef12b7e" />
 
@@ -8,7 +8,6 @@
 
 > **Beta** - APIs may still change and some bugs are still expected.
 
-# kg — local project memory for AI assistants
 
 `kg` gives your AI assistant persistent, structured, editable project memory stored locally as a knowledge graph.
 
