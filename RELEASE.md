@@ -1,28 +1,20 @@
-# kg v0.2.2
+# kg v0.2.3
 
 `kg-mcp` is a lightweight local alternative to classic RAG systems when you want structured, editable, git-friendly project memory instead of document chunk retrieval.
 
-This release tightens the end-user workflow around the current `kg-mcp` model: connect your AI client, build or extend a graph from docs, ask questions against the existing graph, and keep the graph itself under git while operational sidecars stay local.
+This release is a small follow-up to `0.2.2` that restores the bundled fridge fixture used by tests and crate packaging verification, and includes a small README wording refinement.
 
 ## Highlights
 
-- MCP-first end-user documentation for `kg-mcp`
-- Apache 2.0 license
-- local graph storage in `~/.kg/graphs`
-- git-friendly `*.kg` format designed for readable diffs and easier merges
-- recommended git ignores for `*.kgindex`, `*.event.log`, `*.migration.log`, `*.bak`, and `*.bck.*.gz`
-- prompts and documentation for generating graphs from documentation, asking the assistant about facts already in the graph, and updating graph facts safely through the assistant
-- default `kg --help` output without the ASCII logo
-- interactive HTML export for graph visualization
+- restore `graph-example-fridge.json` used by the full test suite and packaged crate verification
+- keep `cargo test` and `cargo package` green again after the earlier cleanup commit
+- small README wording refinement around local-first git-friendly project memory
 
-## Documentation updates in this release
+## Why this release matters
 
-- README rewritten as an end-user guide for `kg-mcp`
-- clearer MCP setup guidance
-- examples for project-level prompts that include the graph name
-- guidance to let the assistant update the graph when grounded missing information is discovered
-- git workflow tips for teams collaborating on the same graph
-- practical guidance on which graph files to commit and which local backup/log files to ignore
+- the crate published to crates.io now contains the missing fixture again
+- CI and local full-suite verification match the published source state
+- the README copy stays aligned with the git-friendly local-memory positioning
 
 ## Installation
 

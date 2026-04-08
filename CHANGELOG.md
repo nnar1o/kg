@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.3] - 2026-04-08
+
+### Fixed
+- restore `graph-example-fridge.json` so the full test suite and packaged crate verification build cleanly again
+
+### Changed
+- refine README wording around local-first git-friendly project memory
+
 ## [0.2.2] - 2026-04-08
 
 ### Changed

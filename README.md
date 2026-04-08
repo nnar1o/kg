@@ -20,7 +20,7 @@ Use it when you want your assistant to understand an existing project across ses
 - **Persistent memory** — keep project knowledge between conversations
 - **Structured, not fuzzy** — inspect nodes, edges, facts, and gaps directly
 - **Editable and reviewable** — store graphs as `*.kg` files with readable diffs
-- **Local-first** — your project memory stays on your machine
+- **Local-first** — your project memory stays on your machine in git-friendly format
 - **Works with MCP clients** — connect it as a local stdio MCP server
 
 ## Why not just RAG
