@@ -98,37 +98,7 @@ kg graph fridge history
 
 ## Build a graph from documentation
 
-There are two practical ways to do this.
-
-### Option 1: import prepared Markdown files
-
-If your docs are already normalized into Markdown files with YAML frontmatter, you can import them directly.
-
-Example file:
-
-```md
----
-id: concept:refrigerator
-type: Concept
-name: Refrigerator
-description: Cooling appliance
-provenance: docs
-key_facts: ["Keeps food cold", "Has freezer compartment in some models"]
-source_files: [manual.md]
----
-```
-
-Import:
-
-```sh
-kg create docs-demo
-kg graph docs-demo import-md --path ./docs
-kg graph docs-demo check --errors-only
-```
-
-See full format: [`docs/import-markdown.md`](docs/import-markdown.md)
-
-### Option 2: use an LLM with `kg-mcp` on raw docs
+The recommended path is to use an LLM with `kg-mcp` on raw docs.
 
 This is the better option when you have raw architecture docs, specs, ADRs, runbooks, or mixed notes and want the AI to convert them into a clean graph.
 
@@ -177,24 +147,22 @@ Rules:
 2. Use stable IDs in the form <type>:<snake_case_name>.
 3. Prefer a smaller correct graph over a larger speculative graph.
 4. Work in batches of at most 10 nodes.
-5. After each batch run:
-   - kg graph payments check --errors-only
-   - kg graph payments quality missing-descriptions
-   - kg graph payments quality missing-facts
-   Fix issues before continuing.
-6. For each node include type, name, description, importance, and source reference when available.
-7. Use notes for assumptions, not hard facts.
-8. Do not delete existing nodes or edges unless I ask.
+5. For each node include type, name, description, importance, and source reference when available.
+6. Use notes for assumptions, not hard facts.
+7. Do not delete existing nodes or edges unless I ask.
 
 Workflow:
-- First show me the extraction plan: candidate nodes, candidate edges, and ambiguous items.
-- Wait for approval.
-- Then create or update the graph batch by batch.
+- Create or update the graph autonomously in small batches.
+- Resolve obvious ambiguities conservatively and prefer skipping speculative data over inventing facts.
 - At the end run:
+  - kg graph payments check --errors-only
+  - kg graph payments quality missing-descriptions
+  - kg graph payments quality missing-facts
   - kg graph payments stats --by-type --by-relation
   - kg graph payments node find "retry"
   - kg graph payments node get <2-3 critical node ids> --full
-- Report what was added, remaining quality gaps, and which docs should be ingested next.
+- Critically analyze the final graph for missing nodes, weak descriptions, weak facts, bad edges, and inconsistencies, then apply the needed fixes.
+- Report what was added, what was fixed in the final verification pass, remaining quality gaps, and which docs should be ingested next.
 ```
 
 If you want a longer ready-to-copy version, use [`docs/ai-prompt-graph-from-docs.md`](docs/ai-prompt-graph-from-docs.md).
