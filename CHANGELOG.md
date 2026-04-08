@@ -3,8 +3,13 @@
 ## [0.1.18] - 2026-04-07
 
 ### Changed
+- add ASCII banner to top-level `kg --help`
 - refresh `kg --help` command descriptions and examples to match the current preferred `kg graph <graph> ...` workflow
 - update MCP tool descriptions and docs to reflect the current tool set, including batch options and deprecated compatibility tools
+- rewrite README as an MCP-first end-user guide instead of CLI-first onboarding
+- document end-user workflows for generating graphs from docs, querying existing graphs, and updating graph facts through the assistant
+- document local graph storage in `~/.kg/graphs`, git usage for `*.kg` graphs, ignoring `*.kgindex` and `*.kglog`, and HTML export tips
+- change project license from MIT to Apache 2.0
 
 ## [0.1.17] - 2026-04-04
 
