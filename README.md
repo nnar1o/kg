@@ -1,4 +1,4 @@
-# kg-mcp - local knowledge graph for your AI assistant
+# kg - local knowledge graph for your AI assistant
 
 <img width="434" height="369" alt="image" src="https://github.com/user-attachments/assets/f53bf36f-ac6e-4f83-afaf-00ea9ef12b7e" />
 
@@ -8,11 +8,31 @@
 
 > **Beta** - APIs may still change and some bugs are still expected.
 
-`kg-mcp` gives your AI assistant access to a persistent local knowledge graph.
+# kg — local project memory for AI assistants
 
-It is a lightweight local alternative to classic RAG systems when you want structured, editable, git-friendly project memory instead of document chunk retrieval.
+`kg` gives your AI assistant persistent, structured, editable project memory stored locally as a knowledge graph.
 
-Use it when you want the assistant to work on top of real project memory instead of starting from zero in every conversation: documentation, architecture notes, incidents, decisions, rules, processes, and dependencies.
+Instead of relying only on document chunk retrieval, you can keep architecture, decisions, incidents, rules, dependencies, and workflows in a graph that is readable, reviewable, and Git-friendly.
+
+Use it when you want your assistant to understand an existing project across sessions — not start from zero every time.
+
+## Why use it
+
+- **Persistent memory** — keep project knowledge between conversations
+- **Structured, not fuzzy** — inspect nodes, edges, facts, and gaps directly
+- **Editable and reviewable** — store graphs as `*.kg` files with readable diffs
+- **Local-first** — your project memory stays on your machine
+- **Works with MCP clients** — connect it as a local stdio MCP server
+
+## Why not just RAG
+
+Classic RAG is good for retrieving text chunks from documents.
+
+`kg-mcp` is better when you want:
+- stable project memory instead of repeated retrieval
+- explicit facts, relations, and dependencies
+- graph updates during real work with the assistant
+- something you can inspect, version, diff, and improve over time
 
 ## Installation
 
@@ -154,12 +174,30 @@ The default graph directory is `~/.kg/graphs`.
 
 You can put that directory under git.
 
+Recommended approach:
+
+- keep the main `*.kg` graph files in git,
+- ignore generated sidecars and local operational files,
+- treat backup snapshots and event logs as local machine history unless you explicitly want to version them.
+
 Suggested `.gitignore`:
 
 ```gitignore
 *.kgindex
-*.kglog
+*.event.log
+*.migration.log
+*.bak
+*.bck.*.gz
 ```
+
+In practice:
+
+- `*.kg` is the main graph file you usually want to review and commit,
+- `*.kgindex` is a generated local index,
+- `*.event.log` is a local append-only change timeline,
+- `*.bak` is the previous on-disk version from the last write,
+- `*.bck.*.gz` are periodic compressed backup snapshots,
+- `*.migration.log` is a migration report when older graphs are converted.
 
 `*.kg` is git-friendly and intentionally structured to make diffs readable and merges easier when several people work on the same graph.
 

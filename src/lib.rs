@@ -2963,7 +2963,7 @@ mod tests {
     fn help_lists_mvp_commands() {
         let help = Cli::try_parse_from(["kg", "--help"]).expect_err("help exits");
         let rendered = help.to_string();
-        assert!(rendered.contains("▓ ▄▄"));
+        assert!(!rendered.contains("▓ ▄▄"));
         assert!(rendered.contains("create"));
         assert!(rendered.contains("list"));
         assert!(rendered.contains("feedback-log"));
