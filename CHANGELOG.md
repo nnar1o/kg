@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2] - 2026-04-08
+
+### Changed
+- keep `kg --help` focused on command help by disabling the ASCII logo in default output while retaining the banner in code
+- refine the README into an MCP-first end-user guide for `kg-mcp`
+- document graph storage and git maintenance for `~/.kg/graphs`, including recommended ignores for `*.kgindex`, `*.event.log`, `*.migration.log`, `*.bak`, and `*.bck.*.gz`
+- update release docs to match the current `kg-mcp` workflow and Apache 2.0 licensing
+
 ## [0.1.18] - 2026-04-07
 
 ### Changed
