@@ -63,7 +63,7 @@ Find and inspect:
 ```sh
 kg graph fridge node find refrigerator
 kg graph fridge node get concept:refrigerator --full
-kg graph fridge list --type Concept
+kg graph fridge node find refrigerator --output-size 1200
 ```
 
 Validate quality:

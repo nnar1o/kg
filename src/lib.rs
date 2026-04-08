@@ -41,8 +41,8 @@ use cli::{
     AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, Command, DiffAsOfArgs, ExportDotArgs,
     ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs, FeedbackSummaryArgs,
     FindMode as CliFindMode, GraphCommand, HistoryArgs, ImportCsvArgs, ImportMarkdownArgs,
-    ListNodesArgs, MergeStrategy, NoteAddArgs, NoteListArgs, SplitArgs, TemporalSource,
-    TimelineArgs, VectorCommand,
+    MergeStrategy, NoteAddArgs, NoteListArgs, SplitArgs, TemporalSource, TimelineArgs,
+    VectorCommand,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -54,7 +54,7 @@ use app::graph_note::{GraphNoteContext, execute_note};
 use app::graph_query_quality::{
     execute_audit, execute_baseline, execute_check, execute_duplicates, execute_edge_gaps,
     execute_feedback_log, execute_feedback_summary, execute_kql, execute_missing_descriptions,
-    execute_missing_facts, execute_node_list, execute_quality, execute_stats,
+    execute_missing_facts, execute_quality, execute_stats,
 };
 use app::graph_transfer_temporal::{
     GraphTransferContext, execute_access_log, execute_access_stats, execute_as_of,
@@ -359,7 +359,6 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                 GraphCommand::Baseline(args) => {
                     Ok(execute_baseline(cwd, &graph, &graph_file, &args)?)
                 }
-                GraphCommand::List(args) => Ok(execute_node_list(&graph_file, &args)),
             }
         }
     }
@@ -420,21 +419,14 @@ pub(crate) fn render_find_json_with_index(
     graph: &GraphFile,
     queries: &[String],
     limit: usize,
-    include_features: bool,
     mode: output::FindMode,
     index: Option<&Bm25Index>,
 ) -> String {
     let mut total = 0usize;
     let mut results = Vec::new();
     for query in queries {
-        let (count, nodes) = output::find_nodes_and_total_with_index(
-            graph,
-            query,
-            limit,
-            include_features,
-            mode,
-            index,
-        );
+        let (count, nodes) =
+            output::find_nodes_and_total_with_index(graph, query, limit, true, mode, index);
         total += count;
         results.push(FindQueryResult {
             query: query.clone(),
@@ -456,19 +448,6 @@ struct NodeGetResponse {
 
 pub(crate) fn render_node_json(node: &Node) -> String {
     let payload = NodeGetResponse { node: node.clone() };
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
-}
-
-#[derive(Debug, Serialize)]
-struct NodeListResponse {
-    total: usize,
-    nodes: Vec<Node>,
-}
-
-pub(crate) fn render_node_list_json(graph: &GraphFile, args: &ListNodesArgs) -> String {
-    let (total, visible) = collect_node_list(graph, args);
-    let nodes = visible.into_iter().cloned().collect();
-    let payload = NodeListResponse { total, nodes };
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
 }
 
@@ -2061,48 +2040,6 @@ fn load_graph_from_backup(path: &Path) -> Result<GraphFile> {
     let graph: GraphFile = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse backup: {}", path.display()))?;
     Ok(graph)
-}
-
-fn collect_node_list<'a>(graph: &'a GraphFile, args: &ListNodesArgs) -> (usize, Vec<&'a Node>) {
-    let type_filter: Vec<String> = args.node_types.iter().map(|t| t.to_lowercase()).collect();
-    let include_all_types = type_filter.is_empty();
-
-    let mut nodes: Vec<&Node> = graph
-        .nodes
-        .iter()
-        .filter(|node| args.include_features || node.r#type != "Feature")
-        .filter(|node| include_all_types || type_filter.contains(&node.r#type.to_lowercase()))
-        .collect();
-
-    nodes.sort_by(|a, b| a.id.cmp(&b.id));
-
-    let total = nodes.len();
-    let visible: Vec<&Node> = nodes.into_iter().take(args.limit).collect();
-    (total, visible)
-}
-
-pub(crate) fn render_node_list(graph: &GraphFile, args: &ListNodesArgs) -> String {
-    let (total, visible) = collect_node_list(graph, args);
-
-    let mut lines = vec![format!("= nodes ({total})")];
-    for node in &visible {
-        if args.full {
-            lines.push(output::render_node(graph, node, true).trim_end().to_owned());
-        } else {
-            lines.push(format!(
-                "# {} | {} [{}]",
-                node.id,
-                escape_cli_text(&node.name),
-                node.r#type
-            ));
-        }
-    }
-    let omitted = total.saturating_sub(visible.len());
-    if omitted > 0 {
-        lines.push(format!("... {omitted} more nodes omitted"));
-    }
-
-    format!("{}\n", lines.join("\n"))
 }
 
 pub(crate) fn render_note_list(graph: &GraphFile, args: &NoteListArgs) -> String {

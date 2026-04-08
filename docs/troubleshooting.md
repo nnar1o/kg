@@ -58,7 +58,7 @@ Check these in order:
 
 ```sh
 kg list --full
-kg graph <graph-name> list --limit 20
+kg graph <graph-name> node find <query> --limit 20
 kg graph <graph-name> node find <query> --full
 ```
 

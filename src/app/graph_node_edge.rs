@@ -32,10 +32,9 @@ pub(crate) fn execute_node(
         NodeCommand::Find {
             queries,
             limit,
-            include_features,
             mode,
             full,
-            target_chars,
+            output_size,
             json,
             vector_query,
         } => {
@@ -91,7 +90,7 @@ pub(crate) fn execute_node(
                     context.graph_file,
                     query,
                     limit,
-                    include_features,
+                    true,
                     find_mode,
                     bm25_index.as_ref(),
                 );
@@ -103,7 +102,6 @@ pub(crate) fn execute_node(
                     context.graph_file,
                     &queries,
                     limit,
-                    include_features,
                     find_mode,
                     bm25_index.as_ref(),
                 )
@@ -112,7 +110,7 @@ pub(crate) fn execute_node(
                     context.graph_file,
                     &queries,
                     limit,
-                    include_features,
+                    true,
                     find_mode,
                     full,
                     bm25_index.as_ref(),
@@ -122,9 +120,9 @@ pub(crate) fn execute_node(
                     context.graph_file,
                     &queries,
                     limit,
-                    include_features,
+                    true,
                     find_mode,
-                    target_chars,
+                    output_size,
                     bm25_index.as_ref(),
                 )
             };
@@ -150,9 +148,8 @@ pub(crate) fn execute_node(
 
         NodeCommand::Get {
             id,
-            include_features,
             full,
-            target_chars,
+            output_size,
             json,
         } => {
             let timer = access_log::Timer::new();
@@ -166,15 +163,12 @@ pub(crate) fn execute_node(
                 context.graph_file.node_by_id(&id)
             }
             .ok_or_else(|| anyhow!("node not found: {id}"))?;
-            if !include_features && node.r#type == "Feature" {
-                bail!("feature nodes are hidden by default; use --include-features");
-            }
             let result = if json {
                 crate::render_node_json(node)
             } else if full {
                 output::render_node(context.graph_file, node, full)
             } else {
-                output::render_node_adaptive(context.graph_file, node, target_chars)
+                output::render_node_adaptive(context.graph_file, node, output_size)
             };
 
             let duration_ms = timer.elapsed_ms();
@@ -329,11 +323,6 @@ pub(crate) fn execute_node(
             )?;
             Ok(format!("- node {id} ({removed_edges} edges removed)\n"))
         }
-        NodeCommand::List(args) => Ok(if args.json {
-            crate::render_node_list_json(context.graph_file, &args)
-        } else {
-            crate::render_node_list(context.graph_file, &args)
-        }),
     }
 }
 

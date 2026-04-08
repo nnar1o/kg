@@ -58,7 +58,7 @@ const HELP_BANNER: &str = r#"▓ ▄▄
 
                                           ▀▀▀       ▀▀▀█▓▓▓▓▓▓▓█▀▀▀"#;
 
-const HELP_EXAMPLES: &str = "Examples:\n  kg create fridge\n  kg list\n  kg graph fridge node find lodowka\n  kg graph fridge node get concept:refrigerator\n  kg graph fridge list --type Process\n  kg graph fridge stats\n  kg graph fridge quality duplicates";
+const HELP_EXAMPLES: &str = "Examples:\n  kg create fridge\n  kg list\n  kg graph fridge node find lodowka\n  kg graph fridge node get concept:refrigerator\n  kg graph fridge kql \"node type=Process\"\n  kg graph fridge stats\n  kg graph fridge quality duplicates";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -245,8 +245,6 @@ pub enum GraphCommand {
         about = "Compute quality and feedback baseline metrics"
     )]
     Baseline(BaselineArgs),
-    #[command(about = "List graph nodes")]
-    List(ListNodesArgs),
 }
 
 #[derive(Debug, Args)]
@@ -432,14 +430,12 @@ pub enum NodeCommand {
         queries: Vec<String>,
         #[arg(long, default_value_t = 5)]
         limit: usize,
-        #[arg(long)]
-        include_features: bool,
         #[arg(long, value_enum, default_value_t = FindMode::Fuzzy)]
         mode: FindMode,
         #[arg(long)]
         full: bool,
-        #[arg(long)]
-        target_chars: Option<usize>,
+        #[arg(long = "output-size")]
+        output_size: Option<usize>,
         #[arg(long)]
         json: bool,
         /// Query vector for --mode vector (comma-separated f32 values)
@@ -450,11 +446,9 @@ pub enum NodeCommand {
     Get {
         id: String,
         #[arg(long)]
-        include_features: bool,
-        #[arg(long)]
         full: bool,
-        #[arg(long)]
-        target_chars: Option<usize>,
+        #[arg(long = "output-size")]
+        output_size: Option<usize>,
         #[arg(long)]
         json: bool,
     },
@@ -466,8 +460,6 @@ pub enum NodeCommand {
     Rename { from: String, to: String },
     #[command(about = "Remove a node and its incident edges")]
     Remove { id: String },
-    #[command(about = "List nodes")]
-    List(ListNodesArgs),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
@@ -475,20 +467,6 @@ pub enum FindMode {
     Fuzzy,
     Bm25,
     Vector,
-}
-
-#[derive(Debug, Args, Clone)]
-pub struct ListNodesArgs {
-    #[arg(long = "type")]
-    pub node_types: Vec<String>,
-    #[arg(long, default_value_t = 100)]
-    pub limit: usize,
-    #[arg(long)]
-    pub include_features: bool,
-    #[arg(long)]
-    pub full: bool,
-    #[arg(long)]
-    pub json: bool,
 }
 
 #[derive(Debug, Subcommand)]

@@ -61,9 +61,7 @@ struct NodeFindArgs {
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
-    target_chars: Option<usize>,
-    #[serde(default)]
-    include_features: bool,
+    output_size: Option<usize>,
     #[serde(default)]
     mode: Option<String>,
     #[serde(default)]
@@ -79,9 +77,7 @@ struct NodeGetArgs {
     graph: String,
     id: String,
     #[serde(default)]
-    target_chars: Option<usize>,
-    #[serde(default)]
-    include_features: bool,
+    output_size: Option<usize>,
     #[serde(default)]
     full: bool,
     #[serde(default)]
@@ -275,12 +271,6 @@ fn default_gap_limit() -> usize {
 struct KgPromptArgs {
     graph: String,
     goal: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct FeedbackArgs {
-    #[schemars(description = "Feedback line, e.g. `uid=abc123 YES` or `uid=abc123 PICK 2`")]
-    line: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -827,14 +817,6 @@ impl KgMcpServer {
         ))
     }
 
-    fn append_feedback_log_line(&self, line: &str) {
-        // Best-effort logging; never fail tool calls due to IO.
-        let path = self.cwd.join("kg-mcp.feedback.log");
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
-            let _ = file.write_all(line.as_bytes());
-        }
-    }
-
     fn append_feedback_log(&self, data: &str) {
         // Best-effort logging; never fail tool calls due to IO.
         let path = self.cwd.join("kg-mcp.feedback.log");
@@ -1124,12 +1106,9 @@ impl KgMcpServer {
             cmd.push("--limit".to_owned());
             cmd.push(limit.to_string());
         }
-        if let Some(target_chars) = args.target_chars {
-            cmd.push("--target-chars".to_owned());
-            cmd.push(target_chars.to_string());
-        }
-        if args.include_features {
-            cmd.push("--include-features".to_owned());
+        if let Some(output_size) = args.output_size {
+            cmd.push("--output-size".to_owned());
+            cmd.push(output_size.to_string());
         }
         if let Some(mode) = args.mode {
             cmd.push("--mode".to_owned());
@@ -1274,12 +1253,9 @@ impl KgMcpServer {
         let graph = args.graph.clone();
         let node_id = args.id.clone();
         let mut cmd = vec![args.graph, "node".to_owned(), "get".to_owned(), args.id];
-        if let Some(target_chars) = args.target_chars {
-            cmd.push("--target-chars".to_owned());
-            cmd.push(target_chars.to_string());
-        }
-        if args.include_features {
-            cmd.push("--include-features".to_owned());
+        if let Some(output_size) = args.output_size {
+            cmd.push("--output-size".to_owned());
+            cmd.push(output_size.to_string());
         }
         if args.full {
             cmd.push("--full".to_owned());
@@ -1363,7 +1339,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg",
-        description = "Run one or more kg commands separated by ';' or newlines. Supports feedback lines like `uid=abc123 YES`. Example: `uid=aa01bc YES; graph fridge node find \"smart fridge\"; graph fridge node get concept:refrigerator`."
+        description = "Run one or more kg commands separated by ';' or newlines. Supports batch workflows that mix `find`, `get`, `kql`, and feedback lines like `uid=abc123 YES`. Example: `graph fridge node find \"smart fridge\" --output-size 1200; uid=aa01bc YES; graph fridge node get concept:refrigerator --full`."
     )]
     fn kg(&self, Parameters(args): Parameters<KgScriptArgs>) -> Result<CallToolResult, McpError> {
         let request_debug = args.debug;
@@ -1707,79 +1683,13 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_node_find",
-        description = "Find nodes by one or more search queries. Use skip_feedback=true for lookup-only queries (no feedback required). Otherwise check structured_content.requires_feedback and send kg_feedback before continuing. Prefer `kg` when issuing multiple commands."
+        description = "Find nodes by one or more search queries. Supports `limit`, `mode`, `full`, and `output_size`. Feature nodes are always included. Use skip_feedback=true for lookup-only queries; otherwise check structured_content.requires_feedback and respond via kg_feedback_batch before continuing. Prefer `kg` for batched search workflows."
     )]
     fn kg_node_find(
         &self,
         Parameters(args): Parameters<NodeFindArgs>,
     ) -> Result<CallToolResult, McpError> {
         self.handle_node_find(args)
-    }
-
-    #[tool(
-        name = "kg_feedback",
-        description = "Record whether a search result was useful (uid + YES/NO/PICK). Prefer `kg` when combining feedback with new queries."
-    )]
-    fn kg_feedback(
-        &self,
-        Parameters(args): Parameters<FeedbackArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let parsed = parse_feedback_line(&args.line).ok_or_else(|| {
-            McpError::invalid_params(
-                "invalid feedback line",
-                Some(json!({
-                    "expected": "uid=<id> YES|NO|NIL | uid=<id> PICK <n>",
-                    "got": args.line
-                })),
-            )
-        })?;
-
-        let now_ms = Self::now_ms();
-        let (graph, queries, selected) = {
-            let mut state = self.feedback_state.lock().map_err(|_| {
-                McpError::internal_error(
-                    "kg feedback state lock poisoned",
-                    Some(json!({ "reason": "previous tool panicked" })),
-                )
-            })?;
-            cleanup_old_finds(&mut state.finds, now_ms, 10 * 60 * 1000);
-            if let Some(ctx) = state.finds.get(&parsed.uid) {
-                let ctx_graph = ctx.graph.clone();
-                let ctx_queries = ctx.queries.clone();
-                let selected = match (parsed.action.as_str(), parsed.pick) {
-                    ("PICK", Some(n)) if n >= 1 && n <= ctx.candidate_ids.len() => {
-                        Some(ctx.candidate_ids[n - 1].clone())
-                    }
-                    ("YES", None) if ctx.candidate_ids.len() == 1 => {
-                        Some(ctx.candidate_ids[0].clone())
-                    }
-                    _ => None,
-                };
-                update_feedback_stats(&mut state, &ctx_queries, &parsed.action);
-                (Some(ctx_graph), Some(ctx_queries), selected)
-            } else {
-                (None, None, None)
-            }
-        };
-
-        let log_line = format!(
-            "ts_ms={}\tuid={}\taction={}\tpick={}\tselected={}\tgraph={}\tqueries={}\n",
-            now_ms,
-            parsed.uid,
-            parsed.action,
-            parsed
-                .pick
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "-".to_owned()),
-            selected.unwrap_or_else(|| "-".to_owned()),
-            graph.unwrap_or_else(|| "-".to_owned()),
-            queries.unwrap_or_default().join(" | ").replace('\t', " ")
-        );
-        self.append_feedback_log_line(&log_line);
-
-        Ok(CallToolResult::success(vec![Content::text(
-            "OK\n".to_owned(),
-        )]))
     }
 
     #[tool(
@@ -1818,7 +1728,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_node_get",
-        description = "Get a node by its id. Always check structured_content.requires_feedback and send kg_feedback (or kg_feedback_batch) before continuing. Prefer `kg` when issuing multiple commands."
+        description = "Get a node by its id. Supports `full` and `output_size`. Feature nodes are always included. Always check structured_content.requires_feedback and respond via kg_feedback_batch before continuing. Prefer `kg` when batching get/search commands."
     )]
     fn kg_node_get(
         &self,
@@ -2942,8 +2852,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
     let graph = args[0].clone();
     let mut queries = Vec::new();
     let mut limit = None;
-    let mut target_chars = None;
-    let mut include_features = false;
+    let mut output_size = None;
     let mut mode = None;
     let mut full = false;
 
@@ -2965,21 +2874,16 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
             i += 1;
             continue;
         }
-        if token == "--include-features" {
-            include_features = true;
-            i += 1;
-            continue;
-        }
-        if token == "--target-chars" {
+        if token == "--output-size" {
             i += 1;
             if i >= args.len() {
-                return Some(Err("missing value for --target-chars".to_owned()));
+                return Some(Err("missing value for --output-size".to_owned()));
             }
             let value = args[i]
                 .parse::<usize>()
-                .map_err(|_| "invalid value for --target-chars".to_owned());
+                .map_err(|_| "invalid value for --output-size".to_owned());
             match value {
-                Ok(n) => target_chars = Some(n),
+                Ok(n) => output_size = Some(n),
                 Err(err) => return Some(Err(err)),
             }
             i += 1;
@@ -3014,8 +2918,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
         graph,
         queries,
         limit,
-        target_chars,
-        include_features,
+        output_size,
         mode,
         full,
         skip_feedback: false,
@@ -3037,28 +2940,22 @@ fn parse_node_get_args(args: &[String]) -> Option<Result<NodeGetArgs, String>> {
         return Some(Err("missing node id".to_owned()));
     }
 
-    let mut target_chars = None;
-    let mut include_features = false;
+    let mut output_size = None;
     let mut full = false;
 
     let mut i = 4;
     while i < args.len() {
         let token = &args[i];
-        if token == "--include-features" {
-            include_features = true;
-            i += 1;
-            continue;
-        }
-        if token == "--target-chars" {
+        if token == "--output-size" {
             i += 1;
             if i >= args.len() {
-                return Some(Err("missing value for --target-chars".to_owned()));
+                return Some(Err("missing value for --output-size".to_owned()));
             }
             let value = args[i]
                 .parse::<usize>()
-                .map_err(|_| "invalid value for --target-chars".to_owned());
+                .map_err(|_| "invalid value for --output-size".to_owned());
             match value {
-                Ok(n) => target_chars = Some(n),
+                Ok(n) => output_size = Some(n),
                 Err(err) => return Some(Err(err)),
             }
             i += 1;
@@ -3078,8 +2975,7 @@ fn parse_node_get_args(args: &[String]) -> Option<Result<NodeGetArgs, String>> {
     Some(Ok(NodeGetArgs {
         graph,
         id,
-        target_chars,
-        include_features,
+        output_size,
         full,
         debug: false,
     }))
@@ -3327,7 +3223,7 @@ fn parse_find_total_results(rendered: &str) -> Option<usize> {
         if !line.starts_with("? ") {
             continue;
         }
-        // Expected: "? query (N)"
+        // Expected: "? query (N)" or "? query (shown/total)"
         let open = match line.rfind('(') {
             Some(v) => v,
             None => continue,
@@ -3343,7 +3239,12 @@ fn parse_find_total_results(rendered: &str) -> Option<usize> {
             Some(v) => v,
             None => continue,
         };
-        if let Ok(n) = inside.trim().parse::<usize>() {
+        let count = if let Some((_, total)) = inside.split_once('/') {
+            total.trim().parse::<usize>().ok()
+        } else {
+            inside.trim().parse::<usize>().ok()
+        };
+        if let Some(n) = count {
             total = total.saturating_add(n);
             any = true;
         }
@@ -3386,15 +3287,11 @@ struct ParsedFeedback {
 fn parse_feedback_line(line: &str) -> Option<ParsedFeedback> {
     // Accept:
     // - "uid=abc123 YES"
-    // - "kg_feedback uid=abc123 NO"
     // - "uid=abc123 NIL"
     // - "uid=abc123 PICK 2"
-    let mut parts: Vec<&str> = line.split_whitespace().collect();
+    let parts: Vec<&str> = line.split_whitespace().collect();
     if parts.is_empty() {
         return None;
-    }
-    if parts[0].eq_ignore_ascii_case("kg_feedback") || parts[0].eq_ignore_ascii_case("feedback") {
-        parts.remove(0);
     }
     if parts.len() < 2 {
         return None;
@@ -3535,31 +3432,37 @@ mod tests {
     }
 
     #[test]
-    fn parse_node_find_args_parses_target_chars() {
+    fn parse_node_find_args_parses_output_size() {
         let args = vec![
             "fridge".to_owned(),
             "node".to_owned(),
             "find".to_owned(),
             "lodowka".to_owned(),
-            "--target-chars".to_owned(),
+            "--output-size".to_owned(),
             "900".to_owned(),
         ];
         let parsed = parse_node_find_args(&args).expect("match").expect("ok");
-        assert_eq!(parsed.target_chars, Some(900));
+        assert_eq!(parsed.output_size, Some(900));
     }
 
     #[test]
-    fn parse_node_get_args_parses_target_chars() {
+    fn parse_node_get_args_parses_output_size() {
         let args = vec![
             "fridge".to_owned(),
             "node".to_owned(),
             "get".to_owned(),
             "concept:refrigerator".to_owned(),
-            "--target-chars".to_owned(),
+            "--output-size".to_owned(),
             "750".to_owned(),
         ];
         let parsed = parse_node_get_args(&args).expect("match").expect("ok");
-        assert_eq!(parsed.target_chars, Some(750));
+        assert_eq!(parsed.output_size, Some(750));
+    }
+
+    #[test]
+    fn parse_find_total_results_supports_shown_total_headers() {
+        let rendered = "? lodowka (2/11)\n# concept:refrigerator | Lodowka [Concept]\n\n? api (1)\n# interface:smart_api | Smart API [Interface]\n";
+        assert_eq!(parse_find_total_results(rendered), Some(12));
     }
 
     #[test]

@@ -69,10 +69,10 @@ fn find_includes_outgoing_neighbor_context_by_default() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));
 
-    let output = exec_ok(&["kg", "fridge", "node", "find", "REST"], dir.path());
+    let output = exec_ok(&["kg", "fridge", "node", "find", "urlopowy"], dir.path());
 
+    assert!(output.contains("# feature:vacation_mode | Tryb Urlopowy [Feature]"));
     assert!(output.contains("# interface:smart_api | Smart Home API (REST)"));
-    assert!(output.contains("# concept:refrigerator | Lodowka"));
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn find_single_result_matches_get_adaptive_rendering() {
             "node",
             "get",
             "process:cooling",
-            "--target-chars",
+            "--output-size",
             "700",
         ],
         dir.path(),
@@ -137,7 +137,7 @@ fn find_single_result_matches_get_adaptive_rendering() {
             "node",
             "find",
             "process:cooling",
-            "--target-chars",
+            "--output-size",
             "700",
             "--limit",
             "1",
@@ -157,20 +157,6 @@ fn list_graphs_shows_available_graph_names() {
     let output = exec_ok(&["kg", "list"], dir.path());
     assert!(output.contains("= graphs (1)"));
     assert!(output.contains("- fridge"));
-}
-
-#[test]
-fn list_nodes_supports_type_filter_and_limit() {
-    let dir = temp_workspace();
-    write_fixture(&test_graph_root(dir.path()));
-    let output = exec_ok(
-        &["kg", "fridge", "list", "--type", "Process", "--limit", "1"],
-        dir.path(),
-    );
-    assert!(output.contains("= nodes (3)"));
-    assert!(output.contains("[Process]"));
-    assert!(!output.contains("[Concept]"));
-    assert!(output.contains("... 2 more nodes omitted"));
 }
 
 #[test]
@@ -343,7 +329,7 @@ fn adaptive_find_header_matches_rendered_result_count() {
             "lodowka",
             "--limit",
             "5",
-            "--target-chars",
+            "--output-size",
             "300",
         ],
         dir.path(),
@@ -365,18 +351,6 @@ fn adaptive_find_header_matches_rendered_result_count() {
 }
 
 #[test]
-fn node_list_subcommand_matches_graph_list() {
-    let dir = temp_workspace();
-    write_fixture(&test_graph_root(dir.path()));
-    let graph_list = exec_ok(&["kg", "fridge", "list", "--limit", "5"], dir.path());
-    let node_list = exec_ok(
-        &["kg", "fridge", "node", "list", "--limit", "5"],
-        dir.path(),
-    );
-    assert_eq!(graph_list, node_list);
-}
-
-#[test]
 fn resolve_graph_path_uses_config_mapping() {
     let dir = temp_workspace();
     let mapped_dir = dir.path().join("mapped");
@@ -390,7 +364,7 @@ fn resolve_graph_path_uses_config_mapping() {
 }
 
 #[test]
-fn get_with_large_target_chars_shows_richer_adaptive_output() {
+fn get_with_large_output_size_shows_richer_adaptive_output() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));
 
@@ -401,7 +375,7 @@ fn get_with_large_target_chars_shows_richer_adaptive_output() {
             "node",
             "get",
             "concept:refrigerator",
-            "--target-chars",
+            "--output-size",
             "12000",
         ],
         dir.path(),
@@ -414,7 +388,7 @@ fn get_with_large_target_chars_shows_richer_adaptive_output() {
 }
 
 #[test]
-fn find_with_large_target_chars_shows_description_for_single_result() {
+fn find_with_large_output_size_shows_description_for_single_result() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));
 
@@ -425,7 +399,7 @@ fn find_with_large_target_chars_shows_description_for_single_result() {
             "node",
             "find",
             "lodowka",
-            "--target-chars",
+            "--output-size",
             "12000",
         ],
         dir.path(),
@@ -543,6 +517,28 @@ fn get_full_renders_attached_notes() {
     assert!(output.contains("note_created_at: 2026-04-07T12:00:00Z"));
     assert!(output.contains("note_provenance: manual"));
     assert!(output.contains("note_sources: notes.md"));
+}
+
+#[test]
+fn find_and_get_include_feature_nodes_by_default() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let get_output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "get",
+            "feature:vacation_mode",
+            "--full",
+        ],
+        dir.path(),
+    );
+    assert!(get_output.contains("# feature:vacation_mode | Tryb Urlopowy [Feature]"));
+
+    let find_output = exec_ok(&["kg", "fridge", "node", "find", "urlopowy"], dir.path());
+    assert!(find_output.contains("# feature:vacation_mode | Tryb Urlopowy [Feature]"));
 }
 
 #[test]

@@ -9,7 +9,7 @@ use crate::analysis::{
 };
 use crate::cli::{
     AuditArgs, BaselineArgs, CheckArgs, FeedbackLogArgs, FeedbackSummaryArgs, KqlArgs,
-    ListNodesArgs, QualityCommand, StatsArgs,
+    QualityCommand, StatsArgs,
 };
 use crate::graph::GraphFile;
 use crate::kql;
@@ -128,12 +128,4 @@ pub(crate) fn execute_baseline(
 ) -> Result<String> {
     let quality = compute_quality_snapshot(graph, args.include_features, 0.85);
     crate::render_baseline_report(cwd, graph_name, graph, &quality, args)
-}
-
-pub(crate) fn execute_node_list(graph: &GraphFile, args: &ListNodesArgs) -> String {
-    if args.json {
-        crate::render_node_list_json(graph, args)
-    } else {
-        crate::render_node_list(graph, args)
-    }
 }

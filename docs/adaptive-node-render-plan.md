@@ -9,7 +9,7 @@ The feature should work the same way in both CLI and MCP text responses.
 ## Primary behavior
 
 - Default target size: `1400` characters.
-- New option for CLI and MCP text rendering: `target_chars` / `--target-chars`.
+- New option for CLI and MCP text rendering: `output_size` / `--output-size`.
 - `--full` keeps the current non-adaptive behavior.
 - `--json` keeps the current non-adaptive behavior.
 - Adaptive rendering is enabled by default for normal text output in `node find` and `node get`.
@@ -160,21 +160,21 @@ The adaptive rendering rules should be shared between CLI and MCP.
 
 ### CLI
 
-- Add `--target-chars <n>` to `node find` and `node get`.
+- Add `--output-size <n>` to `node find` and `node get`.
 - Default text output uses adaptive rendering.
 - `--full` and `--json` bypass adaptive rendering.
 
 ### MCP
 
-- Add `target_chars` to `kg_node_find` and `kg_node_get`.
-- Extend the shell-style `kg` parser to support `--target-chars`.
+- Add `output_size` to `kg_node_find` and `kg_node_get`.
+- Extend the shell-style `kg` parser to support `--output-size`.
 - MCP should reuse the same adaptive renderer as CLI.
 
 ## Code changes
 
 ### `src/cli.rs`
 
-- Add `target_chars: Option<usize>` to `NodeCommand::Find` and `NodeCommand::Get`.
+- Add `output_size: Option<usize>` to `NodeCommand::Find` and `NodeCommand::Get`.
 
 ### `src/app/graph_node_edge.rs`
 
@@ -200,20 +200,20 @@ Suggested helper areas:
 
 ### `src/bin/kg-mcp.rs`
 
-- Add `target_chars` to `NodeFindArgs` and `NodeGetArgs`.
-- Parse `--target-chars` in shell-style command parsing.
+- Add `output_size` to `NodeFindArgs` and `NodeGetArgs`.
+- Parse `--output-size` in shell-style command parsing.
 - Pass the value through to the existing CLI-backed calls.
 
 ## Testing
 
 Add tests for at least the following cases:
 
-- `node get` respects `--target-chars` and stays near budget
+- `node get` respects `--output-size` and stays near budget
 - `node find` with one result prefers deeper output than `depth=0` when budget allows
 - `node find` with many results shrinks detail before dropping all context
 - hub node output shows link aggregation and omission markers
 - `--full` preserves current behavior
-- MCP shell parser accepts `--target-chars`
+- MCP shell parser accepts `--output-size`
 - CLI and MCP text semantics remain aligned
 
 ## Recommended rollout

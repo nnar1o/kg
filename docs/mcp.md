@@ -9,7 +9,7 @@ If you are new to MCP, start with `kg-mcp` as a local stdio process (no network 
 1. Ensure `kg-mcp` is installed and runnable.
 2. Add it to your MCP client config.
 3. Restart the client and verify tools appear.
-4. Run a simple tool call (`kg_node_find` or `kg`).
+4. Run a simple tool call (`kg_node_find`, `kg_node_get`, or `kg`).
 
 For edge work, start with `kg_schema` so you can see valid relations, allowed source/target types, and ID prefixes before mutating the graph.
 
@@ -61,13 +61,13 @@ Tip: during local development, prefer `cargo run --quiet --bin kg-mcp` in client
 
 - `kg` — run multiple commands separated by `;` or newlines
 
-Good for compact workflows, for example:
+Good for compact read workflows, for example:
 
 ```text
-create fridge; graph fridge node add concept:refrigerator --type Concept --name Refrigerator
+graph fridge node find refrigerator --output-size 1200; uid=abc123 YES; graph fridge node get concept:refrigerator --full
 ```
 
-The shell tool passes normal CLI flags through unchanged, including edge details such as `--detail "requires periodic defrost"`.
+The shell tool passes normal CLI flags through unchanged. For read/search flows it mirrors the CLI surface for `node find`, `node get`, and `kql`, including `--output-size`, `--limit`, `--mode`, and `--full`.
 
 ### Core tools
 
@@ -79,8 +79,8 @@ The shell tool passes normal CLI flags through unchanged, including edge details
 
 ### Nodes
 
-- `kg_node_find` — search nodes by query
-- `kg_node_get` — get node by ID
+- `kg_node_find` — search nodes by query, with `limit`, `mode`, `full`, and `output_size`; feature nodes are always included
+- `kg_node_get` — get node by ID, with `full` and `output_size`; feature nodes are always included
 - `kg_node_add` — create single node
 - `kg_node_add_batch` — create multiple nodes, with `mode=atomic|best_effort` and optional `on_conflict=skip`
 - `kg_node_modify` — update node fields
@@ -119,8 +119,9 @@ Example batch preflight:
 
 ### Feedback
 
-- `kg_feedback` — record YES/NO/PICK feedback
 - `kg_feedback_batch` — batch feedback
+
+For `kg_node_find` and `kg_node_get`, inspect `structured_content.requires_feedback` and send follow-up feedback with `kg_feedback_batch` before continuing when requested.
 
 ### Access
 
@@ -145,7 +146,7 @@ Example batch preflight:
 ## Common issues
 
 - Tools not visible in client: verify command path and restart the client process.
-- Feedback-required flow in some operations: follow tool response metadata and submit required feedback before continuing.
+- Feedback-required flow in some operations: follow tool response metadata and submit required feedback through `kg_feedback_batch` before continuing.
 - Unexpected graph format behavior: check whether runtime is using default `.kg` mode or `--legacy` JSON mode.
 
 See also: [`docs/troubleshooting.md`](troubleshooting.md)
