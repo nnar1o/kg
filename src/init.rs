@@ -1,7 +1,5 @@
 use crate::cli::{InitArgs, InitTarget};
 
-const DOC_SKILL: &str = include_str!("../skills/kg-builder/SKILL.md");
-
 pub fn render_init(args: &InitArgs) -> String {
     match args.target {
         InitTarget::Cli => render_cli(),
@@ -64,12 +62,13 @@ fn render_mcp(client: Option<&str>) -> String {
 }
 
 fn render_doc_skill() -> String {
-    let mut out = String::new();
-    out.push_str("# kg init: doc -> graph\n\n");
-    out.push_str("Copy the skill text below into your client:\n\n");
-    out.push_str(DOC_SKILL);
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
+    [
+        "# kg init: doc -> graph",
+        "",
+        "The legacy bundled skill file was removed from the repository.",
+        "Use docs in `docs/mcp.md` and `docs/node-and-edge-fields-reference.md`",
+        "as the starting prompt/context for doc-to-graph extraction workflows.",
+        "",
+    ]
+    .join("\n")
 }
