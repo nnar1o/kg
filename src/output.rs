@@ -1,9 +1,9 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-use crate::graph::{Edge, GraphFile, Node};
+use crate::graph::{Edge, GraphFile, Node, Note};
 use crate::index::Bm25Index;
 
 const BM25_K1: f64 = 1.5;
@@ -19,6 +19,14 @@ const FUZZY_NOTE_BODY_WEIGHT: u32 = 1;
 const FUZZY_NOTE_TAG_WEIGHT: u32 = 2;
 const BM25_PHRASE_MATCH_BOOST: i64 = 120;
 const BM25_TOKEN_MATCH_BOOST: i64 = 45;
+const BM25_ID_WEIGHT: usize = 4;
+const BM25_NAME_WEIGHT: usize = 3;
+const BM25_ALIAS_WEIGHT: usize = 2;
+const BM25_DESCRIPTION_WEIGHT: usize = 2;
+const BM25_FACT_WEIGHT: usize = 2;
+const BM25_NOTE_BODY_WEIGHT: usize = 1;
+const BM25_NOTE_TAG_WEIGHT: usize = 1;
+const BM25_NEIGHBOR_WEIGHT: usize = 1;
 const IMPORTANCE_NEUTRAL: i64 = 4;
 const IMPORTANCE_STEP_BOOST: i64 = 22;
 const SCORE_META_MAX_RATIO: f64 = 0.35;
@@ -54,6 +62,70 @@ struct RawCandidate<'a> {
     node: &'a Node,
     raw_relevance: f64,
     lexical_boost: i64,
+}
+
+struct FindQueryContext<'a> {
+    notes_by_node: HashMap<&'a str, Vec<&'a Note>>,
+    neighbors_by_node: HashMap<&'a str, Vec<&'a Node>>,
+}
+
+impl<'a> FindQueryContext<'a> {
+    fn build(graph: &'a GraphFile) -> Self {
+        let node_by_id: HashMap<&'a str, &'a Node> = graph
+            .nodes
+            .iter()
+            .map(|node| (node.id.as_str(), node))
+            .collect();
+
+        let mut notes_by_node: HashMap<&'a str, Vec<&'a Note>> = HashMap::new();
+        for note in &graph.notes {
+            notes_by_node
+                .entry(note.node_id.as_str())
+                .or_default()
+                .push(note);
+        }
+
+        let mut neighbors_by_node: HashMap<&'a str, Vec<&'a Node>> = HashMap::new();
+        for edge in &graph.edges {
+            if let (Some(source), Some(target)) = (
+                node_by_id.get(edge.source_id.as_str()),
+                node_by_id.get(edge.target_id.as_str()),
+            ) {
+                neighbors_by_node
+                    .entry(source.id.as_str())
+                    .or_default()
+                    .push(*target);
+                neighbors_by_node
+                    .entry(target.id.as_str())
+                    .or_default()
+                    .push(*source);
+            }
+        }
+
+        for neighbors in neighbors_by_node.values_mut() {
+            neighbors.sort_by(|left, right| left.id.cmp(&right.id));
+            neighbors.dedup_by(|left, right| left.id == right.id);
+        }
+
+        Self {
+            notes_by_node,
+            neighbors_by_node,
+        }
+    }
+
+    fn notes_for(&self, node_id: &str) -> &[&'a Note] {
+        self.notes_by_node
+            .get(node_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn neighbors_for(&self, node_id: &str) -> &[&'a Node] {
+        self.neighbors_by_node
+            .get(node_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -959,32 +1031,6 @@ fn incoming_edges<'a>(graph: &'a GraphFile, node_id: &str, full: bool) -> Vec<&'
     edges
 }
 
-fn neighbor_nodes<'a>(graph: &'a GraphFile, node_id: &str) -> Vec<&'a Node> {
-    let mut seen = HashSet::new();
-    let mut nodes = Vec::new();
-
-    for edge in &graph.edges {
-        let related_id = if edge.source_id == node_id {
-            Some(edge.target_id.as_str())
-        } else if edge.target_id == node_id {
-            Some(edge.source_id.as_str())
-        } else {
-            None
-        };
-
-        if let Some(related_id) = related_id {
-            if seen.insert(related_id) {
-                if let Some(node) = graph.node_by_id(related_id) {
-                    nodes.push(node);
-                }
-            }
-        }
-    }
-
-    nodes.sort_by(|left, right| left.id.cmp(&right.id));
-    nodes
-}
-
 fn render_edge_lines(prefix: &str, edge: &Edge, related: &Node, full: bool) -> Vec<String> {
     let (arrow, relation) = if edge.relation.starts_with("NOT_") {
         (
@@ -1142,6 +1188,7 @@ fn find_all_matches_with_index<'a>(
     mode: FindMode,
     index: Option<&Bm25Index>,
 ) -> Vec<ScoredNode<'a>> {
+    let context = FindQueryContext::build(graph);
     let mut scored: Vec<ScoredNode<'a>> = match mode {
         FindMode::Fuzzy => {
             let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
@@ -1151,7 +1198,7 @@ fn find_all_matches_with_index<'a>(
                 .iter()
                 .filter(|node| include_features || node.r#type != "Feature")
                 .filter_map(|node| {
-                    score_node(graph, node, query, &pattern, &mut matcher).map(|score| {
+                    score_node(&context, node, query, &pattern, &mut matcher).map(|score| {
                         RawCandidate {
                             node,
                             raw_relevance: score as f64,
@@ -1162,7 +1209,13 @@ fn find_all_matches_with_index<'a>(
                 .collect();
             compose_scores(candidates)
         }
-        FindMode::Bm25 => compose_scores(score_bm25_raw(graph, query, include_features, index)),
+        FindMode::Bm25 => compose_scores(score_bm25_raw(
+            graph,
+            &context,
+            query,
+            include_features,
+            index,
+        )),
     };
 
     scored.sort_by(|left, right| {
@@ -1179,6 +1232,7 @@ fn compose_scores<'a>(candidates: Vec<RawCandidate<'a>>) -> Vec<ScoredNode<'a>> 
         .iter()
         .map(|candidate| candidate.raw_relevance)
         .fold(0.0f64, f64::max);
+    let max_raw_log = max_raw.ln_1p();
 
     candidates
         .into_iter()
@@ -1186,8 +1240,8 @@ fn compose_scores<'a>(candidates: Vec<RawCandidate<'a>>) -> Vec<ScoredNode<'a>> 
             if candidate.raw_relevance <= 0.0 {
                 return None;
             }
-            let normalized_relevance = if max_raw > 0.0 {
-                ((candidate.raw_relevance / max_raw) * 1000.0).round() as i64
+            let normalized_relevance = if max_raw_log > 0.0 {
+                ((candidate.raw_relevance.ln_1p() / max_raw_log) * 1000.0).round() as i64
             } else {
                 0
             };
@@ -1235,6 +1289,7 @@ fn importance_boost(node: &Node) -> i64 {
 
 fn score_bm25_raw<'a>(
     graph: &'a GraphFile,
+    context: &FindQueryContext<'a>,
     query: &str,
     include_features: bool,
     index: Option<&Bm25Index>,
@@ -1253,7 +1308,8 @@ fn score_bm25_raw<'a>(
                 if !include_features && node.r#type == "Feature" {
                     return None;
                 }
-                let lexical_boost = bm25_lexical_boost(query, &node_document_text(graph, node));
+                let document_terms = node_document_terms(context, node);
+                let lexical_boost = bm25_lexical_boost(&terms, &document_terms);
                 Some(RawCandidate {
                     node,
                     raw_relevance: score as f64 * 100.0 + lexical_boost as f64,
@@ -1263,15 +1319,11 @@ fn score_bm25_raw<'a>(
             .collect();
     }
 
-    let mut docs: Vec<(&'a Node, String, Vec<String>)> = graph
+    let mut docs: Vec<(&'a Node, Vec<String>)> = graph
         .nodes
         .iter()
         .filter(|node| include_features || node.r#type != "Feature")
-        .map(|node| {
-            let document = node_document_text(graph, node);
-            let tokens = tokenize(&document);
-            (node, document, tokens)
-        })
+        .map(|node| (node, node_document_terms(context, node)))
         .collect();
 
     if docs.is_empty() {
@@ -1281,7 +1333,7 @@ fn score_bm25_raw<'a>(
     let mut df: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for term in &terms {
         let mut count = 0usize;
-        for (_, _, tokens) in &docs {
+        for (_, tokens) in &docs {
             if tokens.iter().any(|t| t == term) {
                 count += 1;
             }
@@ -1292,13 +1344,13 @@ fn score_bm25_raw<'a>(
     let total_docs = docs.len() as f64;
     let avgdl = docs
         .iter()
-        .map(|(_, _, tokens)| tokens.len() as f64)
+        .map(|(_, tokens)| tokens.len() as f64)
         .sum::<f64>()
         / total_docs;
 
     let mut scored = Vec::new();
 
-    for (node, document, tokens) in docs.drain(..) {
+    for (node, tokens) in docs.drain(..) {
         let dl = tokens.len() as f64;
         if dl == 0.0 {
             continue;
@@ -1315,7 +1367,7 @@ fn score_bm25_raw<'a>(
             score += idf * (tf * (BM25_K1 + 1.0) / denom);
         }
         if score > 0.0 {
-            let lexical_boost = bm25_lexical_boost(query, &document);
+            let lexical_boost = bm25_lexical_boost(&terms, &tokens);
             scored.push(RawCandidate {
                 node,
                 raw_relevance: score * 100.0 + lexical_boost as f64,
@@ -1327,42 +1379,50 @@ fn score_bm25_raw<'a>(
     scored
 }
 
-fn node_document_text(graph: &GraphFile, node: &Node) -> String {
-    let mut out = String::new();
-    push_field(&mut out, &node.id);
-    push_field(&mut out, &node.name);
-    push_field(&mut out, &node.properties.description);
+fn node_document_terms(context: &FindQueryContext<'_>, node: &Node) -> Vec<String> {
+    let mut tokens = Vec::new();
+    push_terms(&mut tokens, &node.id, BM25_ID_WEIGHT);
+    push_terms(&mut tokens, &node.name, BM25_NAME_WEIGHT);
+    push_terms(
+        &mut tokens,
+        &node.properties.description,
+        BM25_DESCRIPTION_WEIGHT,
+    );
     for alias in &node.properties.alias {
-        push_field(&mut out, alias);
+        push_terms(&mut tokens, alias, BM25_ALIAS_WEIGHT);
     }
     for fact in &node.properties.key_facts {
-        push_field(&mut out, fact);
+        push_terms(&mut tokens, fact, BM25_FACT_WEIGHT);
     }
-    for note in graph.notes.iter().filter(|note| note.node_id == node.id) {
-        push_field(&mut out, &note.body);
+    for note in context.notes_for(&node.id) {
+        push_terms(&mut tokens, &note.body, BM25_NOTE_BODY_WEIGHT);
         for tag in &note.tags {
-            push_field(&mut out, tag);
+            push_terms(&mut tokens, tag, BM25_NOTE_TAG_WEIGHT);
         }
     }
-    for neighbor in neighbor_nodes(graph, &node.id) {
-        push_field(&mut out, &neighbor.id);
-        push_field(&mut out, &neighbor.name);
-        push_field(&mut out, &neighbor.properties.description);
+    for neighbor in context.neighbors_for(&node.id) {
+        push_terms(&mut tokens, &neighbor.id, BM25_NEIGHBOR_WEIGHT);
+        push_terms(&mut tokens, &neighbor.name, BM25_NEIGHBOR_WEIGHT);
+        push_terms(
+            &mut tokens,
+            &neighbor.properties.description,
+            BM25_NEIGHBOR_WEIGHT,
+        );
         for alias in &neighbor.properties.alias {
-            push_field(&mut out, alias);
+            push_terms(&mut tokens, alias, BM25_NEIGHBOR_WEIGHT);
         }
     }
-    out
+    tokens
 }
 
-fn push_field(target: &mut String, value: &str) {
+fn push_terms(target: &mut Vec<String>, value: &str, weight: usize) {
     if value.is_empty() {
         return;
     }
-    if !target.is_empty() {
-        target.push(' ');
+    let terms = tokenize(value);
+    for _ in 0..weight {
+        target.extend(terms.iter().cloned());
     }
-    target.push_str(value);
 }
 
 fn tokenize(text: &str) -> Vec<String> {
@@ -1374,8 +1434,7 @@ fn tokenize(text: &str) -> Vec<String> {
                 current.push(lower);
             }
         } else if !current.is_empty() {
-            tokens.push(current.clone());
-            current.clear();
+            tokens.push(std::mem::take(&mut current));
         }
     }
     if !current.is_empty() {
@@ -1384,27 +1443,24 @@ fn tokenize(text: &str) -> Vec<String> {
     tokens
 }
 
-fn bm25_lexical_boost(query: &str, document: &str) -> i64 {
-    let query_terms = tokenize(query);
-    if query_terms.is_empty() {
+fn bm25_lexical_boost(query_terms: &[String], document_terms: &[String]) -> i64 {
+    if query_terms.is_empty() || document_terms.is_empty() {
         return 0;
     }
-    let document_terms = tokenize(document);
-    if document_terms.is_empty() {
-        return 0;
-    }
-    if contains_token_phrase(&document_terms, &query_terms) {
+    if query_terms.len() > 1 && contains_token_phrase(document_terms, query_terms) {
         return BM25_PHRASE_MATCH_BOOST;
     }
-    let document_vocab: std::collections::HashSet<&str> =
-        document_terms.iter().map(String::as_str).collect();
-    let query_vocab: std::collections::HashSet<&str> =
-        query_terms.iter().map(String::as_str).collect();
+    let document_vocab: HashSet<&str> = document_terms.iter().map(String::as_str).collect();
+    let query_vocab: HashSet<&str> = query_terms.iter().map(String::as_str).collect();
     let matched_tokens = query_vocab
         .iter()
         .filter(|token| document_vocab.contains(**token))
         .count() as i64;
-    matched_tokens * BM25_TOKEN_MATCH_BOOST
+    if matched_tokens == 0 {
+        return 0;
+    }
+    let query_token_count = query_vocab.len() as i64;
+    (matched_tokens * BM25_TOKEN_MATCH_BOOST + query_token_count - 1) / query_token_count
 }
 
 fn contains_token_phrase(document_terms: &[String], query_terms: &[String]) -> bool {
@@ -1417,7 +1473,7 @@ fn contains_token_phrase(document_terms: &[String], query_terms: &[String]) -> b
 }
 
 fn score_node(
-    graph: &GraphFile,
+    context: &FindQueryContext<'_>,
     node: &Node,
     query: &str,
     pattern: &Pattern,
@@ -1456,9 +1512,9 @@ fn score_node(
     for fact in &node.properties.key_facts {
         contextual_score += score_secondary_field(query, pattern, matcher, fact, FUZZY_FACT_WEIGHT);
     }
-    contextual_score += score_notes_context(graph, node, query, pattern, matcher);
+    contextual_score += score_notes_context(context, node, query, pattern, matcher);
 
-    let neighbor_context = score_neighbor_context(graph, node, query, pattern, matcher)
+    let neighbor_context = score_neighbor_context(context, node, query, pattern, matcher)
         .min(FUZZY_NEIGHBOR_CONTEXT_CAP);
     contextual_score += if primary_hits > 0 {
         neighbor_context / 2
@@ -1475,14 +1531,14 @@ fn score_node(
 }
 
 fn score_notes_context(
-    graph: &GraphFile,
+    context: &FindQueryContext<'_>,
     node: &Node,
     query: &str,
     pattern: &Pattern,
     matcher: &mut Matcher,
 ) -> u32 {
     let mut total = 0;
-    for note in graph.notes.iter().filter(|note| note.node_id == node.id) {
+    for note in context.notes_for(&node.id) {
         total += score_secondary_field(query, pattern, matcher, &note.body, FUZZY_NOTE_BODY_WEIGHT);
         for tag in &note.tags {
             total += score_secondary_field(query, pattern, matcher, tag, FUZZY_NOTE_TAG_WEIGHT);
@@ -1492,7 +1548,7 @@ fn score_notes_context(
 }
 
 fn score_neighbor_context(
-    graph: &GraphFile,
+    context: &FindQueryContext<'_>,
     node: &Node,
     query: &str,
     pattern: &Pattern,
@@ -1500,7 +1556,7 @@ fn score_neighbor_context(
 ) -> u32 {
     let mut best = 0;
 
-    for neighbor in neighbor_nodes(graph, &node.id) {
+    for neighbor in context.neighbors_for(&node.id) {
         let mut score = score_secondary_field(query, pattern, matcher, &neighbor.id, 1)
             + score_secondary_field(query, pattern, matcher, &neighbor.name, 1)
             + score_secondary_field(query, pattern, matcher, &neighbor.properties.description, 1);
@@ -1657,15 +1713,19 @@ mod tests {
 
     #[test]
     fn bm25_lexical_boost_prefers_phrase_then_tokens() {
+        let query_terms = tokenize("smart home api");
         assert_eq!(
-            bm25_lexical_boost("smart home api", "x smart home api y"),
+            bm25_lexical_boost(&query_terms, &tokenize("x smart home api y")),
             120
         );
         assert_eq!(
-            bm25_lexical_boost("smart home api", "smart x api y home"),
-            135
+            bm25_lexical_boost(&query_terms, &tokenize("smart x api y home")),
+            45
         );
-        assert_eq!(bm25_lexical_boost("smart home api", "nothing here"), 0);
+        assert_eq!(
+            bm25_lexical_boost(&query_terms, &tokenize("nothing here")),
+            0
+        );
     }
 
     #[test]
@@ -1695,15 +1755,17 @@ mod tests {
             CaseMatching::Ignore,
             Normalization::Smart,
         );
+        let context = FindQueryContext::build(&graph);
         let mut matcher = Matcher::new(Config::DEFAULT);
-        let score = score_node(&graph, &node, "oauth2 producenta", &pattern, &mut matcher);
+        let score = score_node(&context, &node, "oauth2 producenta", &pattern, &mut matcher);
         assert!(score.is_some_and(|value| value > 0));
 
         let empty_graph = GraphFile::new("empty");
         let empty_node = make_node("concept:gateway", "Gateway", "", &[], &[], 4, 0.0, 0);
+        let empty_context = FindQueryContext::build(&empty_graph);
         let mut matcher = Matcher::new(Config::DEFAULT);
         let empty_score = score_node(
-            &empty_graph,
+            &empty_context,
             &empty_node,
             "oauth2 producenta",
             &pattern,
