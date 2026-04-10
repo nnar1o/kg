@@ -419,7 +419,13 @@ fn render_graph_list_json(store: &dyn GraphStore) -> Result<String> {
 struct FindQueryResult {
     query: String,
     count: usize,
-    nodes: Vec<Node>,
+    nodes: Vec<ScoredFindNode>,
+}
+
+#[derive(Debug, Serialize)]
+struct ScoredFindNode {
+    score: i64,
+    node: Node,
 }
 
 #[derive(Debug, Serialize)]
@@ -438,9 +444,13 @@ pub(crate) fn render_find_json_with_index(
     let mut total = 0usize;
     let mut results = Vec::new();
     for query in queries {
-        let (count, nodes) =
-            output::find_nodes_and_total_with_index(graph, query, limit, true, mode, index);
+        let (count, scored_nodes) =
+            output::find_scored_nodes_and_total_with_index(graph, query, limit, true, mode, index);
         total += count;
+        let nodes = scored_nodes
+            .into_iter()
+            .map(|(score, node)| ScoredFindNode { score, node })
+            .collect();
         results.push(FindQueryResult {
             query: query.clone(),
             count,

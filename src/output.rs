@@ -12,11 +12,27 @@ const BM25_B: f64 = 0.75;
 const DEFAULT_TARGET_CHARS: usize = 1400;
 const MIN_TARGET_CHARS: usize = 300;
 const MAX_TARGET_CHARS: usize = 12_000;
+const FUZZY_NEIGHBOR_CONTEXT_CAP: u32 = 220;
+const FUZZY_NO_PRIMARY_CONTEXT_DIVISOR: u32 = 3;
+const FUZZY_DESCRIPTION_WEIGHT: u32 = 2;
+const FUZZY_FACT_WEIGHT: u32 = 2;
+const FUZZY_NOTE_BODY_WEIGHT: u32 = 1;
+const FUZZY_NOTE_TAG_WEIGHT: u32 = 2;
+const BM25_PHRASE_MATCH_BOOST: i64 = 120;
+const BM25_TOKEN_MATCH_BOOST: i64 = 45;
+const IMPORTANCE_NEUTRAL: i64 = 4;
+const IMPORTANCE_STEP_BOOST: i64 = 22;
 
 #[derive(Debug, Clone, Copy)]
 pub enum FindMode {
     Fuzzy,
     Bm25,
+}
+
+#[derive(Clone, Copy)]
+struct ScoredNode<'a> {
+    score: i64,
+    node: &'a Node,
 }
 
 pub fn render_find(
@@ -46,8 +62,8 @@ pub fn render_find_with_index(
         let visible: Vec<_> = matches.into_iter().take(limit).collect();
         let shown = visible.len();
         let mut lines = vec![render_result_header(query, shown, total)];
-        for node in visible {
-            lines.push(render_node_block(graph, node, full));
+        for scored in visible {
+            lines.push(render_scored_node_block(graph, &scored, full));
         }
         push_limit_omission_line(&mut lines, shown, total);
         sections.push(lines.join("\n"));
@@ -64,7 +80,7 @@ pub fn find_nodes(
 ) -> Vec<Node> {
     find_matches_with_index(graph, query, limit, include_features, mode, None)
         .into_iter()
-        .cloned()
+        .map(|item| item.node.clone())
         .collect()
 }
 
@@ -78,7 +94,7 @@ pub fn find_nodes_with_index(
 ) -> Vec<Node> {
     find_matches_with_index(graph, query, limit, include_features, mode, index)
         .into_iter()
-        .cloned()
+        .map(|item| item.node.clone())
         .collect()
 }
 
@@ -92,7 +108,29 @@ pub fn find_nodes_and_total_with_index(
 ) -> (usize, Vec<Node>) {
     let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
     let total = matches.len();
-    let nodes = matches.into_iter().take(limit).cloned().collect();
+    let nodes = matches
+        .into_iter()
+        .take(limit)
+        .map(|item| item.node.clone())
+        .collect();
+    (total, nodes)
+}
+
+pub fn find_scored_nodes_and_total_with_index(
+    graph: &GraphFile,
+    query: &str,
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    index: Option<&Bm25Index>,
+) -> (usize, Vec<(i64, Node)>) {
+    let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+    let total = matches.len();
+    let nodes = matches
+        .into_iter()
+        .take(limit)
+        .map(|item| (item.score, item.node.clone()))
+        .collect();
     (total, nodes)
 }
 
@@ -166,7 +204,7 @@ pub fn render_find_adaptive_with_index(
         let total = matches.len();
         let visible: Vec<_> = matches.into_iter().take(limit).collect();
         let section = if visible.len() == 1 {
-            render_single_result_section(graph, query, visible[0], total, target)
+            render_single_result_section(graph, query, &visible[0], total, target)
         } else {
             render_multi_result_section(graph, query, &visible, total, target)
         };
@@ -208,7 +246,7 @@ fn clamp_target_chars(target_chars: Option<usize>) -> usize {
 fn render_single_result_section(
     graph: &GraphFile,
     query: &str,
-    node: &Node,
+    node: &ScoredNode<'_>,
     total_available: usize,
     target: usize,
 ) -> String {
@@ -258,7 +296,7 @@ fn render_single_result_section(
 fn render_multi_result_section(
     graph: &GraphFile,
     query: &str,
-    nodes: &[&Node],
+    nodes: &[ScoredNode<'_>],
     total_available: usize,
     target: usize,
 ) -> String {
@@ -284,11 +322,11 @@ fn render_multi_result_section(
         let shown = result_cap.min(nodes.len());
         let mut lines = vec![render_result_header(query, shown, total_available)];
         for node in nodes.iter().take(shown) {
-            lines.extend(render_single_node_candidate_lines(
+            lines.extend(render_scored_node_candidate_lines(
                 graph, node, 0, detail, edge_cap,
             ));
             if depth > 0 {
-                lines.extend(render_neighbor_layers(graph, node, depth, detail));
+                lines.extend(render_neighbor_layers(graph, node.node, depth, detail));
             }
         }
         if visible_total > shown {
@@ -349,12 +387,12 @@ fn pick_best_candidate(candidates: Vec<Candidate>, target: usize) -> String {
 fn render_full_result_section(
     graph: &GraphFile,
     query: &str,
-    nodes: &[&Node],
+    nodes: &[ScoredNode<'_>],
     total_available: usize,
 ) -> String {
     let mut lines = vec![render_result_header(query, nodes.len(), total_available)];
     for node in nodes {
-        lines.push(render_node_block(graph, node, true));
+        lines.push(render_scored_node_block(graph, node, true));
     }
     push_limit_omission_line(&mut lines, nodes.len(), total_available);
     lines.join("\n")
@@ -394,7 +432,7 @@ fn render_single_node_candidate(
 fn render_single_result_candidate(
     graph: &GraphFile,
     header: &str,
-    node: &Node,
+    node: &ScoredNode<'_>,
     total_available: usize,
     depth: usize,
     detail: DetailLevel,
@@ -403,9 +441,9 @@ fn render_single_result_candidate(
 ) -> String {
     let mut lines = vec![header.to_owned()];
     if full {
-        lines.push(render_node_block(graph, node, true));
+        lines.push(render_scored_node_block(graph, node, true));
     } else {
-        lines.extend(render_single_node_candidate_lines(
+        lines.extend(render_scored_node_candidate_lines(
             graph, node, depth, detail, edge_cap,
         ));
     }
@@ -425,6 +463,28 @@ fn render_single_node_candidate_lines(
         lines.extend(render_neighbor_layers(graph, node, depth, detail));
     }
     lines
+}
+
+fn render_scored_node_candidate_lines(
+    graph: &GraphFile,
+    node: &ScoredNode<'_>,
+    depth: usize,
+    detail: DetailLevel,
+    edge_cap: usize,
+) -> Vec<String> {
+    let mut lines = vec![format!("score: {}", node.score)];
+    lines.extend(render_single_node_candidate_lines(
+        graph, node.node, depth, detail, edge_cap,
+    ));
+    lines
+}
+
+fn render_scored_node_block(graph: &GraphFile, node: &ScoredNode<'_>, full: bool) -> String {
+    format!(
+        "score: {}\n{}",
+        node.score,
+        render_node_block(graph, node.node, full)
+    )
 }
 
 fn render_neighbor_layers(
@@ -957,7 +1017,7 @@ fn find_matches_with_index<'a>(
     include_features: bool,
     mode: FindMode,
     index: Option<&Bm25Index>,
-) -> Vec<&'a Node> {
+) -> Vec<ScoredNode<'a>> {
     let mut matches = find_all_matches_with_index(graph, query, include_features, mode, index);
     matches.truncate(limit);
     matches
@@ -969,7 +1029,7 @@ fn find_all_matches_with_index<'a>(
     include_features: bool,
     mode: FindMode,
     index: Option<&Bm25Index>,
-) -> Vec<&'a Node> {
+) -> Vec<ScoredNode<'a>> {
     let mut scored: Vec<(i64, Reverse<&str>, &'a Node)> = match mode {
         FindMode::Fuzzy => {
             let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
@@ -982,7 +1042,8 @@ fn find_all_matches_with_index<'a>(
                     score_node(graph, node, query, &pattern, &mut matcher).map(|score| {
                         let base = score as i64;
                         let boost = feedback_boost(node);
-                        (base + boost, Reverse(node.id.as_str()), node)
+                        let importance = importance_boost(node);
+                        (base + boost + importance, Reverse(node.id.as_str()), node)
                     })
                 })
                 .collect()
@@ -991,7 +1052,10 @@ fn find_all_matches_with_index<'a>(
     };
 
     scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
-    scored.into_iter().map(|(_, _, node)| node).collect()
+    scored
+        .into_iter()
+        .map(|(score, _, node)| ScoredNode { score, node })
+        .collect()
 }
 
 fn feedback_boost(node: &Node) -> i64 {
@@ -1003,6 +1067,10 @@ fn feedback_boost(node: &Node) -> i64 {
     let confidence = (count.ln_1p() / 3.0).min(1.0);
     let scaled = avg * 200.0 * confidence;
     scaled.clamp(-300.0, 300.0).round() as i64
+}
+
+fn importance_boost(node: &Node) -> i64 {
+    (i64::from(node.properties.importance) - IMPORTANCE_NEUTRAL) * IMPORTANCE_STEP_BOOST
 }
 
 fn score_bm25<'a>(
@@ -1026,17 +1094,24 @@ fn score_bm25<'a>(
                     return None;
                 }
                 let boost = feedback_boost(node) as f64;
-                let combined = (score as f64 * 100.0 + boost).round() as i64;
+                let lexical_boost = bm25_lexical_boost(query, &node_document_text(graph, node));
+                let importance = importance_boost(node);
+                let combined =
+                    (score as f64 * 100.0 + boost).round() as i64 + lexical_boost + importance;
                 Some((combined, Reverse(node.id.as_str()), node))
             })
             .collect();
     }
 
-    let mut docs: Vec<(&'a Node, Vec<String>)> = graph
+    let mut docs: Vec<(&'a Node, String, Vec<String>)> = graph
         .nodes
         .iter()
         .filter(|node| include_features || node.r#type != "Feature")
-        .map(|node| (node, tokenize(&node_document_text(graph, node))))
+        .map(|node| {
+            let document = node_document_text(graph, node);
+            let tokens = tokenize(&document);
+            (node, document, tokens)
+        })
         .collect();
 
     if docs.is_empty() {
@@ -1046,7 +1121,7 @@ fn score_bm25<'a>(
     let mut df: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for term in &terms {
         let mut count = 0usize;
-        for (_, tokens) in &docs {
+        for (_, _, tokens) in &docs {
             if tokens.iter().any(|t| t == term) {
                 count += 1;
             }
@@ -1057,13 +1132,13 @@ fn score_bm25<'a>(
     let total_docs = docs.len() as f64;
     let avgdl = docs
         .iter()
-        .map(|(_, tokens)| tokens.len() as f64)
+        .map(|(_, _, tokens)| tokens.len() as f64)
         .sum::<f64>()
         / total_docs;
 
     let mut scored = Vec::new();
 
-    for (node, tokens) in docs.drain(..) {
+    for (node, document, tokens) in docs.drain(..) {
         let dl = tokens.len() as f64;
         if dl == 0.0 {
             continue;
@@ -1081,7 +1156,9 @@ fn score_bm25<'a>(
         }
         if score > 0.0 {
             let boost = feedback_boost(node) as f64;
-            let combined = score * 100.0 + boost;
+            let lexical_boost = bm25_lexical_boost(query, &document) as f64;
+            let importance = importance_boost(node) as f64;
+            let combined = score * 100.0 + boost + lexical_boost + importance;
             scored.push((combined.round() as i64, Reverse(node.id.as_str()), node));
         }
     }
@@ -1132,7 +1209,9 @@ fn tokenize(text: &str) -> Vec<String> {
     let mut current = String::new();
     for ch in text.chars() {
         if ch.is_alphanumeric() {
-            current.push(ch.to_ascii_lowercase());
+            for lower in ch.to_lowercase() {
+                current.push(lower);
+            }
         } else if !current.is_empty() {
             tokens.push(current.clone());
             current.clear();
@@ -1144,6 +1223,22 @@ fn tokenize(text: &str) -> Vec<String> {
     tokens
 }
 
+fn bm25_lexical_boost(query: &str, document: &str) -> i64 {
+    let query_norm = query.trim().to_lowercase();
+    if query_norm.is_empty() {
+        return 0;
+    }
+    let document_norm = document.to_lowercase();
+    if document_norm.contains(&query_norm) {
+        return BM25_PHRASE_MATCH_BOOST;
+    }
+    let matched_tokens = query_norm
+        .split_whitespace()
+        .filter(|token| document_norm.contains(token))
+        .count() as i64;
+    matched_tokens * BM25_TOKEN_MATCH_BOOST
+}
+
 fn score_node(
     graph: &GraphFile,
     node: &Node,
@@ -1151,36 +1246,72 @@ fn score_node(
     pattern: &Pattern,
     matcher: &mut Matcher,
 ) -> Option<u32> {
-    let mut total = 0;
+    let mut primary_score = 0;
     let mut primary_hits = 0;
 
     let id_score = score_primary_field(query, pattern, matcher, &node.id, 4);
     if id_score > 0 {
         primary_hits += 1;
     }
-    total += id_score;
+    primary_score += id_score;
 
     let name_score = score_primary_field(query, pattern, matcher, &node.name, 3);
     if name_score > 0 {
         primary_hits += 1;
     }
-    total += name_score;
+    primary_score += name_score;
 
     for alias in &node.properties.alias {
         let alias_score = score_primary_field(query, pattern, matcher, alias, 3);
         if alias_score > 0 {
             primary_hits += 1;
         }
-        total += alias_score;
+        primary_score += alias_score;
     }
 
-    if primary_hits > 0 {
-        total += score_secondary_field(query, pattern, matcher, &node.properties.description, 1);
+    let mut contextual_score = score_secondary_field(
+        query,
+        pattern,
+        matcher,
+        &node.properties.description,
+        FUZZY_DESCRIPTION_WEIGHT,
+    );
+    for fact in &node.properties.key_facts {
+        contextual_score += score_secondary_field(query, pattern, matcher, fact, FUZZY_FACT_WEIGHT);
+    }
+    contextual_score += score_notes_context(graph, node, query, pattern, matcher);
+
+    let neighbor_context = score_neighbor_context(graph, node, query, pattern, matcher)
+        .min(FUZZY_NEIGHBOR_CONTEXT_CAP);
+    contextual_score += if primary_hits > 0 {
+        neighbor_context / 2
     } else {
-        total += score_neighbor_context(graph, node, query, pattern, matcher);
+        neighbor_context
+    };
+
+    if primary_hits == 0 {
+        contextual_score /= FUZZY_NO_PRIMARY_CONTEXT_DIVISOR;
     }
 
+    let total = primary_score + contextual_score;
     (total > 0).then_some(total)
+}
+
+fn score_notes_context(
+    graph: &GraphFile,
+    node: &Node,
+    query: &str,
+    pattern: &Pattern,
+    matcher: &mut Matcher,
+) -> u32 {
+    let mut total = 0;
+    for note in graph.notes.iter().filter(|note| note.node_id == node.id) {
+        total += score_secondary_field(query, pattern, matcher, &note.body, FUZZY_NOTE_BODY_WEIGHT);
+        for tag in &note.tags {
+            total += score_secondary_field(query, pattern, matcher, tag, FUZZY_NOTE_TAG_WEIGHT);
+        }
+    }
+    total
 }
 
 fn score_neighbor_context(
@@ -1292,4 +1423,160 @@ fn is_subsequence(needle: &str, haystack: &str) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_node(
+        id: &str,
+        name: &str,
+        description: &str,
+        key_facts: &[&str],
+        alias: &[&str],
+        importance: u8,
+        feedback_score: f64,
+        feedback_count: u64,
+    ) -> Node {
+        let mut properties = crate::graph::NodeProperties::default();
+        properties.description = description.to_owned();
+        properties.key_facts = key_facts.iter().map(|v| (*v).to_owned()).collect();
+        properties.alias = alias.iter().map(|v| (*v).to_owned()).collect();
+        properties.importance = importance;
+        properties.feedback_score = feedback_score;
+        properties.feedback_count = feedback_count;
+        Node {
+            id: id.to_owned(),
+            r#type: "Concept".to_owned(),
+            name: name.to_owned(),
+            properties,
+            source_files: Vec::new(),
+        }
+    }
+
+    fn score_for(results: &[(i64, Reverse<&str>, &Node)], id: &str) -> i64 {
+        results
+            .iter()
+            .find(|(_, _, node)| node.id == id)
+            .map(|(score, _, _)| *score)
+            .expect("score for node")
+    }
+
+    #[test]
+    fn textual_bonus_tiers_are_stable() {
+        assert_eq!(textual_bonus("abc", "abc"), 400);
+        assert_eq!(textual_bonus("abc", "xxabcxx"), 200);
+        assert_eq!(textual_bonus("abc def", "aa abc and def zz"), 160);
+        assert_eq!(textual_bonus("abc", "aXbYc"), 40);
+        assert_eq!(textual_bonus("abc", "zzz"), 0);
+    }
+
+    #[test]
+    fn tokenize_handles_unicode_casefolding() {
+        let tokens = tokenize("ŁÓDŹ smart-home");
+        assert_eq!(tokens, vec!["łódź", "smart", "home"]);
+    }
+
+    #[test]
+    fn bm25_lexical_boost_prefers_phrase_then_tokens() {
+        assert_eq!(
+            bm25_lexical_boost("smart home api", "x smart home api y"),
+            120
+        );
+        assert_eq!(
+            bm25_lexical_boost("smart home api", "smart x api y home"),
+            135
+        );
+        assert_eq!(bm25_lexical_boost("smart home api", "nothing here"), 0);
+    }
+
+    #[test]
+    fn score_node_uses_key_facts_and_notes_without_primary_match() {
+        let node = make_node(
+            "concept:gateway",
+            "Gateway",
+            "",
+            &["Autentykacja OAuth2 przez konto producenta"],
+            &[],
+            4,
+            0.0,
+            0,
+        );
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(node.clone());
+        graph.notes.push(crate::graph::Note {
+            id: "note:oauth".to_owned(),
+            node_id: node.id.clone(),
+            body: "Token refresh przez OAuth2".to_owned(),
+            tags: vec!["oauth2".to_owned()],
+            ..Default::default()
+        });
+
+        let pattern = Pattern::parse(
+            "oauth2 producenta",
+            CaseMatching::Ignore,
+            Normalization::Smart,
+        );
+        let mut matcher = Matcher::new(Config::DEFAULT);
+        let score = score_node(&graph, &node, "oauth2 producenta", &pattern, &mut matcher);
+        assert!(score.is_some_and(|value| value > 0));
+
+        let empty_graph = GraphFile::new("empty");
+        let empty_node = make_node("concept:gateway", "Gateway", "", &[], &[], 4, 0.0, 0);
+        let mut matcher = Matcher::new(Config::DEFAULT);
+        let empty_score = score_node(
+            &empty_graph,
+            &empty_node,
+            "oauth2 producenta",
+            &pattern,
+            &mut matcher,
+        );
+        assert!(empty_score.is_none());
+    }
+
+    #[test]
+    fn score_bm25_respects_importance_boost_for_equal_documents() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(make_node(
+            "concept:high",
+            "High",
+            "smart home api",
+            &[],
+            &[],
+            6,
+            0.0,
+            0,
+        ));
+        graph.nodes.push(make_node(
+            "concept:low",
+            "Low",
+            "smart home api",
+            &[],
+            &[],
+            1,
+            0.0,
+            0,
+        ));
+
+        let results = score_bm25(&graph, "smart home api", true, None);
+        let high_score = score_for(&results, "concept:high");
+        let low_score = score_for(&results, "concept:low");
+        assert!(high_score > low_score);
+    }
+
+    #[test]
+    fn importance_and_feedback_boost_have_expected_ranges() {
+        let high_importance = make_node("concept:high", "High", "", &[], &[], 6, 0.0, 0);
+        let low_importance = make_node("concept:low", "Low", "", &[], &[], 1, 0.0, 0);
+        assert_eq!(importance_boost(&high_importance), 44);
+        assert_eq!(importance_boost(&low_importance), -66);
+
+        let positive = make_node("concept:pos", "Pos", "", &[], &[], 4, 1.0, 1);
+        let negative = make_node("concept:neg", "Neg", "", &[], &[], 4, -2.0, 1);
+        let saturated = make_node("concept:sat", "Sat", "", &[], &[], 4, 300.0, 1);
+        assert_eq!(feedback_boost(&positive), 46);
+        assert_eq!(feedback_boost(&negative), -92);
+        assert_eq!(feedback_boost(&saturated), 300);
+    }
 }

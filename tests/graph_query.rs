@@ -13,6 +13,14 @@ fn strip_find_wrapper(output: &str) -> String {
         .join("\n")
 }
 
+fn strip_score_lines(output: &str) -> String {
+    output
+        .lines()
+        .filter(|line| !line.starts_with("score: "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn parse_find_header_counts(output: &str) -> (usize, usize) {
     let header = output.lines().next().expect("find header");
     let counts = header
@@ -65,6 +73,141 @@ fn find_uses_fuzzy_matching_for_imperfect_queries() {
 }
 
 #[test]
+fn find_fuzzy_matches_key_facts_without_primary_hits() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "find",
+            "oauth2 producenta",
+            "--mode",
+            "fuzzy",
+        ],
+        dir.path(),
+    );
+
+    assert!(output.contains("? oauth2 producenta ("));
+    assert!(output.contains("# interface:smart_api | Smart Home API (REST)"));
+}
+
+#[test]
+fn find_fuzzy_matches_attached_note_content() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+    exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "note",
+            "add",
+            "concept:refrigerator",
+            "--id",
+            "note:fuzzy_note_search",
+            "--text",
+            "kalibracja_czujnika_turbo",
+            "--tag",
+            "serwis",
+        ],
+        dir.path(),
+    );
+
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "find",
+            "kalibracja_czujnika_turbo",
+            "--mode",
+            "fuzzy",
+        ],
+        dir.path(),
+    );
+
+    assert!(output.contains("# concept:refrigerator | Lodowka"));
+}
+
+#[test]
+fn find_prefers_higher_importance_in_fuzzy_and_bm25() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "add",
+            "concept:a_importance_high",
+            "--type",
+            "Concept",
+            "--name",
+            "Importance High",
+            "--description",
+            "fraza_importance_test",
+            "--importance",
+            "6",
+            "--source",
+            "importance.md",
+        ],
+        dir.path(),
+    );
+
+    exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "add",
+            "concept:z_importance_low",
+            "--type",
+            "Concept",
+            "--name",
+            "Importance Low",
+            "--description",
+            "fraza_importance_test",
+            "--importance",
+            "1",
+            "--source",
+            "importance.md",
+        ],
+        dir.path(),
+    );
+
+    for mode in ["fuzzy", "bm25"] {
+        let output = exec_ok(
+            &[
+                "kg",
+                "fridge",
+                "node",
+                "find",
+                "fraza_importance_test",
+                "--mode",
+                mode,
+                "--limit",
+                "10",
+            ],
+            dir.path(),
+        );
+
+        let high_pos = output
+            .find("# concept:a_importance_high | Importance High")
+            .expect("high importance result present");
+        let low_pos = output
+            .find("# concept:z_importance_low | Importance Low")
+            .expect("low importance result present");
+        assert!(
+            high_pos < low_pos,
+            "higher importance should rank first in mode {mode}"
+        );
+    }
+}
+
+#[test]
 fn find_includes_outgoing_neighbor_context_by_default() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));
@@ -110,7 +253,8 @@ fn find_single_result_matches_get_full_rendering() {
     );
 
     let find_body = strip_find_wrapper(&find_output);
-    assert_eq!(find_body.trim(), get_output.trim());
+    assert!(find_body.contains("score: "));
+    assert_eq!(strip_score_lines(&find_body).trim(), get_output.trim());
 }
 
 #[test]
@@ -146,7 +290,8 @@ fn find_single_result_matches_get_adaptive_rendering() {
     );
 
     let find_body = strip_find_wrapper(&find_output);
-    assert_eq!(find_body.trim(), get_output.trim());
+    assert!(find_body.contains("score: "));
+    assert_eq!(strip_score_lines(&find_body).trim(), get_output.trim());
 }
 
 #[test]
@@ -313,6 +458,29 @@ fn find_json_reports_total_matches_not_just_shown_rows() {
 
     assert!(count > shown);
     assert_eq!(total, count);
+}
+
+#[test]
+fn find_always_returns_score_in_cli_and_json() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let cli_output = exec_ok(
+        &["kg", "fridge", "node", "find", "lodowka", "--limit", "1"],
+        dir.path(),
+    );
+    assert!(cli_output.contains("score: "));
+
+    let json_output = exec_ok(
+        &[
+            "kg", "fridge", "node", "find", "lodowka", "--limit", "1", "--json",
+        ],
+        dir.path(),
+    );
+    let payload: Value = serde_json::from_str(&json_output).expect("parse json");
+    let first = &payload["queries"][0]["nodes"][0];
+    assert!(first["score"].is_i64());
+    assert!(first["node"]["id"].is_string());
 }
 
 #[test]
