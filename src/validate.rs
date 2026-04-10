@@ -695,24 +695,34 @@ pub fn validate_graph(
             node_type_map.get(edge.source_id.as_str()),
             node_type_map.get(edge.target_id.as_str()),
         ) {
-            if let Some((valid_src, valid_tgt)) = edge_type_rule(edge.relation.as_str()) {
-                if !valid_src.is_empty() && !valid_src.contains(src_type) {
-                    errors.push(format!(
-                        "edge {} {} {} invalid: {}",
-                        edge.source_id,
-                        edge.relation,
-                        edge.target_id,
-                        format_edge_source_type_error(src_type, edge.relation.as_str(), valid_src)
-                    ));
-                }
-                if !valid_tgt.is_empty() && !valid_tgt.contains(tgt_type) {
-                    errors.push(format!(
-                        "edge {} {} {} invalid: {}",
-                        edge.source_id,
-                        edge.relation,
-                        edge.target_id,
-                        format_edge_target_type_error(tgt_type, edge.relation.as_str(), valid_tgt)
-                    ));
+            if VALID_TYPES.contains(src_type) && VALID_TYPES.contains(tgt_type) {
+                if let Some((valid_src, valid_tgt)) = edge_type_rule(edge.relation.as_str()) {
+                    if !valid_src.is_empty() && !valid_src.contains(src_type) {
+                        errors.push(format!(
+                            "edge {} {} {} invalid: {}",
+                            edge.source_id,
+                            edge.relation,
+                            edge.target_id,
+                            format_edge_source_type_error(
+                                src_type,
+                                edge.relation.as_str(),
+                                valid_src
+                            )
+                        ));
+                    }
+                    if !valid_tgt.is_empty() && !valid_tgt.contains(tgt_type) {
+                        errors.push(format!(
+                            "edge {} {} {} invalid: {}",
+                            edge.source_id,
+                            edge.relation,
+                            edge.target_id,
+                            format_edge_target_type_error(
+                                tgt_type,
+                                edge.relation.as_str(),
+                                valid_tgt
+                            )
+                        ));
+                    }
                 }
             }
         }

@@ -239,6 +239,12 @@ pub struct ScoreAllArgs {
     pub desc_weight: f64,
     #[arg(long, default_value_t = 0.55)]
     pub bundle_weight: f64,
+    #[arg(long, default_value_t = 42)]
+    pub cluster_seed: u64,
+    #[arg(long, default_value_t = 1.0)]
+    pub cluster_resolution: f64,
+    #[arg(long, default_value_t = 5)]
+    pub membership_top_k: usize,
 }
 
 #[derive(Debug, Args)]

@@ -522,13 +522,17 @@ fn execute_score_all(graph: &GraphFile, path: &Path, args: &ScoreAllArgs) -> Res
             min_desc_len: args.min_desc_len,
             desc_weight: args.desc_weight,
             bundle_weight: args.bundle_weight,
+            cluster_seed: args.cluster_seed,
+            cluster_resolution: args.cluster_resolution,
+            membership_top_k: args.membership_top_k,
         },
     )?;
 
     Ok(format!(
-        "= score-all\n- pairs: {}\n- edges: {}\n- output: {}\n",
+        "= score-all\n- pairs: {}\n- edges: {}\n- clusters: {}\n- output: {}\n",
         outcome.pairs,
         outcome.edges,
+        outcome.clusters,
         outcome.path.display()
     ))
 }

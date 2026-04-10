@@ -198,18 +198,30 @@ pub fn validate_edge(graph: &GraphFile, edge: &Edge) -> Result<()> {
     let tgt_node = graph.node_by_id(&edge.target_id);
 
     if let (Some(src), Some(tgt)) = (src_node, tgt_node) {
-        if let Some((src_types, tgt_types)) = edge_type_rule(edge.relation.as_str()) {
-            if !src_types.is_empty() && !src_types.contains(&src.r#type.as_str()) {
-                bail!(
-                    "{}",
-                    format_edge_source_type_error(&src.r#type, edge.relation.as_str(), src_types)
-                );
-            }
-            if !tgt_types.is_empty() && !tgt_types.contains(&tgt.r#type.as_str()) {
-                bail!(
-                    "{}",
-                    format_edge_target_type_error(&tgt.r#type, edge.relation.as_str(), tgt_types)
-                );
+        if crate::validate::VALID_TYPES.contains(&src.r#type.as_str())
+            && crate::validate::VALID_TYPES.contains(&tgt.r#type.as_str())
+        {
+            if let Some((src_types, tgt_types)) = edge_type_rule(edge.relation.as_str()) {
+                if !src_types.is_empty() && !src_types.contains(&src.r#type.as_str()) {
+                    bail!(
+                        "{}",
+                        format_edge_source_type_error(
+                            &src.r#type,
+                            edge.relation.as_str(),
+                            src_types
+                        )
+                    );
+                }
+                if !tgt_types.is_empty() && !tgt_types.contains(&tgt.r#type.as_str()) {
+                    bail!(
+                        "{}",
+                        format_edge_target_type_error(
+                            &tgt.r#type,
+                            edge.relation.as_str(),
+                            tgt_types
+                        )
+                    );
+                }
             }
         }
     }
@@ -424,5 +436,27 @@ mod tests {
         .expect_err("invalid score should fail");
 
         assert!(err.to_string().contains("requires score in range 0..1"));
+    }
+
+    #[test]
+    fn add_edge_allows_has_from_custom_cluster_type() {
+        use crate::graph::{Edge, EdgeProperties, GraphFile};
+        let mut graph = GraphFile::new("test");
+        add_node(&mut graph, valid_node("@:cluster_0001", "Cluster", "@")).expect("cluster");
+        add_node(&mut graph, valid_node("concept:x", "X", "Concept")).expect("member");
+
+        add_edge(
+            &mut graph,
+            Edge {
+                source_id: "@:cluster_0001".to_owned(),
+                relation: "HAS".to_owned(),
+                target_id: "concept:x".to_owned(),
+                properties: EdgeProperties {
+                    detail: "0.88".to_owned(),
+                    ..Default::default()
+                },
+            },
+        )
+        .expect("custom cluster membership should be accepted");
     }
 }

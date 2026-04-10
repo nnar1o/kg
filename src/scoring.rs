@@ -10,12 +10,16 @@ pub(crate) struct ScoreAllConfig {
     pub min_desc_len: usize,
     pub desc_weight: f64,
     pub bundle_weight: f64,
+    pub cluster_seed: u64,
+    pub cluster_resolution: f64,
+    pub membership_top_k: usize,
 }
 
 pub(crate) struct ScoreAllOutcome {
     pub path: PathBuf,
     pub pairs: usize,
     pub edges: usize,
+    pub clusters: usize,
 }
 
 trait PairScoreCalculator {
@@ -94,11 +98,7 @@ pub(crate) fn compute_all_pair_scores_to_cache(
             for (key, value) in &raw_scores {
                 score_components.insert((*key).to_owned(), *value);
             }
-            let (source_id, target_id) = if left.id <= right.id {
-                (left.id.clone(), right.id.clone())
-            } else {
-                (right.id.clone(), left.id.clone())
-            };
+            let (source_id, target_id) = canonical_pair(&left.id, &right.id);
 
             result.edges.push(Edge {
                 source_id,
@@ -113,6 +113,14 @@ pub(crate) fn compute_all_pair_scores_to_cache(
             });
         }
     }
+
+    let cluster_count = append_cluster_nodes_and_edges(
+        &mut result,
+        config.cluster_seed,
+        config.cluster_resolution,
+        config.membership_top_k,
+    );
+
     result.refresh_counts();
 
     let out_path = cache_score_path(source_path);
@@ -125,7 +133,192 @@ pub(crate) fn compute_all_pair_scores_to_cache(
         path: out_path,
         pairs: pair_count,
         edges: result.edges.len(),
+        clusters: cluster_count,
     })
+}
+
+fn append_cluster_nodes_and_edges(
+    graph: &mut GraphFile,
+    seed: u64,
+    resolution: f64,
+    membership_top_k: usize,
+) -> usize {
+    let node_ids: Vec<String> = graph.nodes.iter().map(|node| node.id.clone()).collect();
+    let mut pair_weights: HashMap<(String, String), f64> = HashMap::new();
+    let mut adjacency: HashMap<String, Vec<(String, f64)>> = HashMap::new();
+
+    for edge in &graph.edges {
+        if !edge.properties.bidirectional || edge.relation != "~" {
+            continue;
+        }
+        let score = edge.properties.detail.trim().parse::<f64>().unwrap_or(0.0);
+        if score <= 0.0 {
+            continue;
+        }
+        let score = clamp_01(score);
+        let (left, right) = canonical_pair(&edge.source_id, &edge.target_id);
+        pair_weights.insert((left.clone(), right.clone()), score);
+        adjacency
+            .entry(left.clone())
+            .or_default()
+            .push((right.clone(), score));
+        adjacency.entry(right).or_default().push((left, score));
+    }
+
+    let communities = detect_communities(&node_ids, &adjacency, seed, resolution);
+    let mut grouped: HashMap<usize, Vec<String>> = HashMap::new();
+    for node_id in &node_ids {
+        if let Some(label) = communities.get(node_id) {
+            grouped.entry(*label).or_default().push(node_id.clone());
+        }
+    }
+
+    let mut clusters: Vec<Vec<String>> = grouped
+        .into_values()
+        .filter(|members| members.len() > 1)
+        .map(|mut members| {
+            members.sort();
+            members
+        })
+        .collect();
+    clusters.sort_by(|a, b| a[0].cmp(&b[0]));
+
+    let top_k = membership_top_k.max(1);
+    for (idx, members) in clusters.iter().enumerate() {
+        let cluster_id = format!("@:cluster_{:04}", idx + 1);
+        graph.nodes.push(crate::Node {
+            id: cluster_id.clone(),
+            r#type: "@".to_owned(),
+            name: format!("Cluster {:04}", idx + 1),
+            properties: crate::NodeProperties {
+                description: format!(
+                    "Derived similarity cluster v1 (size={}, seed={}, resolution={:.3})",
+                    members.len(),
+                    seed,
+                    resolution
+                ),
+                domain_area: "derived_cluster_v1".to_owned(),
+                provenance: "A".to_owned(),
+                importance: 1.0,
+                ..Default::default()
+            },
+            source_files: vec!["DOC .kg/cache/derived-clusters".to_owned()],
+        });
+
+        for member in members {
+            let strength = membership_strength(member, members, &pair_weights, top_k);
+            graph.edges.push(Edge {
+                source_id: cluster_id.clone(),
+                relation: "HAS".to_owned(),
+                target_id: member.clone(),
+                properties: EdgeProperties {
+                    detail: format_score(strength),
+                    ..EdgeProperties::default()
+                },
+            });
+        }
+    }
+
+    clusters.len()
+}
+
+fn detect_communities(
+    node_ids: &[String],
+    adjacency: &HashMap<String, Vec<(String, f64)>>,
+    seed: u64,
+    resolution: f64,
+) -> HashMap<String, usize> {
+    let mut sorted = node_ids.to_vec();
+    sorted.sort();
+    let mut labels: HashMap<String, usize> = sorted
+        .iter()
+        .enumerate()
+        .map(|(idx, id)| (id.clone(), idx))
+        .collect();
+    if sorted.is_empty() {
+        return labels;
+    }
+
+    let shift = (seed as usize) % sorted.len();
+    let mut order = sorted.clone();
+    order.rotate_left(shift);
+    let gamma = resolution.max(0.05);
+
+    for _ in 0..32 {
+        let mut changed = false;
+        for node in &order {
+            let neighbors = adjacency.get(node).cloned().unwrap_or_default();
+            if neighbors.is_empty() {
+                continue;
+            }
+            let current = labels.get(node).copied().unwrap_or(0);
+            let mut community_weight: HashMap<usize, f64> = HashMap::new();
+            for (neighbor, score) in neighbors {
+                if let Some(label) = labels.get(&neighbor).copied() {
+                    *community_weight.entry(label).or_insert(0.0) += score.powf(gamma);
+                }
+            }
+
+            let mut best_label = current;
+            let mut best_score = *community_weight.get(&current).unwrap_or(&0.0);
+            for (label, score) in community_weight {
+                let better = score > best_score + 1e-12
+                    || ((score - best_score).abs() <= 1e-12 && label < best_label);
+                if better {
+                    best_label = label;
+                    best_score = score;
+                }
+            }
+            if best_label != current {
+                labels.insert(node.clone(), best_label);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    labels
+}
+
+fn membership_strength(
+    node_id: &str,
+    members: &[String],
+    pair_weights: &HashMap<(String, String), f64>,
+    top_k: usize,
+) -> f64 {
+    let mut values: Vec<f64> = members
+        .iter()
+        .filter(|other| other.as_str() != node_id)
+        .map(|other| {
+            let (left, right) = canonical_pair(node_id, other);
+            pair_weights
+                .get(&(left, right))
+                .copied()
+                .unwrap_or_default()
+        })
+        .collect();
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    values.truncate(top_k.min(values.len()));
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = values.len() / 2;
+    if values.len() % 2 == 1 {
+        clamp_01(values[mid])
+    } else {
+        clamp_01((values[mid - 1] + values[mid]) / 2.0)
+    }
+}
+
+fn canonical_pair(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_owned(), b.to_owned())
+    } else {
+        (b.to_owned(), a.to_owned())
+    }
 }
 
 fn build_profiles(graph: &GraphFile, min_desc_len: usize) -> HashMap<String, NodeProfile> {
@@ -298,10 +491,10 @@ fn cache_score_path(source_graph_path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        ScoreAllConfig, compute_all_pair_scores_to_cache, overlap_score, weighted_score,
-        word_shingles,
+        ScoreAllConfig, append_cluster_nodes_and_edges, compute_all_pair_scores_to_cache,
+        detect_communities, overlap_score, weighted_score, word_shingles,
     };
-    use crate::graph::{GraphFile, Node, NodeProperties};
+    use crate::graph::{EdgeProperties, GraphFile, Node, NodeProperties};
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -363,16 +556,116 @@ mod tests {
                 min_desc_len: 20,
                 desc_weight: 0.45,
                 bundle_weight: 0.55,
+                cluster_seed: 7,
+                cluster_resolution: 1.0,
+                membership_top_k: 3,
             },
         )
         .expect("score all");
 
         assert_eq!(outcome.pairs, 1);
         let scored = GraphFile::load(&outcome.path).expect("load scored graph");
-        assert_eq!(scored.edges.len(), 1);
-        let edge = &scored.edges[0];
+        assert!(scored.edges.iter().any(|edge| edge.relation == "~"));
+        let edge = scored
+            .edges
+            .iter()
+            .find(|edge| edge.relation == "~")
+            .expect("similarity edge");
         assert!(edge.properties.score_components.contains_key("C1"));
         assert!(edge.properties.score_components.contains_key("C2"));
         assert!(!edge.properties.detail.is_empty());
+        assert!(scored.nodes.iter().any(|node| node.r#type == "@"));
+        assert!(
+            scored
+                .edges
+                .iter()
+                .any(|edge| edge.relation == "HAS" && edge.source_id.starts_with("@:cluster_"))
+        );
+    }
+
+    #[test]
+    fn detect_communities_is_deterministic_for_fixed_seed() {
+        let node_ids = vec![
+            "n:a".to_owned(),
+            "n:b".to_owned(),
+            "n:c".to_owned(),
+            "n:d".to_owned(),
+        ];
+        let adjacency = HashMap::from([
+            (
+                "n:a".to_owned(),
+                vec![
+                    ("n:b".to_owned(), 0.95),
+                    ("n:c".to_owned(), 0.10),
+                    ("n:d".to_owned(), 0.05),
+                ],
+            ),
+            (
+                "n:b".to_owned(),
+                vec![
+                    ("n:a".to_owned(), 0.95),
+                    ("n:c".to_owned(), 0.05),
+                    ("n:d".to_owned(), 0.10),
+                ],
+            ),
+            (
+                "n:c".to_owned(),
+                vec![
+                    ("n:d".to_owned(), 0.93),
+                    ("n:a".to_owned(), 0.10),
+                    ("n:b".to_owned(), 0.05),
+                ],
+            ),
+            (
+                "n:d".to_owned(),
+                vec![
+                    ("n:c".to_owned(), 0.93),
+                    ("n:a".to_owned(), 0.05),
+                    ("n:b".to_owned(), 0.10),
+                ],
+            ),
+        ]);
+
+        let first = detect_communities(&node_ids, &adjacency, 17, 1.0);
+        let second = detect_communities(&node_ids, &adjacency, 17, 1.0);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn append_clusters_ignores_singletons() {
+        let mut graph = GraphFile::new("clusters");
+        for id in ["concept:a", "concept:b", "concept:c"] {
+            graph.nodes.push(Node {
+                id: id.to_owned(),
+                r#type: "Concept".to_owned(),
+                name: id.to_owned(),
+                properties: NodeProperties {
+                    description: "desc".to_owned(),
+                    provenance: "U".to_owned(),
+                    importance: 1.0,
+                    ..Default::default()
+                },
+                source_files: vec!["DOC docs/x.md".to_owned()],
+            });
+        }
+        graph.edges.push(crate::Edge {
+            source_id: "concept:a".to_owned(),
+            relation: "~".to_owned(),
+            target_id: "concept:b".to_owned(),
+            properties: EdgeProperties {
+                detail: "0.92".to_owned(),
+                bidirectional: true,
+                ..Default::default()
+            },
+        });
+
+        let count = append_cluster_nodes_and_edges(&mut graph, 42, 1.0, 3);
+        assert_eq!(count, 1);
+        assert!(
+            !graph
+                .edges
+                .iter()
+                .any(|edge| edge.relation == "HAS" && edge.target_id == "concept:c")
+        );
     }
 }
