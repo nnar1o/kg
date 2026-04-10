@@ -31,6 +31,7 @@ pub use output::FindMode;
 pub use validate::{
     EDGE_TYPE_RULES, TYPE_TO_PREFIX, VALID_RELATIONS, VALID_TYPES, canonicalize_node_id_for_type,
     edge_type_rule, format_edge_source_type_error, format_edge_target_type_error,
+    normalize_node_id,
 };
 
 // Re-export BM25 index for embedding and benchmarks.

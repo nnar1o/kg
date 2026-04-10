@@ -418,6 +418,236 @@ fn validate_source_reference(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct PreparedNodeBatchItem {
+    id: String,
+    node_type: String,
+    name: String,
+    description: String,
+    domain_area: String,
+    provenance: String,
+    confidence: f64,
+    created_at: String,
+    importance: f64,
+    facts: Vec<String>,
+    aliases: Vec<String>,
+    sources: Vec<String>,
+}
+
+fn prevalidate_node_batch_items(
+    nodes: Vec<NodeAddBatchItem>,
+) -> (Vec<PreparedNodeBatchItem>, Vec<serde_json::Value>) {
+    let mut prepared = Vec::new();
+    let mut failed = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    for item in nodes {
+        let id = match kg::canonicalize_node_id_for_type(&item.id, &item.node_type) {
+            Ok(value) => value,
+            Err(err) => {
+                failed.push(json!({ "id": item.id, "error": err }));
+                continue;
+            }
+        };
+
+        if !seen_ids.insert(id.clone()) {
+            failed.push(json!({ "id": id, "error": "duplicate node id in batch" }));
+            continue;
+        }
+
+        if !kg::VALID_TYPES.contains(&item.node_type.as_str()) {
+            failed.push(json!({
+                "id": id,
+                "error": format!(
+                    "invalid node_type '{}': expected one of {:?}",
+                    item.node_type,
+                    kg::VALID_TYPES
+                )
+            }));
+            continue;
+        }
+
+        if item.sources.is_empty() {
+            failed.push(json!({ "id": id, "error": "at least one source is required" }));
+            continue;
+        }
+
+        let description = item.description.unwrap_or_default();
+        let domain_area = item.domain_area.unwrap_or_default();
+        let provenance = item.provenance.unwrap_or_default();
+        let created_at = item.created_at.unwrap_or_default();
+        let Some(confidence) = item.confidence else {
+            failed.push(json!({
+                "id": id,
+                "error": "confidence is required and must be in range 0..1"
+            }));
+            continue;
+        };
+        let Some(importance) = item.importance else {
+            failed.push(json!({
+                "id": id,
+                "error": "importance is required and must be in range 0..1"
+            }));
+            continue;
+        };
+
+        if description.trim().is_empty()
+            || domain_area.trim().is_empty()
+            || provenance.trim().is_empty()
+            || created_at.trim().is_empty()
+        {
+            failed.push(json!({
+                "id": id,
+                "error": "description, domain_area, provenance and created_at are required"
+            }));
+            continue;
+        }
+        if !VALID_PROVENANCE_CODES.contains(&provenance.as_str()) {
+            failed.push(json!({
+                "id": id,
+                "error": format!(
+                    "provenance must be one of: {}",
+                    VALID_PROVENANCE_CODES.join(", ")
+                )
+            }));
+            continue;
+        }
+        if !(0.0..=1.0).contains(&confidence) {
+            failed.push(json!({
+                "id": id,
+                "error": format!("confidence out of range: {confidence}")
+            }));
+            continue;
+        }
+        if !(0.0..=1.0).contains(&importance) {
+            failed.push(json!({
+                "id": id,
+                "error": format!("importance out of range: {importance}")
+            }));
+            continue;
+        }
+        if !is_valid_iso_utc_timestamp(created_at.trim()) {
+            failed.push(json!({
+                "id": id,
+                "error": "created_at must use UTC format YYYY-MM-DDTHH:MM:SSZ"
+            }));
+            continue;
+        }
+
+        let mut source_error = None;
+        for source in &item.sources {
+            if let Err(err) = validate_source_reference(source) {
+                source_error = Some(format!("invalid source '{}': {err}", source));
+                break;
+            }
+        }
+        if let Some(err) = source_error {
+            failed.push(json!({ "id": id, "error": err }));
+            continue;
+        }
+
+        prepared.push(PreparedNodeBatchItem {
+            id,
+            node_type: item.node_type,
+            name: item.name,
+            description,
+            domain_area,
+            provenance,
+            confidence,
+            created_at,
+            importance,
+            facts: item.facts,
+            aliases: item.aliases,
+            sources: item.sources,
+        });
+    }
+
+    (prepared, failed)
+}
+
+#[derive(Debug, Clone)]
+struct PreparedEdgeBatchItem {
+    index: usize,
+    source_id: String,
+    relation: String,
+    target_id: String,
+    detail: Option<String>,
+}
+
+fn prevalidate_edge_batch_items(
+    edges: Vec<EdgeAddBatchItem>,
+) -> (Vec<PreparedEdgeBatchItem>, Vec<(usize, serde_json::Value)>) {
+    let mut prepared = Vec::new();
+    let mut failed = Vec::new();
+    let mut seen = HashSet::new();
+
+    for (index, edge) in edges.into_iter().enumerate() {
+        let source_id = kg::normalize_node_id(&edge.source_id);
+        let target_id = kg::normalize_node_id(&edge.target_id);
+        let relation = edge.relation.trim().to_owned();
+
+        if source_id.trim().is_empty() || target_id.trim().is_empty() || relation.is_empty() {
+            failed.push((
+                index,
+                json!({
+                    "index": index,
+                    "source_id": source_id,
+                    "relation": relation,
+                    "target_id": target_id,
+                    "ok": false,
+                    "error": "source_id, relation and target_id are required",
+                }),
+            ));
+            continue;
+        }
+
+        if !kg::VALID_RELATIONS.contains(&relation.as_str()) {
+            failed.push((
+                index,
+                json!({
+                    "index": index,
+                    "source_id": source_id,
+                    "relation": relation,
+                    "target_id": target_id,
+                    "ok": false,
+                    "error": format!(
+                        "invalid relation '{}': expected one of {}",
+                        relation,
+                        kg::VALID_RELATIONS.join(", "),
+                    ),
+                }),
+            ));
+            continue;
+        }
+
+        let dedup_key = format!("{}|{}|{}", source_id, relation, target_id);
+        if !seen.insert(dedup_key) {
+            failed.push((
+                index,
+                json!({
+                    "index": index,
+                    "source_id": source_id,
+                    "relation": relation,
+                    "target_id": target_id,
+                    "ok": false,
+                    "error": "duplicate edge in batch",
+                }),
+            ));
+            continue;
+        }
+
+        prepared.push(PreparedEdgeBatchItem {
+            index,
+            source_id,
+            relation,
+            target_id,
+            detail: edge.detail,
+        });
+    }
+
+    (prepared, failed)
+}
+
 #[derive(Debug, Clone, Default)]
 struct QueryFeedbackStats {
     yes: u64,
@@ -763,7 +993,7 @@ impl KgMcpServer {
         Ok(())
     }
 
-    fn apply_edge_to_graph(graph: &mut kg::GraphFile, edge: &EdgeAddBatchItem) {
+    fn apply_edge_to_graph(graph: &mut kg::GraphFile, edge: &PreparedEdgeBatchItem) {
         graph.edges.push(kg::Edge {
             source_id: edge.source_id.clone(),
             relation: edge.relation.clone(),
@@ -1873,6 +2103,17 @@ impl KgMcpServer {
             ));
         }
 
+        let (prepared_nodes, mut failed) = prevalidate_node_batch_items(args.nodes);
+        if mode == "atomic" && !failed.is_empty() {
+            return Err(McpError::invalid_params(
+                "invalid node batch",
+                Some(json!({
+                    "failed": failed,
+                    "count": failed.len(),
+                })),
+            ));
+        }
+
         let graph_root = kg::default_graph_root(&self.cwd);
         let path = kg::resolve_graph_path(&self.cwd, &graph_root, &graph).map_err(|err| {
             McpError::invalid_params(
@@ -1880,6 +2121,24 @@ impl KgMcpServer {
                 Some(json!({ "graph": graph.clone(), "error": err.to_string() })),
             )
         })?;
+
+        if prepared_nodes.is_empty() {
+            return Ok(CallToolResult {
+                content: vec![Content::text(format!(
+                    "OK (created=0 skipped=0 failed={})\n",
+                    failed.len()
+                ))],
+                structured_content: Some(json!({
+                    "graph": graph,
+                    "path": path.display().to_string(),
+                    "created": [],
+                    "skipped": [],
+                    "failed": failed,
+                })),
+                is_error: Some(false),
+                meta: None,
+            });
+        }
 
         let _graph_write_lock = kg::acquire_graph_write_lock(&path).map_err(|err| {
             McpError::internal_error(
@@ -1898,158 +2157,8 @@ impl KgMcpServer {
 
         let mut created: Vec<String> = Vec::new();
         let mut skipped: Vec<String> = Vec::new();
-        let mut failed: Vec<serde_json::Value> = Vec::new();
-
-        for item in args.nodes {
-            let id = match kg::canonicalize_node_id_for_type(&item.id, &item.node_type) {
-                Ok(value) => value,
-                Err(err) => {
-                    if mode == "atomic" {
-                        return Err(McpError::invalid_params(
-                            "invalid node",
-                            Some(json!({ "id": item.id, "error": err })),
-                        ));
-                    }
-                    failed.push(json!({ "id": item.id, "error": err }));
-                    continue;
-                }
-            };
-
-            if !kg::VALID_TYPES.contains(&item.node_type.as_str()) {
-                let err = format!(
-                    "invalid node_type '{}': expected one of {:?}",
-                    item.node_type,
-                    kg::VALID_TYPES
-                );
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            }
-
-            if item.sources.is_empty() {
-                let err = "at least one source is required";
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            }
-
-            let description = item.description.unwrap_or_default();
-            let domain_area = item.domain_area.unwrap_or_default();
-            let provenance = item.provenance.unwrap_or_default();
-            let created_at = item.created_at.unwrap_or_default();
-            let Some(confidence) = item.confidence else {
-                let err = "confidence is required and must be in range 0..1";
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            };
-            let Some(importance) = item.importance else {
-                let err = "importance is required and must be in range 0..1";
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            };
-
-            if description.trim().is_empty()
-                || domain_area.trim().is_empty()
-                || provenance.trim().is_empty()
-                || created_at.trim().is_empty()
-            {
-                let err = "description, domain_area, provenance and created_at are required";
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            }
-            if !VALID_PROVENANCE_CODES.contains(&provenance.as_str()) {
-                let err = format!(
-                    "provenance must be one of: {}",
-                    VALID_PROVENANCE_CODES.join(", ")
-                );
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            }
-            if !(0.0..=1.0).contains(&confidence) {
-                let err = format!("confidence out of range: {confidence}");
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            }
-            if !(0.0..=1.0).contains(&importance) {
-                let err = format!("importance out of range: {importance}");
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            }
-            if !is_valid_iso_utc_timestamp(created_at.trim()) {
-                let err = "created_at must use UTC format YYYY-MM-DDTHH:MM:SSZ";
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            }
-            let mut source_error = None;
-            for source in &item.sources {
-                if let Err(err) = validate_source_reference(source) {
-                    source_error = Some(format!("invalid source '{}': {err}", source));
-                    break;
-                }
-            }
-            if let Some(err) = source_error {
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "invalid node",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            }
-
+        for item in prepared_nodes {
+            let id = item.id.clone();
             if graph_file.node_by_id(&id).is_some() {
                 if on_conflict == "skip" {
                     skipped.push(id);
@@ -2071,12 +2180,12 @@ impl KgMcpServer {
                 r#type: item.node_type,
                 name: item.name,
                 properties: kg::NodeProperties {
-                    description,
-                    domain_area,
-                    provenance,
-                    confidence: Some(confidence),
-                    created_at,
-                    importance,
+                    description: item.description,
+                    domain_area: item.domain_area,
+                    provenance: item.provenance,
+                    confidence: Some(item.confidence),
+                    created_at: item.created_at,
+                    importance: item.importance,
                     key_facts: item.facts,
                     alias: item.aliases,
                     ..kg::NodeProperties::default()
@@ -2316,87 +2425,147 @@ impl KgMcpServer {
         }
 
         let dry_run = args.dry_run;
-        let mut working_graph = self.load_graph_file(&graph)?;
+        let (prepared_edges, pre_failed) = prevalidate_edge_batch_items(args.edges);
+        if mode == "atomic" && !dry_run && !pre_failed.is_empty() {
+            return Err(McpError::invalid_params(
+                "invalid edge batch",
+                Some(json!({
+                    "count": pre_failed.len(),
+                    "failed": pre_failed.iter().map(|(_, value)| value).collect::<Vec<_>>(),
+                })),
+            ));
+        }
 
-        let mut results = Vec::new();
+        let graph_root = kg::default_graph_root(&self.cwd);
+        let path = kg::resolve_graph_path(&self.cwd, &graph_root, &graph).map_err(|err| {
+            McpError::invalid_params(
+                "graph not found",
+                Some(json!({ "graph": graph.clone(), "error": err.to_string() })),
+            )
+        })?;
 
-        for (i, edge) in args.edges.iter().enumerate() {
+        let mut working_graph = if dry_run {
+            self.load_graph_file(&graph)?
+        } else {
+            let _graph_write_lock = kg::acquire_graph_write_lock(&path).map_err(|err| {
+                McpError::internal_error(
+                    "failed to lock graph for write",
+                    Some(json!({ "path": path.display().to_string(), "error": err.to_string() })),
+                )
+            })?;
+            let mut graph_file = kg::GraphFile::load(&path).map_err(|err| {
+                let detail = kg::format_error_chain(&err);
+                McpError::internal_error(
+                    format!("failed to load graph: {detail}"),
+                    Some(json!({ "path": path.display().to_string(), "error": detail })),
+                )
+            })?;
+
+            let mut results_slots = vec![None; prepared_edges.len() + pre_failed.len()];
+            for (index, value) in pre_failed {
+                results_slots[index] = Some(value);
+            }
+
+            let mut added_count = 0usize;
+            for edge in &prepared_edges {
+                if let Err(error) = self.preflight_edge(
+                    &graph_file,
+                    &edge.source_id,
+                    &edge.relation,
+                    &edge.target_id,
+                ) {
+                    if mode == "atomic" {
+                        return Err(McpError::invalid_params(error.message, Some(error.data)));
+                    }
+                    results_slots[edge.index] = Some(json!({
+                        "index": edge.index,
+                        "source_id": edge.source_id,
+                        "relation": edge.relation,
+                        "target_id": edge.target_id,
+                        "ok": false,
+                        "error": error.message,
+                        "dry_run": false,
+                    }));
+                    continue;
+                }
+
+                Self::apply_edge_to_graph(&mut graph_file, edge);
+                added_count = added_count.saturating_add(1);
+                results_slots[edge.index] = Some(json!({
+                    "index": edge.index,
+                    "source_id": edge.source_id,
+                    "relation": edge.relation,
+                    "target_id": edge.target_id,
+                    "ok": true,
+                    "dry_run": false,
+                }));
+            }
+
+            if added_count > 0 {
+                graph_file.save(&path).map_err(|err| {
+                    McpError::internal_error(
+                        "failed to save graph",
+                        Some(
+                            json!({ "path": path.display().to_string(), "error": err.to_string() }),
+                        ),
+                    )
+                })?;
+            }
+
+            let results: Vec<_> = results_slots.into_iter().flatten().collect();
+            let ok_count = results.iter().filter(|r| r["ok"] == true).count();
+            let failed_count = results.len().saturating_sub(ok_count);
+            let summary = self.format_edge_batch_output(dry_run, ok_count, failed_count, &results);
+            return Ok(CallToolResult {
+                content: vec![Content::text(summary)],
+                structured_content: Some(json!({
+                    "added": ok_count,
+                    "would_add": 0,
+                    "failed": failed_count,
+                    "dry_run": false,
+                    "results": results,
+                })),
+                is_error: Some(failed_count > 0),
+                meta: None,
+            });
+        };
+
+        let mut results_slots = vec![None; prepared_edges.len() + pre_failed.len()];
+        for (index, value) in pre_failed {
+            results_slots[index] = Some(value);
+        }
+
+        for edge in &prepared_edges {
             if let Err(error) = self.preflight_edge(
                 &working_graph,
                 &edge.source_id,
                 &edge.relation,
                 &edge.target_id,
             ) {
-                if mode == "atomic" && !dry_run {
-                    return Err(McpError::invalid_params(error.message, Some(error.data)));
-                }
-                results.push(json!({
-                    "index": i,
+                results_slots[edge.index] = Some(json!({
+                    "index": edge.index,
                     "source_id": edge.source_id,
                     "relation": edge.relation,
                     "target_id": edge.target_id,
                     "ok": false,
                     "error": error.message,
-                    "dry_run": dry_run,
-                }));
-                continue;
-            }
-
-            if dry_run {
-                Self::apply_edge_to_graph(&mut working_graph, edge);
-                results.push(json!({
-                    "index": i,
-                    "source_id": edge.source_id,
-                    "relation": edge.relation,
-                    "target_id": edge.target_id,
-                    "ok": true,
                     "dry_run": true,
                 }));
                 continue;
             }
 
-            let mut cmd = vec![
-                graph.clone(),
-                "edge".to_owned(),
-                "add".to_owned(),
-                edge.source_id.clone(),
-                edge.relation.clone(),
-                edge.target_id.clone(),
-            ];
-            if let Some(detail) = &edge.detail {
-                cmd.push("--detail".to_owned());
-                cmd.push(detail.clone());
-            }
-            let result = self.execute_kg(cmd);
-
-            match result {
-                Ok(_) => {
-                    Self::apply_edge_to_graph(&mut working_graph, edge);
-                    results.push(json!({
-                        "index": i,
-                        "source_id": edge.source_id,
-                        "relation": edge.relation,
-                        "target_id": edge.target_id,
-                        "ok": true,
-                        "dry_run": false,
-                    }));
-                }
-                Err(e) => {
-                    if mode == "atomic" {
-                        return Err(e);
-                    }
-                    results.push(json!({
-                        "index": i,
-                        "source_id": edge.source_id,
-                        "relation": edge.relation,
-                        "target_id": edge.target_id,
-                        "ok": false,
-                        "error": e.message,
-                        "dry_run": false,
-                    }));
-                }
-            }
+            Self::apply_edge_to_graph(&mut working_graph, edge);
+            results_slots[edge.index] = Some(json!({
+                "index": edge.index,
+                "source_id": edge.source_id,
+                "relation": edge.relation,
+                "target_id": edge.target_id,
+                "ok": true,
+                "dry_run": true,
+            }));
         }
+
+        let results: Vec<_> = results_slots.into_iter().flatten().collect();
 
         let ok_count = results.iter().filter(|r| r["ok"] == true).count();
         let failed_count = results.len() - ok_count;
