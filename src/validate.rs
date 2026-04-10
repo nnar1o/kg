@@ -58,6 +58,9 @@ pub const VALID_SOURCE_TYPES: &[&str] = &[
     "OTHER",
 ];
 
+const MAX_CUSTOM_TYPE_LEN: usize = 48;
+const MAX_CUSTOM_RELATION_LEN: usize = 64;
+
 /// Maps node type -> expected id prefix.
 pub const TYPE_TO_PREFIX: &[(&str, &str)] = &[
     ("Concept", "concept"),
@@ -200,6 +203,24 @@ fn valid_id_suffix(suffix: &str) -> bool {
         && suffix
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+fn is_valid_custom_token(token: &str, max_len: usize) -> bool {
+    if token.is_empty() || token.len() > max_len {
+        return false;
+    }
+    if token.chars().any(char::is_whitespace) {
+        return false;
+    }
+    token.chars().all(|ch| ch.is_ascii_graphic())
+}
+
+pub fn is_valid_node_type(value: &str) -> bool {
+    VALID_TYPES.contains(&value) || is_valid_custom_token(value, MAX_CUSTOM_TYPE_LEN)
+}
+
+pub fn is_valid_relation(value: &str) -> bool {
+    VALID_RELATIONS.contains(&value) || is_valid_custom_token(value, MAX_CUSTOM_RELATION_LEN)
 }
 
 pub fn is_valid_iso_utc_timestamp(value: &str) -> bool {
@@ -373,8 +394,18 @@ pub fn canonicalize_node_id_for_type(id: &str, node_type: &str) -> Result<String
         ));
     }
 
-    let Some(expected_code) = canonical_type_code_for(node_type) else {
+    if !is_valid_node_type(node_type) {
         return Err(format!("invalid node type '{node_type}'"));
+    }
+
+    let Some(expected_code) = canonical_type_code_for(node_type) else {
+        if head == node_type {
+            return Ok(format!("{node_type}:{suffix}"));
+        }
+        return Err(format!(
+            "node id '{}' has type marker '{}'; expected '{}' for custom node type",
+            id, head, node_type
+        ));
     };
     let Some(expected_prefix) = TYPE_TO_PREFIX
         .iter()
@@ -456,7 +487,7 @@ pub fn validate_graph(
     for node in &graph.nodes {
         *id_counts.entry(node.id.as_str()).or_insert(0) += 1;
 
-        if !VALID_TYPES.contains(&node.r#type.as_str()) {
+        if !is_valid_node_type(&node.r#type) {
             errors.push(format!("node {} has invalid type {}", node.id, node.r#type));
         }
         if node.name.trim().is_empty() {
@@ -478,16 +509,16 @@ pub fn validate_graph(
                             "node id {} invalid for type {} (expected {}:* or {}:*)",
                             node.id, node.r#type, expected_code, expected_prefix
                         ));
+                        if type_for_code(head).is_none() && type_for_prefix(head).is_none() {
+                            errors.push(format!(
+                                "node id {} has unknown type marker '{}'",
+                                node.id, head
+                            ));
+                        }
                     } else {
                         errors.push(format!(
-                            "node id {} invalid for type {} (invalid type metadata)",
-                            node.id, node.r#type
-                        ));
-                    }
-                    if type_for_code(head).is_none() && type_for_prefix(head).is_none() {
-                        errors.push(format!(
-                            "node id {} has unknown type marker '{}'",
-                            node.id, head
+                            "node id {} invalid for custom type {} (expected {}:*)",
+                            node.id, node.r#type, node.r#type
                         ));
                     }
                 } else {
@@ -568,7 +599,7 @@ pub fn validate_graph(
     let mut edge_keys = HashSet::new();
 
     for edge in &graph.edges {
-        if !VALID_RELATIONS.contains(&edge.relation.as_str()) {
+        if !is_valid_relation(&edge.relation) {
             errors.push(format!(
                 "edge has invalid relation: {} {} {}",
                 edge.source_id, edge.relation, edge.target_id
@@ -646,4 +677,29 @@ pub fn validate_graph(
     errors.sort();
     warnings.sort();
     ValidationReport { errors, warnings }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{canonicalize_node_id_for_type, is_valid_node_type, is_valid_relation};
+
+    #[test]
+    fn canonicalize_node_id_allows_custom_type_marker() {
+        let canonical = canonicalize_node_id_for_type("~:dedupe_anchor", "~").expect("custom id");
+        assert_eq!(canonical, "~:dedupe_anchor");
+    }
+
+    #[test]
+    fn canonicalize_node_id_rejects_mismatched_custom_marker() {
+        let err = canonicalize_node_id_for_type("custom:dedupe_anchor", "~").unwrap_err();
+        assert!(err.contains("expected '~' for custom node type"));
+    }
+
+    #[test]
+    fn relation_and_node_type_validation_accepts_custom_tokens() {
+        assert!(is_valid_node_type("~"));
+        assert!(is_valid_relation("~"));
+        assert!(!is_valid_node_type(""));
+        assert!(!is_valid_relation(" "));
+    }
 }

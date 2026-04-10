@@ -2,7 +2,8 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::graph::{Edge, GraphFile, Node};
 use crate::validate::{
-    VALID_TYPES, edge_type_rule, format_edge_source_type_error, format_edge_target_type_error,
+    edge_type_rule, format_edge_source_type_error, format_edge_target_type_error,
+    is_valid_node_type, is_valid_relation,
 };
 
 // ---------------------------------------------------------------------------
@@ -10,11 +11,11 @@ use crate::validate::{
 // ---------------------------------------------------------------------------
 
 pub fn validate_node(node: &Node) -> Result<()> {
-    if !VALID_TYPES.contains(&node.r#type.as_str()) {
+    if !is_valid_node_type(&node.r#type) {
         bail!(
             "invalid node_type '{}'. Valid types: {:?}",
             node.r#type,
-            VALID_TYPES
+            crate::validate::VALID_TYPES
         );
     }
     if let Err(error) = crate::validate::canonicalize_node_id_for_type(&node.id, &node.r#type) {
@@ -175,13 +176,11 @@ pub fn remove_node(graph: &mut GraphFile, id: &str) -> Result<usize> {
 // ---------------------------------------------------------------------------
 
 pub fn validate_edge(graph: &GraphFile, edge: &Edge) -> Result<()> {
-    use crate::validate::VALID_RELATIONS;
-
-    if !VALID_RELATIONS.contains(&edge.relation.as_str()) {
+    if !is_valid_relation(&edge.relation) {
         bail!(
             "invalid relation '{}'. Valid: {:?}",
             edge.relation,
-            VALID_RELATIONS
+            crate::validate::VALID_RELATIONS
         );
     }
 
@@ -355,5 +354,38 @@ mod tests {
             "Got: {}",
             err_msg
         );
+    }
+
+    #[test]
+    fn add_node_accepts_custom_type() {
+        use crate::graph::GraphFile;
+        let mut graph = GraphFile::new("test");
+        let node = valid_node("~:n1", "Virtual Node", "~");
+
+        add_node(&mut graph, node).expect("custom type should be accepted");
+        assert!(graph.node_by_id("~:n1").is_some());
+    }
+
+    #[test]
+    fn add_edge_accepts_custom_relation() {
+        use crate::graph::{Edge, EdgeProperties, GraphFile};
+        let mut graph = GraphFile::new("test");
+        let source = valid_node("concept:source", "Source", "Concept");
+        let target = valid_node("concept:target", "Target", "Concept");
+        add_node(&mut graph, source).expect("source node");
+        add_node(&mut graph, target).expect("target node");
+
+        add_edge(
+            &mut graph,
+            Edge {
+                source_id: "concept:source".to_owned(),
+                relation: "~".to_owned(),
+                target_id: "concept:target".to_owned(),
+                properties: EdgeProperties::default(),
+            },
+        )
+        .expect("custom relation should be accepted");
+
+        assert!(graph.has_edge("concept:source", "~", "concept:target"));
     }
 }

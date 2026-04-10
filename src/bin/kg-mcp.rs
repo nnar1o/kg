@@ -455,14 +455,10 @@ fn prevalidate_node_batch_items(
             continue;
         }
 
-        if !kg::VALID_TYPES.contains(&item.node_type.as_str()) {
+        if !kg::is_valid_node_type(&item.node_type) {
             failed.push(json!({
                 "id": id,
-                "error": format!(
-                    "invalid node_type '{}': expected one of {:?}",
-                    item.node_type,
-                    kg::VALID_TYPES
-                )
+                "error": format!("invalid node_type '{}': expected non-empty ASCII token without whitespace", item.node_type)
             }));
             continue;
         }
@@ -601,7 +597,7 @@ fn prevalidate_edge_batch_items(
             continue;
         }
 
-        if !kg::VALID_RELATIONS.contains(&relation.as_str()) {
+        if !kg::is_valid_relation(&relation) {
             failed.push((
                 index,
                 json!({
@@ -611,9 +607,8 @@ fn prevalidate_edge_batch_items(
                     "target_id": target_id,
                     "ok": false,
                     "error": format!(
-                        "invalid relation '{}': expected one of {}",
+                        "invalid relation '{}': expected non-empty ASCII token without whitespace",
                         relation,
-                        kg::VALID_RELATIONS.join(", "),
                     ),
                 }),
             ));
@@ -905,16 +900,14 @@ impl KgMcpServer {
         relation: &str,
         target_id: &str,
     ) -> Result<(), EdgePreflightFailure> {
-        if !kg::VALID_RELATIONS.contains(&relation) {
+        if !kg::is_valid_relation(relation) {
             return Err(EdgePreflightFailure {
                 message: format!(
-                    "invalid relation '{}' (allowed: {})",
+                    "invalid relation '{}' (expected non-empty ASCII token without whitespace)",
                     relation,
-                    kg::VALID_RELATIONS.join(", ")
                 ),
                 data: json!({
                     "relation": relation,
-                    "valid_relations": kg::VALID_RELATIONS,
                     "hint": "Call kg_schema before adding edges to inspect allowed relations and edge rules.",
                 }),
             });
@@ -2246,11 +2239,11 @@ impl KgMcpServer {
         &self,
         Parameters(args): Parameters<NodeAddArgs>,
     ) -> Result<CallToolResult, McpError> {
-        if !kg::VALID_TYPES.contains(&args.node_type.as_str()) {
+        if !kg::is_valid_node_type(&args.node_type) {
             return Err(McpError::invalid_params(
                 "invalid node_type",
                 Some(json!({
-                    "expected": kg::VALID_TYPES,
+                    "expected": "non-empty ASCII token without whitespace",
                     "got": args.node_type,
                 })),
             ));
@@ -3857,6 +3850,43 @@ mod tests {
         ];
         let parsed = parse_node_get_args(&args).expect("match").expect("ok");
         assert_eq!(parsed.output_size, Some(750));
+    }
+
+    #[test]
+    fn prevalidate_edge_batch_allows_custom_relation() {
+        let (prepared, failed) = prevalidate_edge_batch_items(vec![EdgeAddBatchItem {
+            source_id: "concept:refrigerator".to_owned(),
+            relation: "~".to_owned(),
+            target_id: "concept:fridge".to_owned(),
+            detail: Some("0.91".to_owned()),
+        }]);
+
+        assert_eq!(failed.len(), 0);
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(prepared[0].relation, "~");
+    }
+
+    #[test]
+    fn prevalidate_node_batch_allows_custom_type() {
+        let (prepared, failed) = prevalidate_node_batch_items(vec![NodeAddBatchItem {
+            id: "~:dedupe_anchor".to_owned(),
+            node_type: "~".to_owned(),
+            name: "Anchor".to_owned(),
+            description: Some("desc".to_owned()),
+            domain_area: Some("quality".to_owned()),
+            provenance: Some("U".to_owned()),
+            confidence: Some(0.9),
+            created_at: Some("2026-04-10T10:00:00Z".to_owned()),
+            importance: Some(0.7),
+            facts: vec![],
+            aliases: vec![],
+            sources: vec!["DOC /tmp/source.md".to_owned()],
+        }]);
+
+        assert_eq!(failed.len(), 0);
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(prepared[0].node_type, "~");
+        assert_eq!(prepared[0].id, "~:dedupe_anchor");
     }
 
     #[test]
