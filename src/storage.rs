@@ -397,7 +397,7 @@ impl GraphStore for JsonGraphStore {
 
     fn resolve_graph_path(&self, graph: &str) -> Result<PathBuf> {
         if let Some(path) = self.config_graph_path(graph) {
-            if path.exists() {
+            if path.is_file() {
                 if !self.force_legacy_json
                     && path.extension().and_then(|ext| ext.to_str()) == Some("json")
                 {
@@ -413,7 +413,7 @@ impl GraphStore for JsonGraphStore {
             let direct = config_graph_dir.join(graph);
             let json = config_graph_dir.join(format!("{graph}.json"));
             let kg = config_graph_dir.join(format!("{graph}.kg"));
-            if direct.exists() {
+            if direct.is_file() {
                 return Ok(direct);
             }
             if let Some(path) = self.resolve_json_or_kg(json, kg)? {
@@ -428,7 +428,7 @@ impl GraphStore for JsonGraphStore {
             self.graph_root.join(graph),
         ];
         for candidate in candidates {
-            if candidate.exists() {
+            if candidate.is_file() {
                 return Ok(candidate);
             }
         }
@@ -446,7 +446,7 @@ impl GraphStore for JsonGraphStore {
         }
         if self.force_legacy_json {
             let fallback = self.cwd.join(format!("graph-example-{graph}.json"));
-            if fallback.exists() {
+            if fallback.is_file() {
                 return Ok(fallback);
             }
         }
@@ -528,17 +528,17 @@ impl GraphStore for RedbGraphStore {
 
     fn resolve_graph_path(&self, graph: &str) -> Result<PathBuf> {
         if let Some(path) = self.config_graph_path(graph) {
-            if path.exists() {
+            if path.is_file() {
                 return Ok(path);
             }
         }
         if let Some(config_graph_dir) = self.config_graph_dir() {
             let direct = config_graph_dir.join(graph);
             let db = config_graph_dir.join(format!("{graph}.db"));
-            if direct.exists() {
+            if direct.is_file() {
                 return Ok(direct);
             }
-            if db.exists() {
+            if db.is_file() {
                 return Ok(db);
             }
         }
@@ -552,7 +552,7 @@ impl GraphStore for RedbGraphStore {
             self.graph_root.join(format!("{graph}.db")),
         ];
         for candidate in candidates {
-            if candidate.exists() {
+            if candidate.is_file() {
                 return Ok(candidate);
             }
         }
