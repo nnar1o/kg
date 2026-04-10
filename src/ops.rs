@@ -184,6 +184,16 @@ pub fn validate_edge(graph: &GraphFile, edge: &Edge) -> Result<()> {
         );
     }
 
+    if let Err(error) = crate::validate::validate_bidirectional_similarity_edge(
+        &edge.source_id,
+        &edge.relation,
+        &edge.target_id,
+        &edge.properties.detail,
+        edge.properties.bidirectional,
+    ) {
+        bail!(error);
+    }
+
     let src_node = graph.node_by_id(&edge.source_id);
     let tgt_node = graph.node_by_id(&edge.target_id);
 
@@ -387,5 +397,32 @@ mod tests {
         .expect("custom relation should be accepted");
 
         assert!(graph.has_edge("concept:source", "~", "concept:target"));
+    }
+
+    #[test]
+    fn add_edge_rejects_invalid_bidirectional_similarity_score() {
+        use crate::graph::{Edge, EdgeProperties, GraphFile};
+        let mut graph = GraphFile::new("test");
+        let source = valid_node("~:a", "A", "~");
+        let target = valid_node("~:b", "B", "~");
+        add_node(&mut graph, source).expect("source node");
+        add_node(&mut graph, target).expect("target node");
+
+        let err = add_edge(
+            &mut graph,
+            Edge {
+                source_id: "~:a".to_owned(),
+                relation: "~".to_owned(),
+                target_id: "~:b".to_owned(),
+                properties: EdgeProperties {
+                    detail: "2.0".to_owned(),
+                    bidirectional: true,
+                    ..Default::default()
+                },
+            },
+        )
+        .expect_err("invalid score should fail");
+
+        assert!(err.to_string().contains("requires score in range 0..1"));
     }
 }

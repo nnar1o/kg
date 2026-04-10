@@ -205,6 +205,14 @@ fn code_to_relation(code: &str) -> &str {
     }
 }
 
+fn canonicalize_bidirectional_pair(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.to_owned(), b.to_owned())
+    } else {
+        (b.to_owned(), a.to_owned())
+    }
+}
+
 fn sort_case_insensitive(values: &[String]) -> Vec<String> {
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| {
@@ -470,7 +478,7 @@ fn parse_kg_with_warnings(
                 } else if code_to_node_type(type_code.trim()) != type_code.trim() {
                     crate::validate::normalize_node_id(&format!("{}:{raw_id}", type_code.trim()))
                 } else {
-                    raw_id.to_owned()
+                    format!("{}:{raw_id}", type_code.trim())
                 }
             };
             current_node = Some(Node {
@@ -799,6 +807,56 @@ fn parse_kg_with_warnings(
             continue;
         }
 
+        if let Some(rest) = trimmed.strip_prefix("= ") {
+            let mut parts = rest.split_whitespace();
+            let Some(relation) = parts.next() else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!("missing relation in bidirectional edge at line {line_no}: {trimmed}"),
+                )?;
+                current_edge_index = None;
+                continue;
+            };
+            let Some(target_id) = parts.next() else {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!("missing target id in bidirectional edge at line {line_no}: {trimmed}"),
+                )?;
+                current_edge_index = None;
+                continue;
+            };
+            let relation = code_to_relation(relation).to_owned();
+            if relation != "~" {
+                fail_or_warn(
+                    strict,
+                    &mut warnings,
+                    format!(
+                        "invalid bidirectional relation at line {line_no}: expected '~', got '{}'",
+                        relation
+                    ),
+                )?;
+                current_edge_index = None;
+                continue;
+            }
+
+            let target_id = crate::validate::normalize_node_id(target_id);
+            let (source_id, target_id) = canonicalize_bidirectional_pair(&node.id, &target_id);
+            graph.edges.push(Edge {
+                source_id,
+                relation,
+                target_id,
+                properties: EdgeProperties {
+                    bidirectional: true,
+                    ..EdgeProperties::default()
+                },
+            });
+            current_edge_index = Some(graph.edges.len() - 1);
+            last_edge_rank = 0;
+            continue;
+        }
+
         if let Some(rest) = field_value(raw_line, "d") {
             enforce_field_order(
                 line_no,
@@ -992,6 +1050,7 @@ fn parse_kg_with_warnings(
             .cmp(&b.source_id)
             .then_with(|| a.relation.cmp(&b.relation))
             .then_with(|| a.target_id.cmp(&b.target_id))
+            .then_with(|| a.properties.bidirectional.cmp(&b.properties.bidirectional))
             .then_with(|| a.properties.detail.cmp(&b.properties.detail))
     });
 
@@ -1076,12 +1135,19 @@ fn serialize_kg(graph: &GraphFile) -> String {
             a.relation
                 .cmp(&b.relation)
                 .then_with(|| a.target_id.cmp(&b.target_id))
+                .then_with(|| a.properties.bidirectional.cmp(&b.properties.bidirectional))
                 .then_with(|| a.properties.detail.cmp(&b.properties.detail))
         });
 
         for edge in edges {
+            let op = if edge.properties.bidirectional && edge.relation == "~" {
+                "="
+            } else {
+                ">"
+            };
             out.push_str(&format!(
-                "> {} {}\n",
+                "{} {} {}\n",
+                op,
                 relation_to_code(&edge.relation),
                 edge.target_id
             ));
@@ -1247,6 +1313,8 @@ pub struct EdgeProperties {
     pub feedback_count: u64,
     #[serde(default)]
     pub feedback_last_ts_ms: Option<u64>,
+    #[serde(default)]
+    pub bidirectional: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1390,6 +1458,12 @@ fn normalize_graph_ids(graph: &mut GraphFile) {
             .get(&edge.target_id)
             .cloned()
             .unwrap_or_else(|| crate::validate::normalize_node_id(&edge.target_id));
+        if edge.properties.bidirectional {
+            let (source_id, target_id) =
+                canonicalize_bidirectional_pair(&edge.source_id, &edge.target_id);
+            edge.source_id = source_id;
+            edge.target_id = target_id;
+        }
     }
 
     for note in &mut graph.notes {
@@ -1639,6 +1713,81 @@ mod tests {
         assert_eq!(note.author, "alice\nbob");
         assert_eq!(note.provenance, "manual\nentry");
         assert_eq!(note.source_files, vec!["docs/a\nb.md".to_owned()]);
+    }
+
+    #[test]
+    fn parse_bidirectional_similarity_edge_is_canonical_and_scored() {
+        let raw = "@ ~:dedupe_b\nN B\nD Desc\nV 0.5\nP U\nS docs/b.md\n= ~ ~:dedupe_a\nd 0.91\n\n@ ~:dedupe_a\nN A\nD Desc\nV 0.5\nP U\nS docs/a.md\n";
+        let graph = parse_kg(raw, "virt", true).expect("parse kg");
+
+        assert_eq!(graph.nodes.len(), 2);
+        assert_eq!(graph.edges.len(), 1);
+        let edge = &graph.edges[0];
+        assert_eq!(edge.relation, "~");
+        assert_eq!(edge.source_id, "~:dedupe_a");
+        assert_eq!(edge.target_id, "~:dedupe_b");
+        assert_eq!(edge.properties.detail, "0.91");
+        assert!(edge.properties.bidirectional);
+    }
+
+    #[test]
+    fn serialize_bidirectional_similarity_edge_uses_equals_operator() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("virt.kg");
+        let mut graph = GraphFile::new("virt");
+        graph.nodes.push(crate::Node {
+            id: "~:dedupe_a".to_owned(),
+            r#type: "~".to_owned(),
+            name: "A".to_owned(),
+            properties: crate::NodeProperties {
+                description: "Desc".to_owned(),
+                provenance: "U".to_owned(),
+                created_at: "2026-04-10T00:00:00Z".to_owned(),
+                importance: 0.6,
+                ..Default::default()
+            },
+            source_files: vec!["docs/a.md".to_owned()],
+        });
+        graph.nodes.push(crate::Node {
+            id: "~:dedupe_b".to_owned(),
+            r#type: "~".to_owned(),
+            name: "B".to_owned(),
+            properties: crate::NodeProperties {
+                description: "Desc".to_owned(),
+                provenance: "U".to_owned(),
+                created_at: "2026-04-10T00:00:00Z".to_owned(),
+                importance: 0.6,
+                ..Default::default()
+            },
+            source_files: vec!["docs/b.md".to_owned()],
+        });
+        graph.edges.push(crate::Edge {
+            source_id: "~:dedupe_a".to_owned(),
+            relation: "~".to_owned(),
+            target_id: "~:dedupe_b".to_owned(),
+            properties: crate::EdgeProperties {
+                detail: "0.75".to_owned(),
+                bidirectional: true,
+                ..Default::default()
+            },
+        });
+
+        graph.save(&path).expect("save");
+        let raw = std::fs::read_to_string(&path).expect("read");
+        assert!(raw.contains("= ~ ~:dedupe_b"));
+        assert!(!raw.contains("> ~ ~:dedupe_b"));
+
+        let loaded = GraphFile::load(&path).expect("load");
+        assert_eq!(loaded.edges.len(), 1);
+        assert!(loaded.edges[0].properties.bidirectional);
+        assert_eq!(loaded.edges[0].properties.detail, "0.75");
+    }
+
+    #[test]
+    fn strict_mode_rejects_bidirectional_relation_other_than_similarity() {
+        let raw = "@ K:concept:a\nN A\nD Desc\nV 0.5\nP U\nS docs/a.md\n= HAS concept:b\n";
+        let err = parse_kg(raw, "x", true).expect_err("strict mode should reject invalid '='");
+        assert!(format!("{err:#}").contains("expected '~'"));
     }
 
     #[test]

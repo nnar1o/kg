@@ -223,6 +223,46 @@ pub fn is_valid_relation(value: &str) -> bool {
     VALID_RELATIONS.contains(&value) || is_valid_custom_token(value, MAX_CUSTOM_RELATION_LEN)
 }
 
+fn parse_similarity_score(value: &str) -> Option<f64> {
+    let score = value.trim().parse::<f64>().ok()?;
+    if (0.0..=1.0).contains(&score) {
+        Some(score)
+    } else {
+        None
+    }
+}
+
+pub fn validate_bidirectional_similarity_edge(
+    source_id: &str,
+    relation: &str,
+    target_id: &str,
+    detail: &str,
+    bidirectional: bool,
+) -> Result<(), String> {
+    if !bidirectional {
+        return Ok(());
+    }
+    if relation != "~" {
+        return Err(format!(
+            "bidirectional edge requires '~' relation: {} {} {}",
+            source_id, relation, target_id
+        ));
+    }
+    if source_id > target_id {
+        return Err(format!(
+            "bidirectional edge must be canonicalized (source <= target): {} ~ {}",
+            source_id, target_id
+        ));
+    }
+    if parse_similarity_score(detail).is_none() {
+        return Err(format!(
+            "bidirectional similarity edge requires score in range 0..1: {} ~ {}",
+            source_id, target_id
+        ));
+    }
+    Ok(())
+}
+
 pub fn is_valid_iso_utc_timestamp(value: &str) -> bool {
     if value.len() != 20 {
         return false;
@@ -618,6 +658,16 @@ pub fn validate_graph(
             ));
         }
 
+        if let Err(err) = validate_bidirectional_similarity_edge(
+            &edge.source_id,
+            &edge.relation,
+            &edge.target_id,
+            &edge.properties.detail,
+            edge.properties.bidirectional,
+        ) {
+            errors.push(err);
+        }
+
         // Enforce relation semantics from decision table rules.
         if let (Some(src_type), Some(tgt_type)) = (
             node_type_map.get(edge.source_id.as_str()),
@@ -681,7 +731,10 @@ pub fn validate_graph(
 
 #[cfg(test)]
 mod tests {
-    use super::{canonicalize_node_id_for_type, is_valid_node_type, is_valid_relation};
+    use super::{
+        canonicalize_node_id_for_type, is_valid_node_type, is_valid_relation,
+        validate_bidirectional_similarity_edge,
+    };
 
     #[test]
     fn canonicalize_node_id_allows_custom_type_marker() {
@@ -701,5 +754,18 @@ mod tests {
         assert!(is_valid_relation("~"));
         assert!(!is_valid_node_type(""));
         assert!(!is_valid_relation(" "));
+    }
+
+    #[test]
+    fn bidirectional_similarity_validation_requires_score_and_canonical_order() {
+        assert!(validate_bidirectional_similarity_edge("~:a", "~", "~:b", "0.8", true).is_ok());
+
+        let invalid_score =
+            validate_bidirectional_similarity_edge("~:a", "~", "~:b", "1.8", true).unwrap_err();
+        assert!(invalid_score.contains("requires score in range 0..1"));
+
+        let invalid_order =
+            validate_bidirectional_similarity_edge("~:b", "~", "~:a", "0.8", true).unwrap_err();
+        assert!(invalid_order.contains("must be canonicalized"));
     }
 }
