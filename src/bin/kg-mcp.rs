@@ -1998,13 +1998,17 @@ impl KgMcpServer {
             });
         }
 
+        let has_step_errors = steps
+            .iter()
+            .any(|step| matches!(step.get("ok"), Some(serde_json::Value::Bool(false))));
+
         Ok(CallToolResult {
             content: vec![Content::text(output)],
             structured_content: Some(json!({
                 "steps": steps,
                 "requires_feedback": requires_feedback,
             })),
-            is_error: Some(false),
+            is_error: Some(has_step_errors),
             meta: None,
         })
     }
@@ -2048,6 +2052,7 @@ impl KgMcpServer {
         }
 
         let result = self.run_feedback_batch(args.lines, &mode)?;
+        let has_errors = result.failed > 0;
         let content = format!("OK (ok={} failed={})\n", result.ok, result.failed);
 
         Ok(CallToolResult {
@@ -2057,7 +2062,7 @@ impl KgMcpServer {
                 "failed": result.failed,
                 "items": result.items,
             })),
-            is_error: Some(false),
+            is_error: Some(has_errors),
             meta: None,
         })
     }
@@ -2123,6 +2128,7 @@ impl KgMcpServer {
         })?;
 
         if prepared_nodes.is_empty() {
+            let has_errors = !failed.is_empty();
             return Ok(CallToolResult {
                 content: vec![Content::text(format!(
                     "OK (created=0 skipped=0 failed={})\n",
@@ -2135,7 +2141,7 @@ impl KgMcpServer {
                     "skipped": [],
                     "failed": failed,
                 })),
-                is_error: Some(false),
+                is_error: Some(has_errors),
                 meta: None,
             });
         }
@@ -2227,7 +2233,7 @@ impl KgMcpServer {
                 "skipped": skipped,
                 "failed": failed,
             })),
-            is_error: Some(false),
+            is_error: Some(!failed.is_empty()),
             meta: None,
         })
     }
@@ -4078,6 +4084,94 @@ mod tests {
 
         let graph = load_test_graph(cwd);
         assert!(!graph.has_edge("process:defrost", "AVAILABLE_IN", "interface:smart_api"));
+    }
+
+    #[test]
+    fn kg_script_marks_error_when_step_fails_in_best_effort() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let result = server
+            .kg(Parameters(KgScriptArgs {
+                script: "fridge node get".to_owned(),
+                mode: Some("best_effort".to_owned()),
+                debug: false,
+            }))
+            .expect("kg script result");
+
+        assert_eq!(result.is_error, Some(true));
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(structured["steps"][0]["ok"], false);
+        let error_text = structured["steps"][0]["error"]
+            .as_str()
+            .expect("error text");
+        assert!(error_text.contains("node get") || error_text.contains("missing node id"));
+    }
+
+    #[test]
+    fn kg_feedback_batch_marks_error_on_failed_lines() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let result = server
+            .kg_feedback_batch(Parameters(FeedbackBatchArgs {
+                lines: vec!["totally invalid".to_owned()],
+                mode: Some("best_effort".to_owned()),
+            }))
+            .expect("feedback batch result");
+
+        assert_eq!(result.is_error, Some(true));
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(structured["ok"], 0);
+        assert_eq!(structured["failed"], 1);
+    }
+
+    #[test]
+    fn kg_node_add_batch_marks_error_on_prevalidation_failures() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let result = server
+            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
+                graph: "fridge".to_owned(),
+                mode: Some("best_effort".to_owned()),
+                on_conflict: None,
+                nodes: vec![NodeAddBatchItem {
+                    id: "X:bad_node".to_owned(),
+                    node_type: "UnknownType".to_owned(),
+                    name: "Bad Node".to_owned(),
+                    description: None,
+                    domain_area: None,
+                    provenance: None,
+                    confidence: None,
+                    created_at: None,
+                    importance: None,
+                    facts: vec![],
+                    aliases: vec![],
+                    sources: vec![],
+                }],
+            }))
+            .expect("node batch result");
+
+        assert_eq!(result.is_error, Some(true));
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(
+            structured["created"]
+                .as_array()
+                .expect("created array")
+                .len(),
+            0
+        );
+        assert_eq!(
+            structured["failed"].as_array().expect("failed array").len(),
+            1
+        );
     }
 }
 
