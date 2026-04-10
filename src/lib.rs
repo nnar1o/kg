@@ -34,6 +34,7 @@ pub use index::Bm25Index;
 
 use std::ffi::OsString;
 use std::fmt::Write as _;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -128,8 +129,72 @@ where
     I: IntoIterator<Item = OsString>,
 {
     let rendered = run_args(args, cwd)?;
-    print!("{rendered}");
+    if should_colorize_stdout() {
+        print!("{}", colorize_cli_output(&rendered));
+    } else {
+        print!("{rendered}");
+    }
     Ok(())
+}
+
+fn should_colorize_stdout() -> bool {
+    let force = std::env::var("CLICOLOR_FORCE")
+        .map(|value| value != "0")
+        .unwrap_or(false);
+    if force {
+        return true;
+    }
+    if !std::io::stdout().is_terminal() {
+        return false;
+    }
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    std::env::var("CLICOLOR")
+        .map(|value| value != "0")
+        .unwrap_or(true)
+}
+
+fn colorize_cli_output(rendered: &str) -> String {
+    if looks_like_json(rendered) {
+        return rendered.to_owned();
+    }
+    rendered
+        .lines()
+        .map(colorize_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn looks_like_json(rendered: &str) -> bool {
+    let trimmed = rendered.trim_start();
+    trimmed.starts_with('{') || trimmed.starts_with('[')
+}
+
+fn colorize_line(line: &str) -> String {
+    const RESET: &str = "\x1b[0m";
+    const BOLD_CYAN: &str = "\x1b[1;36m";
+    const BOLD_YELLOW: &str = "\x1b[1;33m";
+    const BOLD_GREEN: &str = "\x1b[1;32m";
+    const BOLD_MAGENTA: &str = "\x1b[1;35m";
+    const BLUE: &str = "\x1b[34m";
+
+    if line.starts_with("# ") {
+        return format!("{BOLD_CYAN}{line}{RESET}");
+    }
+    if line.starts_with("? ") {
+        return format!("{BOLD_YELLOW}{line}{RESET}");
+    }
+    if line.starts_with("= ") || line.starts_with("+ ") {
+        return format!("{BOLD_GREEN}{line}{RESET}");
+    }
+    if line.starts_with("score:") {
+        return format!("{BOLD_MAGENTA}{line}{RESET}");
+    }
+    if line.starts_with("-> ") || line.starts_with("<- ") {
+        return format!("{BLUE}{line}{RESET}");
+    }
+    line.to_owned()
 }
 
 pub fn format_error_chain(err: &anyhow::Error) -> String {
@@ -3040,5 +3105,21 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("required arguments were not provided"));
         assert!(rendered.contains("<GRAPH_NAME>"));
+    }
+
+    #[test]
+    fn colorize_cli_output_styles_key_lines() {
+        let rendered = "? weather (1)\nscore: 1000\n# concept:rain | Rain [Concept]\n-> DEPENDS_ON | process:forecast | Forecast\n";
+        let colored = colorize_cli_output(rendered);
+        assert!(colored.contains("\x1b[1;33m? weather (1)\x1b[0m"));
+        assert!(colored.contains("\x1b[1;35mscore: 1000\x1b[0m"));
+        assert!(colored.contains("\x1b[1;36m# concept:rain | Rain [Concept]\x1b[0m"));
+        assert!(colored.contains("\x1b[34m-> DEPENDS_ON | process:forecast | Forecast\x1b[0m"));
+    }
+
+    #[test]
+    fn colorize_cli_output_leaves_json_unchanged() {
+        let rendered = "{\n  \"nodes\": []\n}\n";
+        assert_eq!(colorize_cli_output(rendered), rendered);
     }
 }

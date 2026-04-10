@@ -8,7 +8,7 @@ The feature should work the same way in both CLI and MCP text responses.
 
 ## Primary behavior
 
-- Default target size: `1400` characters.
+- Default target size: `4200` characters.
 - New option for CLI and MCP text rendering: `output_size` / `--output-size`.
 - `--full` keeps the current non-adaptive behavior.
 - `--json` keeps the current non-adaptive behavior.

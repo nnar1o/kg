@@ -8,7 +8,7 @@ use crate::index::Bm25Index;
 
 const BM25_K1: f64 = 1.5;
 const BM25_B: f64 = 0.75;
-const DEFAULT_TARGET_CHARS: usize = 1400;
+const DEFAULT_TARGET_CHARS: usize = 4200;
 const MIN_TARGET_CHARS: usize = 300;
 const MAX_TARGET_CHARS: usize = 12_000;
 const FUZZY_NEIGHBOR_CONTEXT_CAP: u32 = 220;

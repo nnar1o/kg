@@ -55,6 +55,18 @@ Tip: during local development, prefer `cargo run --quiet --bin kg-mcp` in client
 }
 ```
 
+## MCP Registry Publishing
+
+This repository includes a top-level `server.json` for `mcp-publisher` and publishes MCP Registry metadata from version tags via `.github/workflows/publish-mcp.yml`.
+
+Because the official registry does not currently support Cargo crates as a package type, the published entry currently uses repository metadata plus `websiteUrl` instead of pretending that `kg-mcp` is an `npm` or `pypi` package.
+
+Installation stays the same:
+
+- GitHub release binaries
+- `install.sh`
+- local `cargo run --bin kg-mcp` during development
+
 ## Tools
 
 ### Shell-like

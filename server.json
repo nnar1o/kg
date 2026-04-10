@@ -1,0 +1,13 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.nnar1o/kg-mcp",
+  "title": "kg",
+  "description": "Local knowledge graph memory MCP server for AI assistants.",
+  "repository": {
+    "url": "https://github.com/nnar1o/kg",
+    "source": "github",
+    "id": "1186772486"
+  },
+  "websiteUrl": "https://github.com/nnar1o/kg/blob/master/docs/mcp.md",
+  "version": "0.2.3"
+}
