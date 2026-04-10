@@ -911,7 +911,10 @@ impl KgMcpServer {
 
     fn append_feedback_log(&self, data: &str) {
         // Best-effort logging; never fail tool calls due to IO.
-        let path = self.cwd.join("kg-mcp.feedback.log");
+        let path = kg::feedback_log_path(&self.cwd);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
             let _ = file.write_all(data.as_bytes());
         }
@@ -3283,7 +3286,7 @@ fn parse_feedback_log_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 }
 
 fn initialize_feedback_state(cwd: &Path) -> FeedbackState {
-    let path = cwd.join("kg-mcp.feedback.log");
+    let path = kg::first_existing_feedback_log_path(cwd);
     let file = match File::open(path) {
         Ok(file) => file,
         Err(_) => return FeedbackState::default(),
@@ -3810,7 +3813,8 @@ mod tests {
         let results = server.apply_feedback_updates(&updates);
         assert!(matches!(results.get(&0), Some(Ok(()))));
 
-        let kglog_raw = fs::read_to_string(cwd.join("fridge.kglog")).expect("read kglog");
+        let kglog_raw = fs::read_to_string(cwd.join(".kg").join("cache").join("fridge.kglog"))
+            .expect("read kglog");
         assert!(kglog_raw.contains(" tester01 F concept:refrigerator YES"));
     }
 

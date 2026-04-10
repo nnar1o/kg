@@ -82,7 +82,7 @@ fn kg_reports_underlying_graph_read_error_details() {
 fn kg_ignores_invalid_kg_entry_and_warns_with_line_fragment() {
     let dir = tempdir().expect("tempdir");
     let graph_root = dir.path().join(".kg").join("graphs");
-    let kglog_path = graph_root.join("broken.kglog");
+    let kglog_path = dir.path().join(".kg").join("cache").join("broken.kglog");
     std::fs::create_dir_all(&graph_root).expect("create graph root");
     std::fs::write(
         graph_root.join("broken.kg"),

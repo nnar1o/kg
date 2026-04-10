@@ -844,8 +844,9 @@ fn default_runtime_creates_kg_sidecars_for_index_and_hit_log() {
     let dir = temp_workspace();
     let graph_path = write_fixture(&test_graph_root(dir.path()));
     let kg_path = graph_path.with_extension("kg");
-    let kgindex_path = graph_path.with_extension("kgindex");
-    let kglog_path = graph_path.with_extension("kglog");
+    let cache_dir = dir.path().join(".kg").join("cache");
+    let kgindex_path = cache_dir.join("fridge.kgindex");
+    let kglog_path = cache_dir.join("fridge.kglog");
 
     exec_ok(
         &[
@@ -874,7 +875,8 @@ fn default_runtime_creates_kg_sidecars_for_index_and_hit_log() {
 fn modifying_kg_graph_invalidates_and_then_rebuilds_kgindex() {
     let dir = temp_workspace();
     let graph_path = write_fixture(&test_graph_root(dir.path()));
-    let kgindex_path = graph_path.with_extension("kgindex");
+    let _kg_path = graph_path.with_extension("kg");
+    let kgindex_path = dir.path().join(".kg").join("cache").join("fridge.kgindex");
 
     exec_ok(
         &[
@@ -966,7 +968,10 @@ fn migration_writes_report_and_maps_legacy_aliases() {
     );
 
     let kg_path = legacy_dir.join("fridge.kg");
-    let report_path = legacy_dir.join("fridge.migration.log");
+    let report_path = legacy_dir
+        .join(".kg")
+        .join("cache")
+        .join("fridge.migration.log");
     assert!(kg_path.exists());
     assert!(report_path.exists());
 

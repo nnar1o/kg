@@ -33,15 +33,39 @@ impl EventLogEntry {
 }
 
 pub fn event_log_path(graph_path: &Path) -> PathBuf {
+    let stem = graph_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("graph");
+    let ext = graph_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("json");
+    crate::cache_paths::cache_root_for_graph(graph_path).join(format!("{stem}.{ext}.event.log"))
+}
+
+fn legacy_event_log_path(graph_path: &Path) -> PathBuf {
     let mut path = graph_path.to_path_buf();
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("graph");
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("json");
-    path.set_file_name(format!("{}.{}.event.log", stem, ext));
+    path.set_file_name(format!("{stem}.{ext}.event.log"));
     path
 }
 
+fn first_existing_event_log_path(graph_path: &Path) -> PathBuf {
+    let preferred = event_log_path(graph_path);
+    if preferred.exists() {
+        return preferred;
+    }
+    let legacy = legacy_event_log_path(graph_path);
+    if legacy.exists() {
+        return legacy;
+    }
+    preferred
+}
+
 pub fn has_log(graph_path: &Path) -> bool {
-    event_log_path(graph_path).exists()
+    event_log_path(graph_path).exists() || legacy_event_log_path(graph_path).exists()
 }
 
 pub fn append_snapshot(
@@ -54,6 +78,9 @@ pub fn append_snapshot(
     snapshot.refresh_counts();
     let entry = EventLogEntry::new(action, detail, snapshot)?;
     let log_path = event_log_path(graph_path);
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -65,7 +92,7 @@ pub fn append_snapshot(
 }
 
 pub fn read_log(graph_path: &Path) -> Result<Vec<EventLogEntry>> {
-    let log_path = event_log_path(graph_path);
+    let log_path = first_existing_event_log_path(graph_path);
     if !log_path.exists() {
         return Ok(Vec::new());
     }

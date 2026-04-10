@@ -109,6 +109,11 @@ impl JsonGraphStore {
             )
         })?;
         let report_path = kg_migration_report_path(kg_path);
+        if let Some(parent) = report_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create cache directory: {}", parent.display())
+            })?;
+        }
         fs::write(
             &report_path,
             render_migration_report(json_path, kg_path, &report),
@@ -155,7 +160,11 @@ struct MigrationReport {
 }
 
 fn kg_migration_report_path(kg_path: &Path) -> PathBuf {
-    kg_path.with_extension("migration.log")
+    let stem = kg_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("graph");
+    crate::cache_paths::cache_root_for_graph(kg_path).join(format!("{stem}.migration.log"))
 }
 
 fn render_migration_report(json_path: &Path, kg_path: &Path, report: &MigrationReport) -> String {
@@ -634,7 +643,12 @@ impl GraphStore for RedbGraphStore {
         write_txn.commit().context("failed to commit redb")?;
 
         let index = Bm25Index::build(&snapshot);
-        let index_path = path.with_extension("index.db");
+        let index_path = redb_index_path(path);
+        if let Some(parent) = index_path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("failed to create cache directory: {}", parent.display())
+            })?;
+        }
         index.save(&index_path)?;
 
         Ok(())
@@ -642,10 +656,27 @@ impl GraphStore for RedbGraphStore {
 }
 
 pub fn load_graph_index(graph_path: &Path) -> Result<Option<Bm25Index>> {
-    let index_path = graph_path.with_extension("index.db");
-    if !index_path.exists() {
+    let index_path = redb_index_path(graph_path);
+    let legacy_path = graph_path.with_extension("index.db");
+    let path = if index_path.exists() {
+        index_path
+    } else if legacy_path.exists() {
+        legacy_path
+    } else {
         return Ok(None);
-    }
-    let index = Bm25Index::load(&index_path)?;
+    };
+    let index = Bm25Index::load(&path)?;
     Ok(Some(index))
+}
+
+fn redb_index_path(graph_path: &Path) -> PathBuf {
+    let stem = graph_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("graph");
+    let ext = graph_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("db");
+    crate::cache_paths::cache_root_for_graph(graph_path).join(format!("{stem}.{ext}.index.db"))
 }

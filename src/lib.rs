@@ -1,6 +1,7 @@
 mod access_log;
 mod analysis;
 mod app;
+mod cache_paths;
 mod cli;
 mod config;
 mod event_log;
@@ -20,6 +21,7 @@ mod validate;
 mod vectors;
 
 // Re-export the core graph types for embedding (e.g. kg-mcp).
+pub use cache_paths::cache_root_for_cwd;
 pub use graph::{Edge, EdgeProperties, GraphFile, Metadata, Node, NodeProperties, Note};
 pub use output::FindMode;
 
@@ -1257,27 +1259,40 @@ fn export_graph_as_of_event_log(path: &Path, graph: &str, args: &AsOfArgs) -> Re
 }
 
 fn list_graph_backups(path: &Path) -> Result<Vec<(u64, PathBuf)>> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("missing parent directory"))?;
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| anyhow!("invalid graph filename"))?;
-    let prefix = format!("{stem}.bck.");
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("json");
+    let prefixes = [format!("{stem}.{ext}.bck."), format!("{stem}.bck.")];
     let suffix = ".gz";
 
     let mut backups = Vec::new();
-    for entry in std::fs::read_dir(parent)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with(&prefix) || !name.ends_with(suffix) {
+    let mut dirs = vec![cache_paths::cache_root_for_graph(path)];
+    if let Some(parent) = path.parent() {
+        dirs.push(parent.to_path_buf());
+    }
+
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
-        }
-        let ts_part = &name[prefix.len()..name.len() - suffix.len()];
-        if let Ok(ts) = ts_part.parse::<u64>() {
-            backups.push((ts, entry.path()));
+        };
+        for entry in entries {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !name.ends_with(suffix) {
+                continue;
+            }
+            for prefix in &prefixes {
+                if !name.starts_with(prefix) {
+                    continue;
+                }
+                let ts_part = &name[prefix.len()..name.len() - suffix.len()];
+                if let Ok(ts) = ts_part.parse::<u64>() {
+                    backups.push((ts, entry.path()));
+                }
+            }
         }
     }
     backups.sort_by_key(|(ts, _)| *ts);
@@ -2294,7 +2309,7 @@ pub(crate) fn map_find_mode(mode: CliFindMode) -> output::FindMode {
 }
 
 pub(crate) fn render_feedback_log(cwd: &Path, args: &FeedbackLogArgs) -> Result<String> {
-    let path = cwd.join("kg-mcp.feedback.log");
+    let path = first_existing_feedback_log_path(cwd);
     if !path.exists() {
         return Ok(String::from("= feedback-log\nempty: no entries yet\n"));
     }
@@ -2392,7 +2407,7 @@ pub(crate) fn handle_vector_command(
 fn render_feedback_summary(cwd: &Path, args: &FeedbackSummaryArgs) -> Result<String> {
     use std::collections::HashMap;
 
-    let path = cwd.join("kg-mcp.feedback.log");
+    let path = first_existing_feedback_log_path(cwd);
     if !path.exists() {
         return Ok(String::from("= feedback-summary\nNo feedback yet.\n"));
     }
@@ -2506,6 +2521,26 @@ fn render_feedback_summary(cwd: &Path, args: &FeedbackSummaryArgs) -> Result<Str
     Ok(format!("{}\n", lines.join("\n")))
 }
 
+pub fn feedback_log_path(cwd: &Path) -> PathBuf {
+    cache_paths::cache_root_for_cwd(cwd).join("kg-mcp.feedback.log")
+}
+
+fn legacy_feedback_log_path(cwd: &Path) -> PathBuf {
+    cwd.join("kg-mcp.feedback.log")
+}
+
+pub fn first_existing_feedback_log_path(cwd: &Path) -> PathBuf {
+    let preferred = feedback_log_path(cwd);
+    if preferred.exists() {
+        return preferred;
+    }
+    let legacy = legacy_feedback_log_path(cwd);
+    if legacy.exists() {
+        return legacy;
+    }
+    preferred
+}
+
 pub(crate) fn render_feedback_summary_for_graph(
     cwd: &Path,
     graph: &str,
@@ -2574,7 +2609,7 @@ struct GoldenSetCase {
 }
 
 fn parse_feedback_entries(cwd: &Path, graph_name: &str) -> Result<Vec<FeedbackLogEntry>> {
-    let path = cwd.join("kg-mcp.feedback.log");
+    let path = first_existing_feedback_log_path(cwd);
     if !path.exists() {
         return Ok(Vec::new());
     }

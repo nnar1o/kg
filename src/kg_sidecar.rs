@@ -10,7 +10,8 @@ fn is_kg_graph(path: &Path) -> bool {
 
 pub fn kglog_path(graph_path: &Path) -> Option<PathBuf> {
     if is_kg_graph(graph_path) {
-        Some(graph_path.with_extension("kglog"))
+        let stem = graph_path.file_stem()?.to_str()?;
+        Some(crate::cache_paths::cache_root_for_graph(graph_path).join(format!("{stem}.kglog")))
     } else {
         None
     }
@@ -18,7 +19,8 @@ pub fn kglog_path(graph_path: &Path) -> Option<PathBuf> {
 
 pub fn kgindex_path(graph_path: &Path) -> Option<PathBuf> {
     if is_kg_graph(graph_path) {
-        Some(graph_path.with_extension("kgindex"))
+        let stem = graph_path.file_stem()?.to_str()?;
+        Some(crate::cache_paths::cache_root_for_graph(graph_path).join(format!("{stem}.kgindex")))
     } else {
         None
     }
@@ -72,6 +74,11 @@ fn append_kglog_line(
         line.push_str(&normalize_kglog_field(value));
     }
     line.push('\n');
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create cache directory: {}", parent.display()))?;
+    }
 
     let mut file = OpenOptions::new()
         .create(true)
@@ -143,6 +150,11 @@ pub fn rebuild_kgindex(graph_path: &Path) -> Result<()> {
         if let Some(node_id) = parse_node_id_from_header(line.trim()) {
             lines.push(format!("{} {}", node_id, idx + 1));
         }
+    }
+
+    if let Some(parent) = index_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create cache directory: {}", parent.display()))?;
     }
 
     fs::write(&index_path, format!("{}\n", lines.join("\n")))

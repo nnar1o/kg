@@ -8,7 +8,13 @@ fn baseline_reports_quality_feedback_cost_and_golden_metrics() {
     let graph_root = test_graph_root(dir.path());
     write_fixture(&graph_root);
 
-    let feedback_log = dir.path().join("kg-mcp.feedback.log");
+    let feedback_log = dir
+        .path()
+        .join(".kg")
+        .join("cache")
+        .join("kg-mcp.feedback.log");
+    std::fs::create_dir_all(feedback_log.parent().expect("feedback parent"))
+        .expect("create feedback cache dir");
     std::fs::write(
         &feedback_log,
         "ts_ms=1\tuid=aaaaaa\taction=YES\tpick=-\tselected=concept:refrigerator\tgraph=fridge\tqueries=lodowka\n\
@@ -17,7 +23,11 @@ ts_ms=3\tuid=cccccc\taction=PICK\tpick=1\tselected=concept:refrigerator\tgraph=f
     )
     .expect("write feedback log");
 
-    let access_log = graph_root.join("fridge.json.access.log");
+    let access_log = dir
+        .path()
+        .join(".kg")
+        .join("cache")
+        .join("fridge.json.access.log");
     std::fs::write(
         &access_log,
         "2026-04-01 10:00:00.000\tFIND\tlodowka\t1\t10ms\n\

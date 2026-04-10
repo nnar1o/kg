@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -17,7 +17,7 @@ fn atomic_write(dest: &Path, data: &str) -> Result<()> {
     let tmp = dest.with_extension("tmp");
     fs::write(&tmp, data).with_context(|| format!("failed to write tmp: {}", tmp.display()))?;
     if dest.exists() {
-        let bak = dest.with_extension("bak");
+        let bak = backup_bak_path(dest)?;
         fs::copy(dest, &bak)
             .with_context(|| format!("failed to create backup: {}", bak.display()))?;
     }
@@ -27,25 +27,24 @@ fn atomic_write(dest: &Path, data: &str) -> Result<()> {
 const BACKUP_STALE_SECS: u64 = 60 * 60;
 
 fn backup_graph_if_stale(path: &Path, data: &str) -> Result<()> {
-    let parent = match path.parent() {
-        Some(parent) => parent,
-        None => return Ok(()),
-    };
+    let cache_dir = backup_cache_dir(path)?;
     let stem = match path.file_stem().and_then(|s| s.to_str()) {
         Some(stem) => stem,
         None => return Ok(()),
     };
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("json");
+    let backup_prefix = format!("{stem}.{ext}");
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("time went backwards")?
         .as_secs();
-    if let Some(latest) = latest_backup_ts(parent, stem)? {
+    if let Some(latest) = latest_backup_ts(&cache_dir, &backup_prefix)? {
         if now.saturating_sub(latest) < BACKUP_STALE_SECS {
             return Ok(());
         }
     }
 
-    let backup_path = parent.join(format!("{stem}.bck.{now}.gz"));
+    let backup_path = cache_dir.join(format!("{backup_prefix}.bck.{now}.gz"));
     let tmp_path = backup_path.with_extension("tmp");
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(data.as_bytes())?;
@@ -55,6 +54,20 @@ fn backup_graph_if_stale(path: &Path, data: &str) -> Result<()> {
     fs::rename(&tmp_path, &backup_path)
         .with_context(|| format!("failed to rename tmp to {}", backup_path.display()))?;
     Ok(())
+}
+
+fn backup_cache_dir(path: &Path) -> Result<PathBuf> {
+    let dir = crate::cache_paths::cache_root_for_graph(path);
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create cache directory: {}", dir.display()))?;
+    Ok(dir)
+}
+
+fn backup_bak_path(dest: &Path) -> Result<PathBuf> {
+    let cache_dir = backup_cache_dir(dest)?;
+    let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("graph");
+    let ext = dest.extension().and_then(|s| s.to_str()).unwrap_or("json");
+    Ok(cache_dir.join(format!("{stem}.{ext}.bak")))
 }
 
 fn latest_backup_ts(dir: &Path, stem: &str) -> Result<Option<u64>> {

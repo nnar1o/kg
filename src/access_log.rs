@@ -106,21 +106,38 @@ fn is_leap_year(year: i64) -> bool {
 }
 
 pub fn access_log_path(graph_path: &Path) -> PathBuf {
+    let stem = graph_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("graph");
+    let ext = graph_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("json");
+    crate::cache_paths::cache_root_for_graph(graph_path).join(format!("{stem}.{ext}.access.log"))
+}
+
+fn legacy_access_log_path(graph_path: &Path) -> PathBuf {
     let mut path = graph_path.to_path_buf();
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("graph");
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("json");
-    path.set_file_name(format!("{}.{}.access.log", stem, ext));
+    path.set_file_name(format!("{stem}.{ext}.access.log"));
     path
 }
 
 fn access_log_fallback_paths(graph_path: &Path) -> Vec<PathBuf> {
-    let mut paths = vec![access_log_path(graph_path)];
+    let mut paths = vec![
+        access_log_path(graph_path),
+        legacy_access_log_path(graph_path),
+    ];
     match graph_path.extension().and_then(|ext| ext.to_str()) {
         Some("kg") => {
             paths.push(access_log_path(&graph_path.with_extension("json")));
+            paths.push(legacy_access_log_path(&graph_path.with_extension("json")));
         }
         Some("json") => {
             paths.push(access_log_path(&graph_path.with_extension("kg")));
+            paths.push(legacy_access_log_path(&graph_path.with_extension("kg")));
         }
         _ => {}
     }
@@ -135,6 +152,9 @@ pub fn first_existing_access_log_path(graph_path: &Path) -> Option<PathBuf> {
 
 pub fn append_entry(graph_path: &Path, entry: &AccessLogEntry) -> Result<()> {
     let log_path = access_log_path(graph_path);
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)

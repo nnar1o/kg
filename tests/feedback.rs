@@ -5,7 +5,13 @@ use common::{exec_ok, temp_workspace, test_graph_root, write_fixture};
 #[test]
 fn feedback_log_lists_recent_entries_and_supports_filters() {
     let dir = temp_workspace();
-    let log_path = dir.path().join("kg-mcp.feedback.log");
+    let log_path = dir
+        .path()
+        .join(".kg")
+        .join("cache")
+        .join("kg-mcp.feedback.log");
+    std::fs::create_dir_all(log_path.parent().expect("feedback parent"))
+        .expect("create feedback cache dir");
     std::fs::write(
         &log_path,
         "ts_ms=1\tuid=aaaaaa\taction=YES\tpick=-\tselected=concept:refrigerator\tgraph=fridge\tqueries=lodowka\n\
@@ -34,7 +40,13 @@ ts_ms=3\tuid=cccccc\taction=PICK\tpick=2\tselected=process:diagnostics\tgraph=fr
 fn feedback_summary_parses_and_aggregates_correctly() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));
-    let log_path = dir.path().join("kg-mcp.feedback.log");
+    let log_path = dir
+        .path()
+        .join(".kg")
+        .join("cache")
+        .join("kg-mcp.feedback.log");
+    std::fs::create_dir_all(log_path.parent().expect("feedback parent"))
+        .expect("create feedback cache dir");
     std::fs::write(
         &log_path,
         "ts_ms=1\tuid=aaaaaa\taction=YES\tpick=-\tselected=concept:foo\tgraph=fridge\tqueries=foo\n\
