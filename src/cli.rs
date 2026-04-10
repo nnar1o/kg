@@ -41,6 +41,13 @@ const HELP_EXAMPLES: &str = "Examples:\n  kg create fridge\n  kg list\n  kg grap
     after_help = HELP_EXAMPLES
 )]
 pub struct Cli {
+    #[arg(
+        long,
+        global = true,
+        help = "Enable event log snapshots for mutating operations (default: off)"
+    )]
+    pub event_log: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

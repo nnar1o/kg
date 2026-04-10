@@ -19,9 +19,9 @@ const FUZZY_NOTE_BODY_WEIGHT: u32 = 1;
 const FUZZY_NOTE_TAG_WEIGHT: u32 = 2;
 const BM25_PHRASE_MATCH_BOOST: i64 = 120;
 const BM25_TOKEN_MATCH_BOOST: i64 = 45;
-const BM25_ID_WEIGHT: usize = 4;
-const BM25_NAME_WEIGHT: usize = 3;
-const BM25_ALIAS_WEIGHT: usize = 2;
+const BM25_ID_WEIGHT: usize = 5;
+const BM25_NAME_WEIGHT: usize = 4;
+const BM25_ALIAS_WEIGHT: usize = 4;
 const BM25_DESCRIPTION_WEIGHT: usize = 2;
 const BM25_FACT_WEIGHT: usize = 2;
 const BM25_NOTE_BODY_WEIGHT: usize = 1;
@@ -1491,20 +1491,20 @@ fn score_node(
     let mut primary_score = 0;
     let mut primary_hits = 0;
 
-    let id_score = score_primary_field(query, pattern, matcher, &node.id, 4);
+    let id_score = score_primary_field(query, pattern, matcher, &node.id, 5);
     if id_score > 0 {
         primary_hits += 1;
     }
     primary_score += id_score;
 
-    let name_score = score_primary_field(query, pattern, matcher, &node.name, 3);
+    let name_score = score_primary_field(query, pattern, matcher, &node.name, 4);
     if name_score > 0 {
         primary_hits += 1;
     }
     primary_score += name_score;
 
     for alias in &node.properties.alias {
-        let alias_score = score_primary_field(query, pattern, matcher, alias, 3);
+        let alias_score = score_primary_field(query, pattern, matcher, alias, 4);
         if alias_score > 0 {
             primary_hits += 1;
         }

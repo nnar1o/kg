@@ -36,6 +36,7 @@ use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
@@ -68,6 +69,8 @@ use app::graph_transfer_temporal::{
 
 use schema::{GraphSchema, SchemaViolation};
 use validate::validate_graph;
+
+static EVENT_LOG_MODE: AtomicU8 = AtomicU8::new(0);
 
 // ---------------------------------------------------------------------------
 // Schema validation helpers
@@ -271,6 +274,7 @@ where
 // ---------------------------------------------------------------------------
 
 fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
+    configure_event_log_mode(cli.event_log);
     match cli.command {
         Command::Init(args) => Ok(init::render_init(&args)),
         Command::Create { graph_name } => {
@@ -1297,7 +1301,29 @@ pub(crate) fn append_event_snapshot(
     detail: Option<String>,
     graph: &GraphFile,
 ) -> Result<()> {
+    if !event_log_enabled() {
+        return Ok(());
+    }
     event_log::append_snapshot(path, action, detail, graph)
+}
+
+fn configure_event_log_mode(cli_switch_enabled: bool) {
+    if cli_switch_enabled {
+        EVENT_LOG_MODE.store(2, Ordering::Relaxed);
+        return;
+    }
+    EVENT_LOG_MODE.store(0, Ordering::Relaxed);
+}
+
+fn event_log_enabled() -> bool {
+    match EVENT_LOG_MODE.load(Ordering::Relaxed) {
+        2 => true,
+        1 => false,
+        _ => {
+            let raw = std::env::var("KG_EVENT_LOG").unwrap_or_default();
+            matches!(raw.as_str(), "1" | "true" | "TRUE" | "yes" | "on")
+        }
+    }
 }
 
 pub(crate) fn export_graph_json(
