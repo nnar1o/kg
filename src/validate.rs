@@ -55,6 +55,20 @@ pub const TYPE_TO_PREFIX: &[(&str, &str)] = &[
     ("Bug", "bug"),
 ];
 
+/// Maps node type -> canonical short code used in IDs.
+pub const TYPE_TO_CODE: &[(&str, &str)] = &[
+    ("Concept", "K"),
+    ("Process", "P"),
+    ("DataStore", "D"),
+    ("Interface", "I"),
+    ("Rule", "R"),
+    ("Feature", "F"),
+    ("Decision", "Z"),
+    ("Convention", "C"),
+    ("Note", "N"),
+    ("Bug", "B"),
+];
+
 /// (relation, valid_source_types, valid_target_types)
 /// Empty slice = no constraint for that side.
 pub const EDGE_TYPE_RULES: &[(&str, &[&str], &[&str])] = &[
@@ -139,6 +153,104 @@ pub fn edge_type_rule(
         .map(|(_, source_types, target_types)| (*source_types, *target_types))
 }
 
+pub fn canonical_type_code_for(node_type: &str) -> Option<&'static str> {
+    TYPE_TO_CODE
+        .iter()
+        .find(|(typ, _)| *typ == node_type)
+        .map(|(_, code)| *code)
+}
+
+fn type_for_prefix(prefix: &str) -> Option<&'static str> {
+    TYPE_TO_PREFIX
+        .iter()
+        .find(|(_, known_prefix)| *known_prefix == prefix)
+        .map(|(typ, _)| *typ)
+}
+
+fn type_for_code(code: &str) -> Option<&'static str> {
+    TYPE_TO_CODE
+        .iter()
+        .find(|(_, known_code)| *known_code == code)
+        .map(|(typ, _)| *typ)
+}
+
+fn valid_id_suffix(suffix: &str) -> bool {
+    !suffix.is_empty()
+        && suffix
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase())
+        && suffix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+/// Normalize a node id to legacy `<type_prefix>:snake_case` when possible.
+///
+/// Accepted inputs include both canonical `TYPE_CODE:snake_case` and legacy
+/// `prefix:snake_case` forms. Unknown prefixes are returned unchanged.
+pub fn normalize_node_id(id: &str) -> String {
+    let Some((head, suffix)) = id.split_once(':') else {
+        return id.to_owned();
+    };
+    let Some(node_type) = type_for_code(head).or_else(|| type_for_prefix(head)) else {
+        return id.to_owned();
+    };
+    let Some(prefix) = TYPE_TO_PREFIX
+        .iter()
+        .find(|(typ, _)| *typ == node_type)
+        .map(|(_, prefix)| *prefix)
+    else {
+        return id.to_owned();
+    };
+    format!("{prefix}:{suffix}")
+}
+
+/// Validate and canonicalize a node id for a concrete node type.
+///
+/// Returns canonical legacy `prefix:snake_case` on success.
+pub fn canonicalize_node_id_for_type(id: &str, node_type: &str) -> Result<String, String> {
+    let Some((head, suffix)) = id.split_once(':') else {
+        return Err(format!(
+            "node id '{}' must be in format <type_code>:snake_case",
+            id
+        ));
+    };
+    if !valid_id_suffix(suffix) {
+        return Err(format!(
+            "node id '{}' must use snake_case suffix (lowercase, digits, underscore only)",
+            id
+        ));
+    }
+
+    let Some(expected_code) = canonical_type_code_for(node_type) else {
+        return Err(format!("invalid node type '{node_type}'"));
+    };
+    let Some(expected_prefix) = TYPE_TO_PREFIX
+        .iter()
+        .find(|(typ, _)| *typ == node_type)
+        .map(|(_, prefix)| *prefix)
+    else {
+        return Err(format!("invalid node type '{node_type}'"));
+    };
+
+    if head == expected_code || head == expected_prefix {
+        return Ok(format!("{expected_prefix}:{suffix}"));
+    }
+
+    if let Some(actual_type) = type_for_code(head).or_else(|| type_for_prefix(head)) {
+        return Err(format!(
+            "node id '{}' has type marker '{}' (type '{}') but node_type is '{}'",
+            id, head, actual_type, node_type
+        ));
+    }
+
+    Err(format!(
+        "node id '{}' has unknown type marker '{}'; expected '{}' or '{}'",
+        id, head, expected_code, expected_prefix
+    ))
+}
+
 pub fn format_edge_source_type_error(
     source_type: &str,
     relation: &str,
@@ -183,6 +295,7 @@ pub fn validate_graph(
     let mut warnings = Vec::new();
 
     let type_to_prefix: HashMap<&str, &str> = TYPE_TO_PREFIX.iter().copied().collect();
+    let type_to_code: HashMap<&str, &str> = TYPE_TO_CODE.iter().copied().collect();
     // -- metadata --
     if graph.metadata.name.trim().is_empty() {
         errors.push("metadata.name missing".to_owned());
@@ -203,37 +316,36 @@ pub fn validate_graph(
             errors.push(format!("node {} missing source_files", node.id));
         }
 
-        // id convention: prefix:snake_case
-        match node.id.split_once(':') {
-            Some((prefix, suffix)) => {
-                let valid_suffix = !suffix.is_empty()
-                    && suffix
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_lowercase())
-                    && suffix
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-                if !valid_suffix {
+        match canonicalize_node_id_for_type(&node.id, &node.r#type) {
+            Ok(_) => {}
+            Err(_) => {
+                if let Some((head, _)) = node.id.split_once(':') {
+                    if let (Some(expected_code), Some(expected_prefix)) = (
+                        type_to_code.get(node.r#type.as_str()),
+                        type_to_prefix.get(node.r#type.as_str()),
+                    ) {
+                        errors.push(format!(
+                            "node id {} invalid for type {} (expected {}:* or {}:*)",
+                            node.id, node.r#type, expected_code, expected_prefix
+                        ));
+                    } else {
+                        errors.push(format!(
+                            "node id {} invalid for type {} (invalid type metadata)",
+                            node.id, node.r#type
+                        ));
+                    }
+                    if type_for_code(head).is_none() && type_for_prefix(head).is_none() {
+                        errors.push(format!(
+                            "node id {} has unknown type marker '{}'",
+                            node.id, head
+                        ));
+                    }
+                } else {
                     errors.push(format!(
                         "node id {} does not match prefix:snake_case",
                         node.id
                     ));
                 }
-                if let Some(expected) = type_to_prefix.get(node.r#type.as_str()) {
-                    if prefix != *expected {
-                        errors.push(format!(
-                            "node {} prefix {} does not match type {}",
-                            node.id, prefix, node.r#type
-                        ));
-                    }
-                }
-            }
-            None => {
-                errors.push(format!(
-                    "node id {} does not match prefix:snake_case",
-                    node.id
-                ));
             }
         }
 

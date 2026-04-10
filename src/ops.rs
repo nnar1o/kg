@@ -2,8 +2,7 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::graph::{Edge, GraphFile, Node};
 use crate::validate::{
-    TYPE_TO_PREFIX, VALID_TYPES, edge_type_rule, format_edge_source_type_error,
-    format_edge_target_type_error,
+    VALID_TYPES, edge_type_rule, format_edge_source_type_error, format_edge_target_type_error,
 };
 
 // ---------------------------------------------------------------------------
@@ -18,42 +17,8 @@ pub fn validate_node(node: &Node) -> Result<()> {
             VALID_TYPES
         );
     }
-    if let Some((prefix, suffix)) = node.id.split_once(':') {
-        for (typ, exp_prefix) in TYPE_TO_PREFIX {
-            if *typ == node.r#type {
-                if prefix != *exp_prefix {
-                    bail!(
-                        "node id '{}' has prefix '{}' but type '{}' expects prefix '{}'",
-                        node.id,
-                        prefix,
-                        node.r#type,
-                        exp_prefix
-                    );
-                }
-                break;
-            }
-        }
-        if !suffix
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_lowercase())
-        {
-            bail!(
-                "node id '{}' must be prefix:snake_case (lowercase start)",
-                node.id
-            );
-        }
-        if !suffix
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-        {
-            bail!(
-                "node id '{}' must be prefix:snake_case (lowercase, digits, underscore only)",
-                node.id
-            );
-        }
-    } else {
-        bail!("node id '{}' must be in format prefix:identifier", node.id);
+    if let Err(error) = crate::validate::canonicalize_node_id_for_type(&node.id, &node.r#type) {
+        bail!(error);
     }
     validate_importance(node.properties.importance)?;
     Ok(())

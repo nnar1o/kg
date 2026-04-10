@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -428,8 +429,18 @@ fn parse_kg_with_warnings(
                 current_edge_index = None;
                 continue;
             };
+            let parsed_id = {
+                let raw_id = node_id.trim();
+                if raw_id.contains(':') {
+                    crate::validate::normalize_node_id(raw_id)
+                } else if code_to_node_type(type_code.trim()) != type_code.trim() {
+                    crate::validate::normalize_node_id(&format!("{}:{raw_id}", type_code.trim()))
+                } else {
+                    raw_id.to_owned()
+                }
+            };
             current_node = Some(Node {
-                id: node_id.trim().to_owned(),
+                id: parsed_id,
                 r#type: code_to_node_type(type_code.trim()).to_owned(),
                 name: String::new(),
                 properties: NodeProperties::default(),
@@ -746,7 +757,7 @@ fn parse_kg_with_warnings(
             graph.edges.push(Edge {
                 source_id: node.id.clone(),
                 relation: code_to_relation(relation).to_owned(),
-                target_id: target_id.to_owned(),
+                target_id: crate::validate::normalize_node_id(target_id),
                 properties: EdgeProperties::default(),
             });
             current_edge_index = Some(graph.edges.len() - 1);
@@ -1278,6 +1289,7 @@ impl GraphFile {
                 anyhow::anyhow!(json_error_detail("invalid JSON", path, &raw, &error))
             })?
         };
+        normalize_graph_ids(&mut graph);
         graph.refresh_counts();
         Ok(graph)
     }
@@ -1322,6 +1334,35 @@ impl GraphFile {
         self.edges.iter().any(|edge| {
             edge.source_id == source_id && edge.relation == relation && edge.target_id == target_id
         })
+    }
+}
+
+fn normalize_graph_ids(graph: &mut GraphFile) {
+    let mut remap: HashMap<String, String> = HashMap::new();
+    for node in &mut graph.nodes {
+        let normalized = crate::validate::normalize_node_id(&node.id);
+        if normalized != node.id {
+            remap.insert(node.id.clone(), normalized.clone());
+            node.id = normalized;
+        }
+    }
+
+    for edge in &mut graph.edges {
+        edge.source_id = remap
+            .get(&edge.source_id)
+            .cloned()
+            .unwrap_or_else(|| crate::validate::normalize_node_id(&edge.source_id));
+        edge.target_id = remap
+            .get(&edge.target_id)
+            .cloned()
+            .unwrap_or_else(|| crate::validate::normalize_node_id(&edge.target_id));
+    }
+
+    for note in &mut graph.notes {
+        note.node_id = remap
+            .get(&note.node_id)
+            .cloned()
+            .unwrap_or_else(|| crate::validate::normalize_node_id(&note.node_id));
     }
 }
 

@@ -1878,7 +1878,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_node_add",
-        description = "Add a new node to a graph. Valid node_type: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug. ID must match prefix:snake_case. Prefer `kg` when combining multiple actions."
+        description = "Add a new node to a graph. Valid node_type: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug. ID must match <type_code>:snake_case (legacy <prefix>:snake_case also accepted). Prefer `kg` when combining multiple actions."
     )]
     fn kg_node_add(
         &self,
@@ -1892,30 +1892,6 @@ impl KgMcpServer {
                     "got": args.node_type,
                 })),
             ));
-        }
-
-        let type_to_prefix: HashMap<&str, &str> = kg::TYPE_TO_PREFIX.iter().copied().collect();
-        if let Some(expected_prefix) = type_to_prefix.get(args.node_type.as_str()) {
-            if let Some((prefix, _)) = args.id.split_once(':') {
-                if prefix != *expected_prefix {
-                    return Err(McpError::invalid_params(
-                        "invalid id prefix for node_type",
-                        Some(json!({
-                            "expected_prefix": format!("{}:", expected_prefix),
-                            "got": args.id,
-                            "valid_types": kg::VALID_TYPES,
-                        })),
-                    ));
-                }
-            } else {
-                return Err(McpError::invalid_params(
-                    "invalid id format",
-                    Some(json!({
-                        "expected": "prefix:snake_case (e.g. concept:my_node)",
-                        "got": args.id,
-                    })),
-                ));
-            }
         }
 
         let mut cmd = vec![

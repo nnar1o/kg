@@ -156,6 +156,7 @@ pub(crate) fn execute_node(
             output_size,
             json,
         } => {
+            let id = crate::validate::normalize_node_id(&id);
             let timer = access_log::Timer::new();
             let index_hint = crate::kg_sidecar::lookup_node_line(context.path, &id);
             let node = if index_hint.is_some() {
@@ -201,6 +202,8 @@ pub(crate) fn execute_node(
             alias,
             source,
         }) => {
+            let id = crate::validate::canonicalize_node_id_for_type(&id, &node_type)
+                .map_err(anyhow::Error::msg)?;
             let node = Node {
                 id,
                 r#type: node_type,
@@ -254,6 +257,7 @@ pub(crate) fn execute_node(
             alias,
             source,
         }) => {
+            let id = crate::validate::normalize_node_id(&id);
             modify_node(
                 context.graph_file,
                 &id,
@@ -286,6 +290,8 @@ pub(crate) fn execute_node(
         }
 
         NodeCommand::Rename { from, to } => {
+            let from = crate::validate::normalize_node_id(&from);
+            let to = crate::validate::normalize_node_id(&to);
             if context.graph_file.node_by_id(&to).is_some() {
                 bail!("node already exists: {to}");
             }
@@ -317,6 +323,7 @@ pub(crate) fn execute_node(
         }
 
         NodeCommand::Remove { id } => {
+            let id = crate::validate::normalize_node_id(&id);
             let removed_edges = remove_node(context.graph_file, &id)?;
             context.store.save_graph(context.path, context.graph_file)?;
             crate::append_event_snapshot(
@@ -341,6 +348,8 @@ pub(crate) fn execute_edge(
             target_id,
             detail,
         }) => {
+            let source_id = crate::validate::normalize_node_id(&source_id);
+            let target_id = crate::validate::normalize_node_id(&target_id);
             if let Some(schema) = context.schema {
                 let source_node = context.graph_file.node_by_id(&source_id);
                 let target_node = context.graph_file.node_by_id(&target_id);
@@ -406,9 +415,9 @@ pub(crate) fn execute_edge(
                         add_edge(
                             context.graph_file,
                             Edge {
-                                source_id: source_id.to_string(),
+                                source_id: crate::validate::normalize_node_id(source_id),
                                 relation: relation.to_string(),
-                                target_id: target_id.to_string(),
+                                target_id: crate::validate::normalize_node_id(target_id),
                                 properties: EdgeProperties {
                                     detail: detail.to_string(),
                                     ..EdgeProperties::default()
@@ -449,6 +458,8 @@ pub(crate) fn execute_edge(
             relation,
             target_id,
         }) => {
+            let source_id = crate::validate::normalize_node_id(&source_id);
+            let target_id = crate::validate::normalize_node_id(&target_id);
             remove_edge(context.graph_file, &source_id, &relation, &target_id)?;
             context.store.save_graph(context.path, context.graph_file)?;
             crate::append_event_snapshot(
