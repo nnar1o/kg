@@ -14,7 +14,11 @@ use serde::{Deserialize, Serialize};
 /// 2. If `dest` already exists, copy it to `dest.bak`
 /// 3. Rename `dest.tmp` -> `dest`
 fn atomic_write(dest: &Path, data: &str) -> Result<()> {
-    let tmp = dest.with_extension("tmp");
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let tmp = dest.with_extension(format!("tmp.{}.{}", std::process::id(), unique));
     fs::write(&tmp, data).with_context(|| format!("failed to write tmp: {}", tmp.display()))?;
     if dest.exists() {
         let bak = backup_bak_path(dest)?;

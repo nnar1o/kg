@@ -950,6 +950,17 @@ impl KgMcpServer {
                 }
             };
 
+            let _graph_write_lock = match kg::acquire_graph_write_lock(&path) {
+                Ok(lock) => lock,
+                Err(err) => {
+                    let msg = format!("failed to lock graph for write: {err}");
+                    for item in items {
+                        results.insert(item.item_index, Err(msg.clone()));
+                    }
+                    continue;
+                }
+            };
+
             let mut graph_file = match kg::GraphFile::load(&path) {
                 Ok(graph) => graph,
                 Err(err) => {
@@ -1867,6 +1878,13 @@ impl KgMcpServer {
             McpError::invalid_params(
                 "graph not found",
                 Some(json!({ "graph": graph.clone(), "error": err.to_string() })),
+            )
+        })?;
+
+        let _graph_write_lock = kg::acquire_graph_write_lock(&path).map_err(|err| {
+            McpError::internal_error(
+                "failed to lock graph for write",
+                Some(json!({ "path": path.display().to_string(), "error": err.to_string() })),
             )
         })?;
 

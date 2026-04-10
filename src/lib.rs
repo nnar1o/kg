@@ -7,6 +7,7 @@ mod config;
 mod event_log;
 mod export_html;
 pub mod graph;
+mod graph_lock;
 mod import_csv;
 mod import_markdown;
 mod index;
@@ -23,6 +24,7 @@ mod vectors;
 // Re-export the core graph types for embedding (e.g. kg-mcp).
 pub use cache_paths::cache_root_for_cwd;
 pub use graph::{Edge, EdgeProperties, GraphFile, Metadata, Node, NodeProperties, Note};
+pub use graph_lock::acquire_for_graph as acquire_graph_write_lock;
 pub use output::FindMode;
 
 // Re-export validation constants for schema tools.
@@ -318,6 +320,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
         } => {
             let store = graph_store(cwd, graph_root, legacy)?;
             let path = store.resolve_graph_path(&graph)?;
+            let _graph_write_lock = graph_lock::acquire_for_graph(&path)?;
             let mut graph_file = store.load_graph(&path)?;
             let schema = GraphSchema::discover(cwd).ok().flatten().map(|(_, s)| s);
             let user_short_uid = config::ensure_user_short_uid(cwd);
@@ -1123,6 +1126,7 @@ fn merge_graphs(
     use std::collections::HashMap;
 
     let target_path = store.resolve_graph_path(target)?;
+    let _target_write_lock = graph_lock::acquire_for_graph(&target_path)?;
     let source_path = store.resolve_graph_path(source)?;
     let mut target_graph = store.load_graph(&target_path)?;
     let source_graph = store.load_graph(&source_path)?;
