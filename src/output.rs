@@ -27,8 +27,8 @@ const BM25_FACT_WEIGHT: usize = 2;
 const BM25_NOTE_BODY_WEIGHT: usize = 1;
 const BM25_NOTE_TAG_WEIGHT: usize = 1;
 const BM25_NEIGHBOR_WEIGHT: usize = 1;
-const IMPORTANCE_NEUTRAL: i64 = 4;
-const IMPORTANCE_STEP_BOOST: i64 = 22;
+const IMPORTANCE_NEUTRAL: f64 = 0.5;
+const IMPORTANCE_MAX_ABS_BOOST: f64 = 66.0;
 const SCORE_META_MAX_RATIO: f64 = 0.35;
 const SCORE_META_MIN_CAP: i64 = 30;
 const SCORE_META_MAX_CAP: i64 = 240;
@@ -863,7 +863,8 @@ fn incident_edges<'a>(graph: &'a GraphFile, node_id: &str) -> Vec<IncidentEdge<'
             .related
             .properties
             .importance
-            .cmp(&left.related.properties.importance)
+            .partial_cmp(&left.related.properties.importance)
+            .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| left.edge.relation.cmp(&right.edge.relation))
             .then_with(|| left.related.id.cmp(&right.related.id))
     });
@@ -1284,7 +1285,15 @@ fn feedback_boost(node: &Node) -> i64 {
 }
 
 fn importance_boost(node: &Node) -> i64 {
-    (i64::from(node.properties.importance) - IMPORTANCE_NEUTRAL) * IMPORTANCE_STEP_BOOST
+    let normalized_importance = if (0.0..=1.0).contains(&node.properties.importance) {
+        node.properties.importance
+    } else if (1.0..=6.0).contains(&node.properties.importance) {
+        (node.properties.importance - 1.0) / 5.0
+    } else {
+        node.properties.importance.clamp(0.0, 1.0)
+    };
+    let normalized = (normalized_importance - IMPORTANCE_NEUTRAL) * 2.0;
+    (normalized * IMPORTANCE_MAX_ABS_BOOST).round() as i64
 }
 
 fn score_bm25_raw<'a>(
@@ -1668,7 +1677,7 @@ mod tests {
         description: &str,
         key_facts: &[&str],
         alias: &[&str],
-        importance: u8,
+        importance: f64,
         feedback_score: f64,
         feedback_count: u64,
     ) -> Node {
@@ -1736,7 +1745,7 @@ mod tests {
             "",
             &["Autentykacja OAuth2 przez konto producenta"],
             &[],
-            4,
+            0.5,
             0.0,
             0,
         );
@@ -1761,7 +1770,7 @@ mod tests {
         assert!(score.is_some_and(|value| value > 0));
 
         let empty_graph = GraphFile::new("empty");
-        let empty_node = make_node("concept:gateway", "Gateway", "", &[], &[], 4, 0.0, 0);
+        let empty_node = make_node("concept:gateway", "Gateway", "", &[], &[], 0.5, 0.0, 0);
         let empty_context = FindQueryContext::build(&empty_graph);
         let mut matcher = Matcher::new(Config::DEFAULT);
         let empty_score = score_node(
@@ -1783,7 +1792,7 @@ mod tests {
             "smart home api",
             &[],
             &[],
-            6,
+            1.0,
             0.0,
             0,
         ));
@@ -1793,7 +1802,7 @@ mod tests {
             "smart home api",
             &[],
             &[],
-            1,
+            0.0,
             0.0,
             0,
         ));
@@ -1813,7 +1822,7 @@ mod tests {
             "smart home api",
             &[],
             &[],
-            6,
+            1.0,
             300.0,
             1,
         );
@@ -1823,7 +1832,7 @@ mod tests {
             "smart home api smart home api smart home api smart home api",
             &[],
             &[],
-            4,
+            0.5,
             0.0,
             0,
         );
@@ -1853,14 +1862,14 @@ mod tests {
 
     #[test]
     fn importance_and_feedback_boost_have_expected_ranges() {
-        let high_importance = make_node("concept:high", "High", "", &[], &[], 6, 0.0, 0);
-        let low_importance = make_node("concept:low", "Low", "", &[], &[], 1, 0.0, 0);
-        assert_eq!(importance_boost(&high_importance), 44);
+        let high_importance = make_node("concept:high", "High", "", &[], &[], 1.0, 0.0, 0);
+        let low_importance = make_node("concept:low", "Low", "", &[], &[], 0.0, 0.0, 0);
+        assert_eq!(importance_boost(&high_importance), 66);
         assert_eq!(importance_boost(&low_importance), -66);
 
-        let positive = make_node("concept:pos", "Pos", "", &[], &[], 4, 1.0, 1);
-        let negative = make_node("concept:neg", "Neg", "", &[], &[], 4, -2.0, 1);
-        let saturated = make_node("concept:sat", "Sat", "", &[], &[], 4, 300.0, 1);
+        let positive = make_node("concept:pos", "Pos", "", &[], &[], 0.5, 1.0, 1);
+        let negative = make_node("concept:neg", "Neg", "", &[], &[], 0.5, -2.0, 1);
+        let saturated = make_node("concept:sat", "Sat", "", &[], &[], 0.5, 300.0, 1);
         assert_eq!(feedback_boost(&positive), 46);
         assert_eq!(feedback_boost(&negative), -92);
         assert_eq!(feedback_boost(&saturated), 300);

@@ -174,7 +174,7 @@ fn graph_check_reports_validation_errors() {
         name: String::new(),
         properties: NodeProperties {
             confidence: Some(1.5),
-            importance: 9,
+            importance: 9.0,
             ..NodeProperties::default()
         },
         source_files: Vec::new(),

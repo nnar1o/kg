@@ -25,8 +25,8 @@ pub use output::FindMode;
 
 // Re-export validation constants for schema tools.
 pub use validate::{
-    EDGE_TYPE_RULES, TYPE_TO_PREFIX, VALID_RELATIONS, VALID_TYPES, edge_type_rule,
-    format_edge_source_type_error, format_edge_target_type_error,
+    EDGE_TYPE_RULES, TYPE_TO_PREFIX, VALID_RELATIONS, VALID_TYPES, canonicalize_node_id_for_type,
+    edge_type_rule, format_edge_source_type_error, format_edge_target_type_error,
 };
 
 // Re-export BM25 index for embedding and benchmarks.

@@ -101,7 +101,7 @@ struct NodeAddArgs {
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
-    importance: Option<u8>,
+    importance: Option<f64>,
     #[serde(default)]
     facts: Vec<String>,
     #[serde(default)]
@@ -129,7 +129,7 @@ struct NodeModifyArgs {
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
-    importance: Option<u8>,
+    importance: Option<f64>,
     #[serde(default)]
     facts: Vec<String>,
     #[serde(default)]
@@ -298,7 +298,7 @@ struct NodeAddBatchItem {
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
-    importance: Option<u8>,
+    importance: Option<f64>,
     #[serde(default)]
     facts: Vec<String>,
     #[serde(default)]
@@ -325,6 +325,97 @@ struct FindContext {
     graph: String,
     queries: Vec<String>,
     candidate_ids: Vec<String>,
+}
+
+const VALID_PROVENANCE_CODES: &[&str] = &["U", "D", "A"];
+const VALID_SOURCE_TYPES: &[&str] = &[
+    "URL",
+    "SVN",
+    "SOURCECODE",
+    "WIKI",
+    "CONFLUENCE",
+    "CONVERSATION",
+    "GIT_COMMIT",
+    "PULL_REQUEST",
+    "ISSUE",
+    "DOC",
+    "LOG",
+    "OTHER",
+];
+
+fn is_valid_iso_utc_timestamp(value: &str) -> bool {
+    if value.len() != 20 {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let is_digit = |idx: usize| bytes.get(idx).is_some_and(|b| b.is_ascii_digit());
+    if !(is_digit(0)
+        && is_digit(1)
+        && is_digit(2)
+        && is_digit(3)
+        && bytes.get(4) == Some(&b'-')
+        && is_digit(5)
+        && is_digit(6)
+        && bytes.get(7) == Some(&b'-')
+        && is_digit(8)
+        && is_digit(9)
+        && bytes.get(10) == Some(&b'T')
+        && is_digit(11)
+        && is_digit(12)
+        && bytes.get(13) == Some(&b':')
+        && is_digit(14)
+        && is_digit(15)
+        && bytes.get(16) == Some(&b':')
+        && is_digit(17)
+        && is_digit(18)
+        && bytes.get(19) == Some(&b'Z'))
+    {
+        return false;
+    }
+    true
+}
+
+fn is_valid_iso_date(value: &str) -> bool {
+    if value.len() != 10 {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let is_digit = |idx: usize| bytes.get(idx).is_some_and(|b| b.is_ascii_digit());
+    is_digit(0)
+        && is_digit(1)
+        && is_digit(2)
+        && is_digit(3)
+        && bytes.get(4) == Some(&b'-')
+        && is_digit(5)
+        && is_digit(6)
+        && bytes.get(7) == Some(&b'-')
+        && is_digit(8)
+        && is_digit(9)
+}
+
+fn validate_source_reference(value: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("source entry cannot be empty".to_owned());
+    }
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err("source must match '<TYPE> <LINK_OR_DATE> <OPTIONAL_DETAILS>'".to_owned());
+    }
+    if !VALID_SOURCE_TYPES.contains(&parts[0]) {
+        return Err(format!(
+            "invalid source type '{}'; valid types: {}",
+            parts[0],
+            VALID_SOURCE_TYPES.join(", ")
+        ));
+    }
+    if parts[0] == "CONVERSATION" && !is_valid_iso_date(parts[1]) {
+        return Err("CONVERSATION source must use date YYYY-MM-DD".to_owned());
+    }
+    if parts[0] == "GIT_COMMIT" && parts.len() < 3 {
+        return Err("GIT_COMMIT source must include repository and commit SHA".to_owned());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1789,10 +1880,145 @@ impl KgMcpServer {
         let mut failed: Vec<serde_json::Value> = Vec::new();
 
         for item in args.nodes {
-            let id = item.id.clone();
+            let id = match kg::canonicalize_node_id_for_type(&item.id, &item.node_type) {
+                Ok(value) => value,
+                Err(err) => {
+                    if mode == "atomic" {
+                        return Err(McpError::invalid_params(
+                            "invalid node",
+                            Some(json!({ "id": item.id, "error": err })),
+                        ));
+                    }
+                    failed.push(json!({ "id": item.id, "error": err }));
+                    continue;
+                }
+            };
+
+            if !kg::VALID_TYPES.contains(&item.node_type.as_str()) {
+                let err = format!(
+                    "invalid node_type '{}': expected one of {:?}",
+                    item.node_type,
+                    kg::VALID_TYPES
+                );
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "invalid node",
+                        Some(json!({ "id": id, "error": err })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": err }));
+                continue;
+            }
 
             if item.sources.is_empty() {
                 let err = "at least one source is required";
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "invalid node",
+                        Some(json!({ "id": id, "error": err })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": err }));
+                continue;
+            }
+
+            let description = item.description.unwrap_or_default();
+            let domain_area = item.domain_area.unwrap_or_default();
+            let provenance = item.provenance.unwrap_or_default();
+            let created_at = item.created_at.unwrap_or_default();
+            let Some(confidence) = item.confidence else {
+                let err = "confidence is required and must be in range 0..1";
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "invalid node",
+                        Some(json!({ "id": id, "error": err })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": err }));
+                continue;
+            };
+            let Some(importance) = item.importance else {
+                let err = "importance is required and must be in range 0..1";
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "invalid node",
+                        Some(json!({ "id": id, "error": err })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": err }));
+                continue;
+            };
+
+            if description.trim().is_empty()
+                || domain_area.trim().is_empty()
+                || provenance.trim().is_empty()
+                || created_at.trim().is_empty()
+            {
+                let err = "description, domain_area, provenance and created_at are required";
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "invalid node",
+                        Some(json!({ "id": id, "error": err })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": err }));
+                continue;
+            }
+            if !VALID_PROVENANCE_CODES.contains(&provenance.as_str()) {
+                let err = format!(
+                    "provenance must be one of: {}",
+                    VALID_PROVENANCE_CODES.join(", ")
+                );
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "invalid node",
+                        Some(json!({ "id": id, "error": err })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": err }));
+                continue;
+            }
+            if !(0.0..=1.0).contains(&confidence) {
+                let err = format!("confidence out of range: {confidence}");
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "invalid node",
+                        Some(json!({ "id": id, "error": err })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": err }));
+                continue;
+            }
+            if !(0.0..=1.0).contains(&importance) {
+                let err = format!("importance out of range: {importance}");
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "invalid node",
+                        Some(json!({ "id": id, "error": err })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": err }));
+                continue;
+            }
+            if !is_valid_iso_utc_timestamp(created_at.trim()) {
+                let err = "created_at must use UTC format YYYY-MM-DDTHH:MM:SSZ";
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "invalid node",
+                        Some(json!({ "id": id, "error": err })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": err }));
+                continue;
+            }
+            let mut source_error = None;
+            for source in &item.sources {
+                if let Err(err) = validate_source_reference(source) {
+                    source_error = Some(format!("invalid source '{}': {err}", source));
+                    break;
+                }
+            }
+            if let Some(err) = source_error {
                 if mode == "atomic" {
                     return Err(McpError::invalid_params(
                         "invalid node",
@@ -1820,16 +2046,16 @@ impl KgMcpServer {
             }
 
             graph_file.nodes.push(kg::Node {
-                id: item.id,
+                id: id.clone(),
                 r#type: item.node_type,
                 name: item.name,
                 properties: kg::NodeProperties {
-                    description: item.description.unwrap_or_default(),
-                    domain_area: item.domain_area.unwrap_or_default(),
-                    provenance: item.provenance.unwrap_or_default(),
-                    confidence: item.confidence,
-                    created_at: item.created_at.unwrap_or_default(),
-                    importance: item.importance.unwrap_or(4),
+                    description,
+                    domain_area,
+                    provenance,
+                    confidence: Some(confidence),
+                    created_at,
+                    importance,
                     key_facts: item.facts,
                     alias: item.aliases,
                     ..kg::NodeProperties::default()

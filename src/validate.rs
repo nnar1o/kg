@@ -41,6 +41,23 @@ pub const VALID_RELATIONS: &[&str] = &[
     "READS_FROM",
 ];
 
+pub const VALID_PROVENANCE_CODES: &[&str] = &["U", "D", "A"];
+
+pub const VALID_SOURCE_TYPES: &[&str] = &[
+    "URL",
+    "SVN",
+    "SOURCECODE",
+    "WIKI",
+    "CONFLUENCE",
+    "CONVERSATION",
+    "GIT_COMMIT",
+    "PULL_REQUEST",
+    "ISSUE",
+    "DOC",
+    "LOG",
+    "OTHER",
+];
+
 /// Maps node type -> expected id prefix.
 pub const TYPE_TO_PREFIX: &[(&str, &str)] = &[
     ("Concept", "concept"),
@@ -183,6 +200,139 @@ fn valid_id_suffix(suffix: &str) -> bool {
         && suffix
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+pub fn is_valid_iso_utc_timestamp(value: &str) -> bool {
+    if value.len() != 20 {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let is_digit = |idx: usize| bytes.get(idx).is_some_and(|b| b.is_ascii_digit());
+    if !(is_digit(0)
+        && is_digit(1)
+        && is_digit(2)
+        && is_digit(3)
+        && bytes.get(4) == Some(&b'-')
+        && is_digit(5)
+        && is_digit(6)
+        && bytes.get(7) == Some(&b'-')
+        && is_digit(8)
+        && is_digit(9)
+        && bytes.get(10) == Some(&b'T')
+        && is_digit(11)
+        && is_digit(12)
+        && bytes.get(13) == Some(&b':')
+        && is_digit(14)
+        && is_digit(15)
+        && bytes.get(16) == Some(&b':')
+        && is_digit(17)
+        && is_digit(18)
+        && bytes.get(19) == Some(&b'Z'))
+    {
+        return false;
+    }
+
+    let month = value[5..7].parse::<u32>().ok();
+    let day = value[8..10].parse::<u32>().ok();
+    let hour = value[11..13].parse::<u32>().ok();
+    let minute = value[14..16].parse::<u32>().ok();
+    let second = value[17..19].parse::<u32>().ok();
+    matches!(month, Some(1..=12))
+        && matches!(day, Some(1..=31))
+        && matches!(hour, Some(0..=23))
+        && matches!(minute, Some(0..=59))
+        && matches!(second, Some(0..=59))
+}
+
+pub fn is_valid_iso_date(value: &str) -> bool {
+    if value.len() != 10 {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let is_digit = |idx: usize| bytes.get(idx).is_some_and(|b| b.is_ascii_digit());
+    if !(is_digit(0)
+        && is_digit(1)
+        && is_digit(2)
+        && is_digit(3)
+        && bytes.get(4) == Some(&b'-')
+        && is_digit(5)
+        && is_digit(6)
+        && bytes.get(7) == Some(&b'-')
+        && is_digit(8)
+        && is_digit(9))
+    {
+        return false;
+    }
+    let month = value[5..7].parse::<u32>().ok();
+    let day = value[8..10].parse::<u32>().ok();
+    matches!(month, Some(1..=12)) && matches!(day, Some(1..=31))
+}
+
+pub fn validate_source_reference(value: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("source entry cannot be empty".to_owned());
+    }
+
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Err(format!(
+            "source '{}' must have format '<TYPE> <LINK_OR_DATE> <OPTIONAL_DETAILS>'",
+            value
+        ));
+    }
+
+    let source_type = parts[0];
+    if !VALID_SOURCE_TYPES.contains(&source_type) {
+        return Err(format!(
+            "source '{}' uses invalid type '{}'; valid types: {}",
+            value,
+            source_type,
+            VALID_SOURCE_TYPES.join(", ")
+        ));
+    }
+
+    match source_type {
+        "CONVERSATION" => {
+            if !is_valid_iso_date(parts[1]) {
+                return Err(format!(
+                    "source '{}' must use date format YYYY-MM-DD for CONVERSATION",
+                    value
+                ));
+            }
+        }
+        "GIT_COMMIT" => {
+            if parts.len() < 3 {
+                return Err(format!(
+                    "source '{}' must use format 'GIT_COMMIT <REPO_URL_OR_NAME> <COMMIT_SHA> <OPTIONAL_DETAILS>'",
+                    value
+                ));
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+pub fn normalize_source_reference(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let source_type = trimmed.split_whitespace().next().unwrap_or_default();
+    if VALID_SOURCE_TYPES.contains(&source_type) {
+        return trimmed.to_owned();
+    }
+    format!("DOC {trimmed}")
+}
+
+pub fn is_valid_importance(value: f64) -> bool {
+    (0.0..=1.0).contains(&value)
+}
+
+pub fn is_legacy_importance(value: f64) -> bool {
+    value > 1.0 && (1.0..=6.0).contains(&value) && value.fract() == 0.0
 }
 
 /// Normalize a node id to legacy `<type_prefix>:snake_case` when possible.
@@ -369,11 +519,36 @@ pub fn validate_graph(
                 ));
             }
         }
-        if !(1..=6).contains(&node.properties.importance) {
+        if is_legacy_importance(node.properties.importance) {
+            warnings.push(format!(
+                "node {} uses legacy importance scale (1..6): {}",
+                node.id, node.properties.importance
+            ));
+        } else if !is_valid_importance(node.properties.importance) {
             errors.push(format!(
                 "node {} importance out of range: {}",
                 node.id, node.properties.importance
             ));
+        }
+
+        if !node.properties.provenance.trim().is_empty()
+            && !VALID_PROVENANCE_CODES.contains(&node.properties.provenance.as_str())
+        {
+            warnings.push(format!(
+                "node {} has non-dictionary provenance '{}' (expected one of: {})",
+                node.id,
+                node.properties.provenance,
+                VALID_PROVENANCE_CODES.join(", ")
+            ));
+        }
+
+        for source in &node.source_files {
+            if let Err(err) = validate_source_reference(source) {
+                warnings.push(format!(
+                    "node {} has non-standard source '{}': {}",
+                    node.id, source, err
+                ));
+            }
         }
     }
     for (node_id, count) in &id_counts {

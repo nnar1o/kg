@@ -22,19 +22,19 @@ fn add_persists_node_in_existing_graph() {
             "--domain-area",
             "hardware",
             "--provenance",
-            "manual",
+            "D",
             "--confidence",
             "0.9",
             "--created-at",
             "2026-03-20T01:00:00Z",
             "--importance",
-            "5",
+            "0.8",
             "--fact",
             "Wytwarza kostki lodu co 2 godziny",
             "--alias",
             "Ice Maker",
             "--source",
-            "instrukcja_obslugi.md",
+            "DOC instrukcja_obslugi.md",
         ],
         dir.path(),
     );
@@ -43,10 +43,10 @@ fn add_persists_node_in_existing_graph() {
     let node = graph.node_by_id("concept:ice_maker").expect("new node");
     assert_eq!(node.properties.alias, vec!["Ice Maker"]);
     assert_eq!(node.properties.domain_area, "hardware");
-    assert_eq!(node.properties.provenance, "manual");
+    assert_eq!(node.properties.provenance, "D");
     assert_eq!(node.properties.confidence, Some(0.9));
     assert_eq!(node.properties.created_at, "2026-03-20T01:00:00Z");
-    assert_eq!(node.properties.importance, 5);
+    assert_eq!(node.properties.importance, 0.8);
     assert_eq!(graph.metadata.node_count, graph.nodes.len());
 }
 
@@ -66,13 +66,13 @@ fn modify_updates_existing_node_without_duplicate_values() {
             "--domain-area",
             "sensing",
             "--provenance",
-            "service_manual",
+            "D",
             "--confidence",
             "0.75",
             "--created-at",
             "2026-03-20T01:05:00Z",
             "--importance",
-            "6",
+            "0.95",
             "--fact",
             "Alarm po 15 minutach odchylenia",
             "--fact",
@@ -82,7 +82,7 @@ fn modify_updates_existing_node_without_duplicate_values() {
             "--alias",
             "Temp",
             "--source",
-            "panel_api.md",
+            "DOC panel_api.md",
         ],
         dir.path(),
     );
@@ -92,10 +92,10 @@ fn modify_updates_existing_node_without_duplicate_values() {
     assert_eq!(node.name, "Temperatura Komory");
     assert_eq!(node.properties.alias, vec!["Temp"]);
     assert_eq!(node.properties.domain_area, "sensing");
-    assert_eq!(node.properties.provenance, "service_manual");
+    assert_eq!(node.properties.provenance, "D");
     assert_eq!(node.properties.confidence, Some(0.75));
     assert_eq!(node.properties.created_at, "2026-03-20T01:05:00Z");
-    assert_eq!(node.properties.importance, 6);
+    assert_eq!(node.properties.importance, 0.95);
     assert_eq!(
         node.properties
             .key_facts
@@ -107,7 +107,7 @@ fn modify_updates_existing_node_without_duplicate_values() {
     assert!(
         node.source_files
             .iter()
-            .any(|source| source == "panel_api.md")
+            .any(|source| source == "DOC panel_api.md")
     );
 }
 

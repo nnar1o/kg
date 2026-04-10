@@ -150,9 +150,17 @@ fn find_prefers_higher_importance_in_fuzzy_and_bm25() {
             "--description",
             "fraza_importance_test",
             "--importance",
-            "6",
+            "1",
+            "--domain-area",
+            "ranking",
+            "--provenance",
+            "U",
+            "--confidence",
+            "0.9",
+            "--created-at",
+            "2026-03-20T01:00:00Z",
             "--source",
-            "importance.md",
+            "DOC importance.md",
         ],
         dir.path(),
     );
@@ -171,9 +179,17 @@ fn find_prefers_higher_importance_in_fuzzy_and_bm25() {
             "--description",
             "fraza_importance_test",
             "--importance",
-            "1",
+            "0",
+            "--domain-area",
+            "ranking",
+            "--provenance",
+            "U",
+            "--confidence",
+            "0.9",
+            "--created-at",
+            "2026-03-20T01:00:01Z",
             "--source",
-            "importance.md",
+            "DOC importance.md",
         ],
         dir.path(),
     );
@@ -411,8 +427,16 @@ fn get_full_escapes_multiline_text_fields_for_cli() {
             "concept:refrigerator",
             "--description",
             "Opis 1\nOpis 2\\nkeep",
+            "--domain-area",
+            "support",
             "--provenance",
-            "manual\nentry",
+            "U",
+            "--confidence",
+            "0.9",
+            "--created-at",
+            "2026-03-20T01:00:00Z",
+            "--importance",
+            "0.7",
         ],
         dir.path(),
     );
@@ -446,7 +470,7 @@ fn get_full_escapes_multiline_text_fields_for_cli() {
     );
 
     assert!(output.contains("desc: Opis 1\\nOpis 2\\\\nkeep"));
-    assert!(output.contains("provenance: manual\\nentry"));
+    assert!(output.contains("provenance: U"));
     assert!(output.contains("note_body: body1\\nbody2\\\\nkeep"));
     assert!(output.contains("note_author: alice\\nbob"));
 }
@@ -603,7 +627,7 @@ fn get_with_large_output_size_shows_richer_adaptive_output() {
 
     assert!(output.contains("desc: Glowne urzadzenie AGD do przechowywania zywnosci"));
     assert!(output.contains("Klasa energetyczna: A++ lub wyzsza dla nowych modeli"));
-    assert!(output.contains("importance: 4"));
+    assert!(output.contains("importance: 0.5"));
     assert!(!output.contains("depth 1:"));
 }
 
@@ -626,7 +650,7 @@ fn find_with_large_output_size_shows_description_for_single_result() {
     );
 
     assert!(output.contains("desc: Glowne urzadzenie AGD do przechowywania zywnosci"));
-    assert!(output.contains("importance: 4"));
+    assert!(output.contains("importance: 0.5"));
     assert!(!output.contains("depth 1:"));
 }
 
@@ -660,7 +684,7 @@ fn get_full_renders_new_properties() {
             "--domain-area",
             "appliance",
             "--provenance",
-            "user_import",
+            "U",
             "--confidence",
             "0.88",
             "--created-at",
@@ -680,12 +704,12 @@ fn get_full_renders_new_properties() {
         dir.path(),
     );
     assert!(output.contains("domain_area: appliance"));
-    assert!(output.contains("provenance: user_import"));
+    assert!(output.contains("provenance: U"));
     assert!(output.contains("confidence: 0.88"));
-    assert!(output.contains("importance: 4"));
+    assert!(output.contains("importance: 0.5"));
     assert!(output.contains("created_at: 2026-03-20T01:10:00Z"));
     assert!(output.contains("desc: Glowne urzadzenie AGD do przechowywania zywnosci"));
-    assert!(output.contains("sources: instrukcja_obslugi.md"));
+    assert!(output.contains("sources: DOC instrukcja_obslugi.md"));
 }
 
 #[test]
@@ -875,6 +899,16 @@ fn modifying_kg_graph_invalidates_and_then_rebuilds_kgindex() {
             "concept:refrigerator",
             "--description",
             "Nowy opis",
+            "--domain-area",
+            "support",
+            "--provenance",
+            "U",
+            "--confidence",
+            "0.9",
+            "--created-at",
+            "2026-03-20T01:00:00Z",
+            "--importance",
+            "0.7",
         ],
         dir.path(),
     );

@@ -20,17 +20,15 @@ pub fn validate_node(node: &Node) -> Result<()> {
     if let Err(error) = crate::validate::canonicalize_node_id_for_type(&node.id, &node.r#type) {
         bail!(error);
     }
-    validate_importance(node.properties.importance)?;
+    validate_required_metadata(node)?;
     Ok(())
 }
 
-pub fn add_node(graph: &mut GraphFile, node: Node) -> Result<()> {
+pub fn add_node(graph: &mut GraphFile, mut node: Node) -> Result<()> {
+    normalize_sources(&mut node.source_files);
     validate_node(&node)?;
     if graph.node_by_id(&node.id).is_some() {
         bail!("node already exists: {}", node.id);
-    }
-    if node.source_files.is_empty() {
-        bail!("at least one --source is required");
     }
     graph.nodes.push(node);
     graph.refresh_counts();
@@ -48,59 +46,113 @@ pub fn modify_node(
     provenance: Option<String>,
     confidence: Option<f64>,
     created_at: Option<String>,
-    importance: Option<u8>,
+    importance: Option<f64>,
     facts: Vec<String>,
     aliases: Vec<String>,
     sources: Vec<String>,
 ) -> Result<()> {
-    let node = graph
-        .node_by_id_mut(id)
+    let idx = graph
+        .nodes
+        .iter()
+        .position(|node| node.id == id)
         .ok_or_else(|| anyhow!("node not found: {id}"))?;
 
+    let mut updated = graph.nodes[idx].clone();
+
     if let Some(v) = node_type {
-        node.r#type = v;
+        updated.r#type = v;
     }
     if let Some(v) = name {
-        node.name = v;
+        updated.name = v;
     }
     if let Some(v) = description {
-        node.properties.description = v;
+        updated.properties.description = v;
     }
     if let Some(v) = domain_area {
-        node.properties.domain_area = v;
+        updated.properties.domain_area = v;
     }
     if let Some(v) = provenance {
-        node.properties.provenance = v;
+        updated.properties.provenance = v;
     }
     if let Some(v) = confidence {
-        node.properties.confidence = Some(v);
+        updated.properties.confidence = Some(v);
     }
     if let Some(v) = created_at {
-        node.properties.created_at = v;
+        updated.properties.created_at = v;
     }
     if let Some(v) = importance {
         validate_importance(v)?;
-        node.properties.importance = v;
+        updated.properties.importance = v;
     }
     for fact in facts {
-        push_unique(&mut node.properties.key_facts, fact);
+        push_unique(&mut updated.properties.key_facts, fact);
     }
     for alias in aliases {
-        push_unique(&mut node.properties.alias, alias);
+        push_unique(&mut updated.properties.alias, alias);
     }
     for source in sources {
-        push_unique(&mut node.source_files, source);
+        push_unique(&mut updated.source_files, source);
     }
+
+    normalize_sources(&mut updated.source_files);
+
+    validate_node(&updated)?;
+    graph.nodes[idx] = updated;
 
     graph.refresh_counts();
     Ok(())
 }
 
-fn validate_importance(value: u8) -> Result<()> {
-    if (1..=6).contains(&value) {
+fn validate_importance(value: f64) -> Result<()> {
+    if crate::validate::is_valid_importance(value) {
         return Ok(());
     }
-    bail!("importance must be in range 1..=6, got {value}")
+    bail!("importance must be in range 0..1, got {value}")
+}
+
+fn validate_required_metadata(node: &Node) -> Result<()> {
+    if node.name.trim().is_empty() {
+        bail!("name is required and cannot be empty");
+    }
+    if node.properties.description.trim().is_empty() {
+        bail!("description is required and cannot be empty");
+    }
+    if node.properties.domain_area.trim().is_empty() {
+        bail!("domain_area is required and cannot be empty");
+    }
+    if node.properties.provenance.trim().is_empty() {
+        bail!("provenance is required and cannot be empty");
+    }
+    if !crate::validate::VALID_PROVENANCE_CODES.contains(&node.properties.provenance.as_str()) {
+        bail!(
+            "provenance must be one of: {}",
+            crate::validate::VALID_PROVENANCE_CODES.join(", ")
+        );
+    }
+    let Some(confidence) = node.properties.confidence else {
+        bail!("confidence is required and must be in range 0..1");
+    };
+    if !(0.0..=1.0).contains(&confidence) {
+        bail!("confidence must be in range 0..1, got {confidence}");
+    }
+    if node.properties.created_at.trim().is_empty() {
+        bail!("created_at is required and cannot be empty");
+    }
+    if !crate::validate::is_valid_iso_utc_timestamp(node.properties.created_at.trim()) {
+        bail!("created_at must use UTC format YYYY-MM-DDTHH:MM:SSZ");
+    }
+
+    if node.source_files.is_empty() {
+        bail!("at least one --source is required");
+    }
+    for source in &node.source_files {
+        if let Err(err) = crate::validate::validate_source_reference(source) {
+            bail!("invalid source '{}': {err}", source);
+        }
+    }
+
+    validate_importance(node.properties.importance)?;
+    Ok(())
 }
 
 pub fn remove_node(graph: &mut GraphFile, id: &str) -> Result<usize> {
@@ -203,9 +255,32 @@ pub fn push_unique(items: &mut Vec<String>, value: String) {
     }
 }
 
+fn normalize_sources(sources: &mut Vec<String>) {
+    for source in sources.iter_mut() {
+        *source = crate::validate::normalize_source_reference(source);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn valid_node(id: &str, name: &str, node_type: &str) -> crate::graph::Node {
+        let mut properties = crate::graph::NodeProperties::default();
+        properties.description = "Test description".to_owned();
+        properties.domain_area = "test_domain".to_owned();
+        properties.provenance = "U".to_owned();
+        properties.confidence = Some(0.9);
+        properties.created_at = "2026-01-01T00:00:00Z".to_owned();
+        properties.importance = 0.8;
+        crate::graph::Node {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            r#type: node_type.to_owned(),
+            properties,
+            source_files: vec!["DOC /tmp/test.md".to_owned()],
+        }
+    }
 
     #[test]
     fn push_unique_adds_new_items() {
@@ -223,15 +298,9 @@ mod tests {
 
     #[test]
     fn add_node_rejects_duplicate_id() {
-        use crate::graph::{GraphFile, Node, NodeProperties};
+        use crate::graph::GraphFile;
         let mut graph = GraphFile::new("test");
-        let node = Node {
-            id: "concept:n1".to_string(),
-            name: "Test Node".to_string(),
-            r#type: "Concept".to_string(),
-            properties: NodeProperties::default(),
-            source_files: vec!["test.rs".to_string()],
-        };
+        let node = valid_node("concept:n1", "Test Node", "Concept");
         add_node(&mut graph, node.clone()).unwrap();
         let result = add_node(&mut graph, node);
         assert!(result.is_err());
@@ -243,15 +312,10 @@ mod tests {
 
     #[test]
     fn add_node_requires_source() {
-        use crate::graph::{GraphFile, Node, NodeProperties};
+        use crate::graph::GraphFile;
         let mut graph = GraphFile::new("test");
-        let node = Node {
-            id: "concept:n1".to_string(),
-            name: "Test Node".to_string(),
-            r#type: "Concept".to_string(),
-            properties: NodeProperties::default(),
-            source_files: vec![],
-        };
+        let mut node = valid_node("concept:n1", "Test Node", "Concept");
+        node.source_files.clear();
         let result = add_node(&mut graph, node);
         assert!(result.is_err());
         assert_eq!(
@@ -262,15 +326,9 @@ mod tests {
 
     #[test]
     fn remove_node_returns_removed_count() {
-        use crate::graph::{GraphFile, Node, NodeProperties};
+        use crate::graph::GraphFile;
         let mut graph = GraphFile::new("test");
-        let node = Node {
-            id: "concept:n1".to_string(),
-            name: "Test Node".to_string(),
-            r#type: "Concept".to_string(),
-            properties: NodeProperties::default(),
-            source_files: vec!["test.rs".to_string()],
-        };
+        let node = valid_node("concept:n1", "Test Node", "Concept");
         add_node(&mut graph, node).unwrap();
         let removed = remove_node(&mut graph, "concept:n1").unwrap();
         assert_eq!(removed, 0);
@@ -279,15 +337,9 @@ mod tests {
 
     #[test]
     fn add_edge_validates_source_exists() {
-        use crate::graph::{Edge, EdgeProperties, GraphFile, Node, NodeProperties};
+        use crate::graph::{Edge, EdgeProperties, GraphFile};
         let mut graph = GraphFile::new("test");
-        let node = Node {
-            id: "concept:target".to_string(),
-            name: "Target".to_string(),
-            r#type: "Concept".to_string(),
-            properties: NodeProperties::default(),
-            source_files: vec!["test.rs".to_string()],
-        };
+        let node = valid_node("concept:target", "Target", "Concept");
         add_node(&mut graph, node).unwrap();
         let edge = Edge {
             source_id: "concept:nonexistent".to_string(),

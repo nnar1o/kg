@@ -700,7 +700,7 @@ fn parse_kg_with_warnings(
                 raw_line,
                 strict,
             )?;
-            if let Ok(value) = rest.trim().parse::<u8>() {
+            if let Ok(value) = rest.trim().parse::<f64>() {
                 node.properties.importance = value;
             }
             continue;
@@ -1155,7 +1155,7 @@ pub struct NodeProperties {
     #[serde(default)]
     pub created_at: String,
     #[serde(default = "default_importance")]
-    pub importance: u8,
+    pub importance: f64,
     #[serde(default)]
     pub key_facts: Vec<String>,
     #[serde(default)]
@@ -1168,8 +1168,8 @@ pub struct NodeProperties {
     pub feedback_last_ts_ms: Option<u64>,
 }
 
-fn default_importance() -> u8 {
-    4
+fn default_importance() -> f64 {
+    0.5
 }
 
 impl Default for NodeProperties {
@@ -1384,7 +1384,7 @@ mod tests {
                 description: "Urzadzenie chlodzace".to_owned(),
                 provenance: "U".to_owned(),
                 created_at: "2026-04-04T12:00:00Z".to_owned(),
-                importance: 5,
+                importance: 5.0,
                 key_facts: vec!["A".to_owned(), "b".to_owned()],
                 alias: vec!["Fridge".to_owned()],
                 ..Default::default()
@@ -1412,7 +1412,7 @@ mod tests {
         assert_eq!(loaded.nodes.len(), 1);
         assert_eq!(loaded.edges.len(), 1);
         let node = &loaded.nodes[0];
-        assert_eq!(node.properties.importance, 5);
+        assert_eq!(node.properties.importance, 5.0);
         assert_eq!(node.properties.provenance, "U");
         assert_eq!(node.name, "Lodowka");
         assert_eq!(loaded.edges[0].relation, "READS_FROM");
@@ -1551,7 +1551,7 @@ mod tests {
                 description: "Linia 1\nLinia 2\\nliteral".to_owned(),
                 provenance: "user\nimport".to_owned(),
                 created_at: "2026-04-04T12:00:00Z".to_owned(),
-                importance: 5,
+                importance: 5.0,
                 key_facts: vec!["Fakt 1\nFakt 2".to_owned()],
                 alias: vec!["Alias\nA".to_owned()],
                 domain_area: "ops\nfield".to_owned(),

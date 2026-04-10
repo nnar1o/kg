@@ -634,8 +634,8 @@ pub struct AddNodeArgs {
     pub confidence: Option<f64>,
     #[arg(long, default_value = "")]
     pub created_at: String,
-    #[arg(long, default_value_t = 4)]
-    pub importance: u8,
+    #[arg(long, default_value_t = 0.5)]
+    pub importance: f64,
     #[arg(long = "fact")]
     pub fact: Vec<String>,
     #[arg(long = "alias")]
@@ -662,7 +662,7 @@ pub struct ModifyNodeArgs {
     #[arg(long)]
     pub created_at: Option<String>,
     #[arg(long)]
-    pub importance: Option<u8>,
+    pub importance: Option<f64>,
     #[arg(long = "fact")]
     pub fact: Vec<String>,
     #[arg(long = "alias")]
