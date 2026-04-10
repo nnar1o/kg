@@ -175,6 +175,8 @@ pub enum GraphCommand {
     Duplicates(DuplicatesArgs),
     #[command(about = "Find missing expected edges")]
     EdgeGaps(EdgeGapsArgs),
+    #[command(about = "Show top similarity clusters from latest score cache")]
+    Clusters(ClustersArgs),
     #[command(
         name = "export-html",
         about = "Export graph as interactive HTML visualization"
@@ -245,6 +247,21 @@ pub struct ScoreAllArgs {
     pub cluster_resolution: f64,
     #[arg(long, default_value_t = 5)]
     pub membership_top_k: usize,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ClusterSkill {
+    Gardener,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct ClustersArgs {
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
+    #[arg(long, value_enum)]
+    pub skill: Option<ClusterSkill>,
 }
 
 #[derive(Debug, Args)]

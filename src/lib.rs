@@ -47,11 +47,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use cli::{
-    AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, Command, DiffAsOfArgs, EdgeCommand,
-    ExportDotArgs, ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs,
-    FeedbackSummaryArgs, FindMode as CliFindMode, GraphCommand, HistoryArgs, ImportCsvArgs,
-    ImportMarkdownArgs, MergeStrategy, NodeCommand, NoteAddArgs, NoteCommand, NoteListArgs,
-    ScoreAllArgs, SplitArgs, TemporalSource, TimelineArgs, VectorCommand,
+    AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, ClusterSkill, ClustersArgs, Command,
+    DiffAsOfArgs, EdgeCommand, ExportDotArgs, ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs,
+    FeedbackLogArgs, FeedbackSummaryArgs, FindMode as CliFindMode, GraphCommand, HistoryArgs,
+    ImportCsvArgs, ImportMarkdownArgs, MergeStrategy, NodeCommand, NoteAddArgs, NoteCommand,
+    NoteListArgs, ScoreAllArgs, SplitArgs, TemporalSource, TimelineArgs, VectorCommand,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -379,6 +379,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                 GraphCommand::MissingFacts(args) => Ok(execute_missing_facts(&graph_file, &args)),
                 GraphCommand::Duplicates(args) => Ok(execute_duplicates(&graph_file, &args)),
                 GraphCommand::EdgeGaps(args) => Ok(execute_edge_gaps(&graph_file, &args)),
+                GraphCommand::Clusters(args) => execute_clusters(&graph_file, &path, &args),
 
                 GraphCommand::ExportHtml(args) => execute_export_html(&graph, &graph_file, args),
 
@@ -491,6 +492,7 @@ fn graph_command_mutates(command: &GraphCommand) -> bool {
         | GraphCommand::MissingFacts(_)
         | GraphCommand::Duplicates(_)
         | GraphCommand::EdgeGaps(_)
+        | GraphCommand::Clusters(_)
         | GraphCommand::ExportHtml(_)
         | GraphCommand::AccessLog(_)
         | GraphCommand::AccessStats(_)
@@ -535,6 +537,154 @@ fn execute_score_all(graph: &GraphFile, path: &Path, args: &ScoreAllArgs) -> Res
         outcome.clusters,
         outcome.path.display()
     ))
+}
+
+fn execute_clusters(graph: &GraphFile, path: &Path, args: &ClustersArgs) -> Result<String> {
+    let source_graph = resolve_cluster_source_graph(graph, path)?;
+    Ok(render_clusters(&source_graph, args))
+}
+
+fn resolve_cluster_source_graph(graph: &GraphFile, path: &Path) -> Result<GraphFile> {
+    let filename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if filename.contains(".score.") {
+        return Ok(graph.clone());
+    }
+
+    let latest = find_latest_score_snapshot(path)?.ok_or_else(|| {
+        anyhow!(
+            "no score cache found for '{}'; run `kg graph {} score-all` first",
+            path.display(),
+            graph.metadata.name
+        )
+    })?;
+    GraphFile::load(&latest)
+}
+
+fn find_latest_score_snapshot(path: &Path) -> Result<Option<PathBuf>> {
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| anyhow!("invalid graph filename"))?;
+    let prefix = format!("{stem}.score.");
+    let suffix = ".kg";
+    let mut latest: Option<(u128, PathBuf)> = None;
+
+    let cache_dir = cache_paths::cache_root_for_graph(path);
+    let Ok(entries) = std::fs::read_dir(&cache_dir) else {
+        return Ok(None);
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(&prefix) || !name.ends_with(suffix) {
+            continue;
+        }
+        let ts_part = &name[prefix.len()..name.len() - suffix.len()];
+        let Ok(ts) = ts_part.parse::<u128>() else {
+            continue;
+        };
+        if latest.as_ref().map(|(curr, _)| ts > *curr).unwrap_or(true) {
+            latest = Some((ts, entry.path()));
+        }
+    }
+
+    Ok(latest.map(|(_, path)| path))
+}
+
+#[derive(Debug, Serialize)]
+struct ClusterView {
+    id: String,
+    size: usize,
+    relevance: f64,
+    members: Vec<(String, f64)>,
+}
+
+fn render_clusters(graph: &GraphFile, args: &ClustersArgs) -> String {
+    let mut clusters: Vec<ClusterView> = graph
+        .nodes
+        .iter()
+        .filter(|node| node.r#type == "@" && node.id.starts_with("@:cluster_"))
+        .map(|cluster| {
+            let mut members: Vec<(String, f64)> = graph
+                .edges
+                .iter()
+                .filter(|edge| edge.source_id == cluster.id && edge.relation == "HAS")
+                .map(|edge| {
+                    (
+                        edge.target_id.clone(),
+                        edge.properties.detail.parse::<f64>().unwrap_or(0.0),
+                    )
+                })
+                .collect();
+            members.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let relevance = if members.is_empty() {
+                0.0
+            } else {
+                members.iter().map(|(_, v)| *v).sum::<f64>() / members.len() as f64
+            };
+            ClusterView {
+                id: cluster.id.clone(),
+                size: members.len(),
+                relevance,
+                members,
+            }
+        })
+        .collect();
+
+    clusters.sort_by(|a, b| {
+        b.relevance
+            .partial_cmp(&a.relevance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.size.cmp(&a.size))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    clusters.truncate(args.limit);
+
+    if args.json {
+        return serde_json::to_string_pretty(&clusters).unwrap_or_else(|_| "[]".to_owned());
+    }
+
+    if matches!(args.skill, Some(ClusterSkill::Gardener)) {
+        let mut lines = vec![format!("= gardener clusters ({})", clusters.len())];
+        for cluster in &clusters {
+            let top = cluster
+                .members
+                .iter()
+                .take(3)
+                .map(|(id, score)| format!("{id} ({score:.3})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!(
+                "- {} | relevance {:.3} | size {} | top: {}",
+                cluster.id, cluster.relevance, cluster.size, top
+            ));
+            lines.push(format!(
+                "- action: review cluster {}, merge aliases/facts, then keep strongest node as canonical",
+                cluster.id
+            ));
+        }
+        return format!("{}\n", lines.join("\n"));
+    }
+
+    let mut lines = vec![format!("= clusters ({})", clusters.len())];
+    for cluster in &clusters {
+        let top = cluster
+            .members
+            .iter()
+            .take(5)
+            .map(|(id, score)| format!("{id}:{score:.3}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!(
+            "- {} | relevance {:.3} | size {} | top {}",
+            cluster.id, cluster.relevance, cluster.size, top
+        ));
+    }
+    format!("{}\n", lines.join("\n"))
 }
 
 fn node_command_mutates(command: &NodeCommand) -> bool {
@@ -3279,5 +3429,138 @@ mod tests {
     fn colorize_cli_output_leaves_json_unchanged() {
         let rendered = "{\n  \"nodes\": []\n}\n";
         assert_eq!(colorize_cli_output(rendered), rendered);
+    }
+
+    #[test]
+    fn execute_clusters_sorts_by_relevance_then_size() {
+        let mut graph = GraphFile::new("score");
+        graph.nodes.push(Node {
+            id: "@:cluster_0001".to_owned(),
+            r#type: "@".to_owned(),
+            name: "Cluster 1".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        graph.nodes.push(Node {
+            id: "@:cluster_0002".to_owned(),
+            r#type: "@".to_owned(),
+            name: "Cluster 2".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        for id in ["concept:a", "concept:b", "concept:c", "concept:d"] {
+            graph.nodes.push(Node {
+                id: id.to_owned(),
+                r#type: "Concept".to_owned(),
+                name: id.to_owned(),
+                properties: NodeProperties::default(),
+                source_files: vec![],
+            });
+        }
+        graph.edges.push(Edge {
+            source_id: "@:cluster_0001".to_owned(),
+            relation: "HAS".to_owned(),
+            target_id: "concept:a".to_owned(),
+            properties: EdgeProperties {
+                detail: "0.95".to_owned(),
+                ..Default::default()
+            },
+        });
+        graph.edges.push(Edge {
+            source_id: "@:cluster_0001".to_owned(),
+            relation: "HAS".to_owned(),
+            target_id: "concept:b".to_owned(),
+            properties: EdgeProperties {
+                detail: "0.85".to_owned(),
+                ..Default::default()
+            },
+        });
+        graph.edges.push(Edge {
+            source_id: "@:cluster_0002".to_owned(),
+            relation: "HAS".to_owned(),
+            target_id: "concept:c".to_owned(),
+            properties: EdgeProperties {
+                detail: "0.70".to_owned(),
+                ..Default::default()
+            },
+        });
+        graph.edges.push(Edge {
+            source_id: "@:cluster_0002".to_owned(),
+            relation: "HAS".to_owned(),
+            target_id: "concept:d".to_owned(),
+            properties: EdgeProperties {
+                detail: "0.65".to_owned(),
+                ..Default::default()
+            },
+        });
+
+        let rendered = render_clusters(
+            &graph,
+            &ClustersArgs {
+                limit: 10,
+                json: false,
+                skill: None,
+            },
+        );
+        let first = rendered.find("@:cluster_0001").expect("cluster 1 present");
+        let second = rendered.find("@:cluster_0002").expect("cluster 2 present");
+        assert!(first < second);
+    }
+
+    #[test]
+    fn execute_clusters_gardener_mode_emits_actions() {
+        let mut graph = GraphFile::new("score");
+        graph.nodes.push(Node {
+            id: "@:cluster_0001".to_owned(),
+            r#type: "@".to_owned(),
+            name: "Cluster 1".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        graph.nodes.push(Node {
+            id: "concept:a".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "A".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        graph.edges.push(Edge {
+            source_id: "@:cluster_0001".to_owned(),
+            relation: "HAS".to_owned(),
+            target_id: "concept:a".to_owned(),
+            properties: EdgeProperties {
+                detail: "0.9".to_owned(),
+                ..Default::default()
+            },
+        });
+
+        let rendered = render_clusters(
+            &graph,
+            &ClustersArgs {
+                limit: 5,
+                json: false,
+                skill: Some(ClusterSkill::Gardener),
+            },
+        );
+        assert!(rendered.contains("= gardener clusters"));
+        assert!(rendered.contains("action: review cluster"));
+    }
+
+    #[test]
+    fn find_latest_score_snapshot_picks_newest_timestamp() {
+        let dir = tempdir().expect("tempdir");
+        let graph_path = dir.path().join("fridge.kg");
+        std::fs::write(&graph_path, "").expect("graph file");
+        let cache_dir = crate::cache_paths::cache_root_for_graph(&graph_path);
+        std::fs::create_dir_all(&cache_dir).expect("cache dir");
+        let older = cache_dir.join("fridge.score.100.kg");
+        let newer = cache_dir.join("fridge.score.200.kg");
+        std::fs::write(&older, "").expect("older");
+        std::fs::write(&newer, "").expect("newer");
+
+        let latest = find_latest_score_snapshot(&graph_path)
+            .expect("latest")
+            .expect("some path");
+        assert_eq!(latest, newer);
     }
 }

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.9] - 2026-04-11
+
+### Added
+- `score-all` now creates deterministic similarity clusters in the score cache graph, with cluster nodes (`@`) and `HAS` membership edges carrying strength in `d`
+- new `clusters` command to inspect top clusters sorted by relevance from the latest score cache snapshot
+- `clusters --skill gardener` mode for AI-assisted triage with action-oriented cluster output
+
+### Changed
+- `clusters` resolves the latest `<graph>.score.<ts>.kg` automatically so assistants do not need direct cache traversal
+- edge type rule enforcement now applies only to built-in core types, allowing custom cluster type `@` membership edges
+
 ## [0.2.4] - 2026-04-10
 
 ### Added
