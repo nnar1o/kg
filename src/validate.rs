@@ -232,6 +232,13 @@ fn parse_similarity_score(value: &str) -> Option<f64> {
     }
 }
 
+fn is_valid_score_component_label(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some('C'))
+        && chars.clone().next().is_some()
+        && chars.all(|ch| ch.is_ascii_digit())
+}
+
 pub fn validate_bidirectional_similarity_edge(
     source_id: &str,
     relation: &str,
@@ -668,6 +675,21 @@ pub fn validate_graph(
             errors.push(err);
         }
 
+        for (label, score) in &edge.properties.score_components {
+            if !is_valid_score_component_label(label) {
+                errors.push(format!(
+                    "edge {} {} {} has invalid score component label '{}'",
+                    edge.source_id, edge.relation, edge.target_id, label
+                ));
+            }
+            if !(0.0..=1.0).contains(score) {
+                errors.push(format!(
+                    "edge {} {} {} score component '{}' out of range: {}",
+                    edge.source_id, edge.relation, edge.target_id, label, score
+                ));
+            }
+        }
+
         // Enforce relation semantics from decision table rules.
         if let (Some(src_type), Some(tgt_type)) = (
             node_type_map.get(edge.source_id.as_str()),
@@ -767,5 +789,13 @@ mod tests {
         let invalid_order =
             validate_bidirectional_similarity_edge("~:b", "~", "~:a", "0.8", true).unwrap_err();
         assert!(invalid_order.contains("must be canonicalized"));
+    }
+
+    #[test]
+    fn score_component_label_validation_accepts_only_c_numeric() {
+        assert!(super::is_valid_score_component_label("C1"));
+        assert!(super::is_valid_score_component_label("C2"));
+        assert!(!super::is_valid_score_component_label("DESC"));
+        assert!(!super::is_valid_score_component_label("C"));
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -28,7 +28,7 @@ struct AttributeBundleCalculator;
 
 impl PairScoreCalculator for DescriptionRepeatCalculator {
     fn key(&self) -> &'static str {
-        "desc"
+        "C1"
     }
 
     fn score(&self, left: &NodeProfile, right: &NodeProfile) -> f64 {
@@ -38,7 +38,7 @@ impl PairScoreCalculator for DescriptionRepeatCalculator {
 
 impl PairScoreCalculator for AttributeBundleCalculator {
     fn key(&self) -> &'static str {
-        "bundle"
+        "C2"
     }
 
     fn score(&self, left: &NodeProfile, right: &NodeProfile) -> f64 {
@@ -63,8 +63,8 @@ pub(crate) fn compute_all_pair_scores_to_cache(
         Box::new(AttributeBundleCalculator),
     ];
     let weights = HashMap::from([
-        ("desc", clamp_01(config.desc_weight)),
-        ("bundle", clamp_01(config.bundle_weight)),
+        ("C1", clamp_01(config.desc_weight)),
+        ("C2", clamp_01(config.bundle_weight)),
     ]);
 
     let mut result = GraphFile::new(&format!("{}.score", source_graph.metadata.name));
@@ -90,6 +90,10 @@ pub(crate) fn compute_all_pair_scores_to_cache(
             }
 
             let score = weighted_score(&raw_scores, &weights);
+            let mut score_components = BTreeMap::new();
+            for (key, value) in &raw_scores {
+                score_components.insert((*key).to_owned(), *value);
+            }
             let (source_id, target_id) = if left.id <= right.id {
                 (left.id.clone(), right.id.clone())
             } else {
@@ -103,6 +107,7 @@ pub(crate) fn compute_all_pair_scores_to_cache(
                 properties: EdgeProperties {
                     detail: format_score(score),
                     bidirectional: true,
+                    score_components,
                     ..EdgeProperties::default()
                 },
             });
@@ -292,7 +297,11 @@ fn cache_score_path(source_graph_path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{overlap_score, weighted_score, word_shingles};
+    use super::{
+        ScoreAllConfig, compute_all_pair_scores_to_cache, overlap_score, weighted_score,
+        word_shingles,
+    };
+    use crate::graph::{GraphFile, Node, NodeProperties};
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -305,8 +314,8 @@ mod tests {
 
     #[test]
     fn weighted_score_normalizes_weights() {
-        let scores = HashMap::from([("desc", 0.8), ("bundle", 0.2)]);
-        let weights = HashMap::from([("desc", 4.0), ("bundle", 1.0)]);
+        let scores = HashMap::from([("C1", 0.8), ("C2", 0.2)]);
+        let weights = HashMap::from([("C1", 4.0), ("C2", 1.0)]);
         let score = weighted_score(&scores, &weights);
         assert!(score > 0.65 && score < 0.75, "score={score}");
     }
@@ -315,5 +324,55 @@ mod tests {
     fn shingles_fallback_to_single_fragment_for_short_text() {
         let shingles = word_shingles("short text", 3);
         assert_eq!(shingles, HashSet::from(["short text".to_owned()]));
+    }
+
+    #[test]
+    fn score_all_writes_component_scores_and_final_score() {
+        let mut graph = GraphFile::new("demo");
+        graph.nodes.push(Node {
+            id: "concept:a".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Alpha Device".to_owned(),
+            properties: NodeProperties {
+                description: "This is a long cooling appliance description with many repeated words for similarity".to_owned(),
+                provenance: "U".to_owned(),
+                importance: 0.5,
+                ..Default::default()
+            },
+            source_files: vec!["docs/a.md".to_owned()],
+        });
+        graph.nodes.push(Node {
+            id: "concept:b".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Alpha Cooler".to_owned(),
+            properties: NodeProperties {
+                description: "This is a long cooling appliance description with many shared words for similarity".to_owned(),
+                provenance: "U".to_owned(),
+                importance: 0.5,
+                ..Default::default()
+            },
+            source_files: vec!["docs/b.md".to_owned()],
+        });
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let source_path = dir.path().join("demo.kg");
+        let outcome = compute_all_pair_scores_to_cache(
+            &graph,
+            &source_path,
+            &ScoreAllConfig {
+                min_desc_len: 20,
+                desc_weight: 0.45,
+                bundle_weight: 0.55,
+            },
+        )
+        .expect("score all");
+
+        assert_eq!(outcome.pairs, 1);
+        let scored = GraphFile::load(&outcome.path).expect("load scored graph");
+        assert_eq!(scored.edges.len(), 1);
+        let edge = &scored.edges[0];
+        assert!(edge.properties.score_components.contains_key("C1"));
+        assert!(edge.properties.score_components.contains_key("C2"));
+        assert!(!edge.properties.detail.is_empty());
     }
 }

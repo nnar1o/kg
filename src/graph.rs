@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -211,6 +211,13 @@ fn canonicalize_bidirectional_pair(a: &str, b: &str) -> (String, String) {
     } else {
         (b.to_owned(), a.to_owned())
     }
+}
+
+fn is_score_component_label(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some('C'))
+        && chars.clone().next().is_some()
+        && chars.all(|ch| ch.is_ascii_digit())
 }
 
 fn sort_case_insensitive(values: &[String]) -> Vec<String> {
@@ -878,6 +885,26 @@ fn parse_kg_with_warnings(
                 )?;
                 continue;
             };
+            let trimmed_rest = rest.trim();
+            let mut parts = trimmed_rest.split_whitespace();
+            if let (Some(label), Some(raw_score), None) = (parts.next(), parts.next(), parts.next())
+            {
+                if is_score_component_label(label) {
+                    let score = raw_score.parse::<f64>().map_err(|_| {
+                        anyhow::anyhow!(
+                            "invalid score component value at line {line_no}: expected number in '{}', got '{}'",
+                            line_fragment(raw_line),
+                            raw_score
+                        )
+                    })?;
+                    graph.edges[edge_idx]
+                        .properties
+                        .score_components
+                        .insert(label.to_owned(), score);
+                    continue;
+                }
+            }
+
             let value = parse_text_field(rest);
             validate_len(line_no, "d", &value, raw_line, 1, 200, strict)?;
             graph.edges[edge_idx].properties.detail = value;
@@ -1151,6 +1178,9 @@ fn serialize_kg(graph: &GraphFile) -> String {
                 relation_to_code(&edge.relation),
                 edge.target_id
             ));
+            for (label, score) in &edge.properties.score_components {
+                out.push_str(&format!("d {} {:.6}\n", label, score));
+            }
             if !edge.properties.detail.is_empty() {
                 push_text_line(&mut out, "d", &edge.properties.detail);
             }
@@ -1315,6 +1345,8 @@ pub struct EdgeProperties {
     pub feedback_last_ts_ms: Option<u64>,
     #[serde(default)]
     pub bidirectional: bool,
+    #[serde(default)]
+    pub score_components: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1717,7 +1749,7 @@ mod tests {
 
     #[test]
     fn parse_bidirectional_similarity_edge_is_canonical_and_scored() {
-        let raw = "@ ~:dedupe_b\nN B\nD Desc\nV 0.5\nP U\nS docs/b.md\n= ~ ~:dedupe_a\nd 0.91\n\n@ ~:dedupe_a\nN A\nD Desc\nV 0.5\nP U\nS docs/a.md\n";
+        let raw = "@ ~:dedupe_b\nN B\nD Desc\nV 0.5\nP U\nS docs/b.md\n= ~ ~:dedupe_a\nd C1 0.11\nd C2 0.83\nd 0.91\n\n@ ~:dedupe_a\nN A\nD Desc\nV 0.5\nP U\nS docs/a.md\n";
         let graph = parse_kg(raw, "virt", true).expect("parse kg");
 
         assert_eq!(graph.nodes.len(), 2);
@@ -1728,6 +1760,8 @@ mod tests {
         assert_eq!(edge.target_id, "~:dedupe_b");
         assert_eq!(edge.properties.detail, "0.91");
         assert!(edge.properties.bidirectional);
+        assert_eq!(edge.properties.score_components.get("C1"), Some(&0.11));
+        assert_eq!(edge.properties.score_components.get("C2"), Some(&0.83));
     }
 
     #[test]
@@ -1768,6 +1802,10 @@ mod tests {
             properties: crate::EdgeProperties {
                 detail: "0.75".to_owned(),
                 bidirectional: true,
+                score_components: std::collections::BTreeMap::from([
+                    ("C1".to_owned(), 0.2),
+                    ("C2".to_owned(), 0.8),
+                ]),
                 ..Default::default()
             },
         });
@@ -1775,12 +1813,22 @@ mod tests {
         graph.save(&path).expect("save");
         let raw = std::fs::read_to_string(&path).expect("read");
         assert!(raw.contains("= ~ ~:dedupe_b"));
+        assert!(raw.contains("d C1 0.200000"));
+        assert!(raw.contains("d C2 0.800000"));
         assert!(!raw.contains("> ~ ~:dedupe_b"));
 
         let loaded = GraphFile::load(&path).expect("load");
         assert_eq!(loaded.edges.len(), 1);
         assert!(loaded.edges[0].properties.bidirectional);
         assert_eq!(loaded.edges[0].properties.detail, "0.75");
+        assert_eq!(
+            loaded.edges[0].properties.score_components.get("C1"),
+            Some(&0.2)
+        );
+        assert_eq!(
+            loaded.edges[0].properties.score_components.get("C2"),
+            Some(&0.8)
+        );
     }
 
     #[test]
