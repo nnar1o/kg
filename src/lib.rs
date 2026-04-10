@@ -46,11 +46,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use cli::{
-    AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, Command, DiffAsOfArgs, ExportDotArgs,
-    ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs, FeedbackSummaryArgs,
-    FindMode as CliFindMode, GraphCommand, HistoryArgs, ImportCsvArgs, ImportMarkdownArgs,
-    MergeStrategy, NoteAddArgs, NoteListArgs, SplitArgs, TemporalSource, TimelineArgs,
-    VectorCommand,
+    AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, Command, DiffAsOfArgs, EdgeCommand,
+    ExportDotArgs, ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs,
+    FeedbackSummaryArgs, FindMode as CliFindMode, GraphCommand, HistoryArgs, ImportCsvArgs,
+    ImportMarkdownArgs, MergeStrategy, NodeCommand, NoteAddArgs, NoteCommand, NoteListArgs,
+    SplitArgs, TemporalSource, TimelineArgs, VectorCommand,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -321,7 +321,11 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
         } => {
             let store = graph_store(cwd, graph_root, legacy)?;
             let path = store.resolve_graph_path(&graph)?;
-            let _graph_write_lock = graph_lock::acquire_for_graph(&path)?;
+            let _graph_write_lock = if graph_command_mutates(&command) {
+                Some(graph_lock::acquire_for_graph(&path)?)
+            } else {
+                None
+            };
             let mut graph_file = store.load_graph(&path)?;
             let schema = GraphSchema::discover(cwd).ok().flatten().map(|(_, s)| s);
             let user_short_uid = config::ensure_user_short_uid(cwd);
@@ -464,6 +468,68 @@ fn render_graph_list(store: &dyn GraphStore, full: bool) -> Result<String> {
         }
     }
     Ok(format!("{}\n", lines.join("\n")))
+}
+
+fn graph_command_mutates(command: &GraphCommand) -> bool {
+    match command {
+        GraphCommand::Node { command } => node_command_mutates(command),
+        GraphCommand::Edge { command } => edge_command_mutates(command),
+        GraphCommand::Note { command } => note_command_mutates(command),
+        GraphCommand::ImportCsv(_)
+        | GraphCommand::ImportMarkdown(_)
+        | GraphCommand::ImportJson(_)
+        | GraphCommand::Vector {
+            command: VectorCommand::Import(_),
+        } => true,
+        GraphCommand::Stats(_)
+        | GraphCommand::Check(_)
+        | GraphCommand::Audit(_)
+        | GraphCommand::Quality { .. }
+        | GraphCommand::MissingDescriptions(_)
+        | GraphCommand::MissingFacts(_)
+        | GraphCommand::Duplicates(_)
+        | GraphCommand::EdgeGaps(_)
+        | GraphCommand::ExportHtml(_)
+        | GraphCommand::AccessLog(_)
+        | GraphCommand::AccessStats(_)
+        | GraphCommand::Kql(_)
+        | GraphCommand::ExportJson(_)
+        | GraphCommand::ExportDot(_)
+        | GraphCommand::ExportMermaid(_)
+        | GraphCommand::ExportGraphml(_)
+        | GraphCommand::ExportMd(_)
+        | GraphCommand::Split(_)
+        | GraphCommand::Vector {
+            command: VectorCommand::Stats(_),
+        }
+        | GraphCommand::AsOf(_)
+        | GraphCommand::History(_)
+        | GraphCommand::Timeline(_)
+        | GraphCommand::DiffAsOf(_)
+        | GraphCommand::FeedbackSummary(_)
+        | GraphCommand::Baseline(_) => false,
+    }
+}
+
+fn node_command_mutates(command: &NodeCommand) -> bool {
+    matches!(
+        command,
+        NodeCommand::Add(_)
+            | NodeCommand::Modify(_)
+            | NodeCommand::Rename { .. }
+            | NodeCommand::Remove { .. }
+    )
+}
+
+fn edge_command_mutates(command: &EdgeCommand) -> bool {
+    matches!(
+        command,
+        EdgeCommand::Add(_) | EdgeCommand::AddBatch(_) | EdgeCommand::Remove(_)
+    )
+}
+
+fn note_command_mutates(command: &NoteCommand) -> bool {
+    matches!(command, NoteCommand::Add(_) | NoteCommand::Remove { .. })
 }
 
 #[derive(Debug, Serialize)]

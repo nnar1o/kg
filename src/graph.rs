@@ -22,13 +22,30 @@ fn atomic_write(dest: &Path, data: &str) -> Result<()> {
     fs::write(&tmp, data).with_context(|| format!("failed to write tmp: {}", tmp.display()))?;
     if dest.exists() {
         let bak = backup_bak_path(dest)?;
-        fs::copy(dest, &bak)
-            .with_context(|| format!("failed to create backup: {}", bak.display()))?;
+        if should_refresh_bak(&bak)? {
+            fs::copy(dest, &bak)
+                .with_context(|| format!("failed to create backup: {}", bak.display()))?;
+        }
     }
     fs::rename(&tmp, dest).with_context(|| format!("failed to rename tmp to {}", dest.display()))
 }
 
+const BACKUP_BAK_STALE_SECS: u64 = 5 * 60;
 const BACKUP_STALE_SECS: u64 = 60 * 60;
+
+fn should_refresh_bak(bak_path: &Path) -> Result<bool> {
+    if !bak_path.exists() {
+        return Ok(true);
+    }
+    let modified = fs::metadata(bak_path)
+        .and_then(|m| m.modified())
+        .with_context(|| format!("failed to read backup mtime: {}", bak_path.display()))?;
+    let age_secs = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default()
+        .as_secs();
+    Ok(age_secs >= BACKUP_BAK_STALE_SECS)
+}
 
 fn backup_graph_if_stale(path: &Path, data: &str) -> Result<()> {
     let cache_dir = backup_cache_dir(path)?;
