@@ -224,6 +224,21 @@ pub enum GraphCommand {
         about = "Compute quality and feedback baseline metrics"
     )]
     Baseline(BaselineArgs),
+    #[command(
+        name = "score-all",
+        about = "Compute all-vs-all similarity scores into cache graph"
+    )]
+    ScoreAll(ScoreAllArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct ScoreAllArgs {
+    #[arg(long, default_value_t = 120)]
+    pub min_desc_len: usize,
+    #[arg(long, default_value_t = 0.45)]
+    pub desc_weight: f64,
+    #[arg(long, default_value_t = 0.55)]
+    pub bundle_weight: f64,
 }
 
 #[derive(Debug, Args)]

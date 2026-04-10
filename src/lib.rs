@@ -17,6 +17,7 @@ mod kql;
 mod ops;
 pub mod output;
 mod schema;
+mod scoring;
 mod storage;
 mod validate;
 mod vectors;
@@ -50,7 +51,7 @@ use cli::{
     ExportDotArgs, ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs,
     FeedbackSummaryArgs, FindMode as CliFindMode, GraphCommand, HistoryArgs, ImportCsvArgs,
     ImportMarkdownArgs, MergeStrategy, NodeCommand, NoteAddArgs, NoteCommand, NoteListArgs,
-    SplitArgs, TemporalSource, TimelineArgs, VectorCommand,
+    ScoreAllArgs, SplitArgs, TemporalSource, TimelineArgs, VectorCommand,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -451,6 +452,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                 GraphCommand::Baseline(args) => {
                     Ok(execute_baseline(cwd, &graph, &graph_file, &args)?)
                 }
+                GraphCommand::ScoreAll(args) => execute_score_all(&graph_file, &path, &args),
             }
         }
     }
@@ -507,8 +509,28 @@ fn graph_command_mutates(command: &GraphCommand) -> bool {
         | GraphCommand::Timeline(_)
         | GraphCommand::DiffAsOf(_)
         | GraphCommand::FeedbackSummary(_)
-        | GraphCommand::Baseline(_) => false,
+        | GraphCommand::Baseline(_)
+        | GraphCommand::ScoreAll(_) => false,
     }
+}
+
+fn execute_score_all(graph: &GraphFile, path: &Path, args: &ScoreAllArgs) -> Result<String> {
+    let outcome = scoring::compute_all_pair_scores_to_cache(
+        graph,
+        path,
+        &scoring::ScoreAllConfig {
+            min_desc_len: args.min_desc_len,
+            desc_weight: args.desc_weight,
+            bundle_weight: args.bundle_weight,
+        },
+    )?;
+
+    Ok(format!(
+        "= score-all\n- pairs: {}\n- edges: {}\n- output: {}\n",
+        outcome.pairs,
+        outcome.edges,
+        outcome.path.display()
+    ))
 }
 
 fn node_command_mutates(command: &NodeCommand) -> bool {
