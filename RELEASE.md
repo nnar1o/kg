@@ -1,20 +1,24 @@
-# kg v0.2.3
+# kg v0.2.4
 
 `kg-mcp` is a lightweight local alternative to classic RAG systems when you want structured, editable, git-friendly project memory instead of document chunk retrieval.
 
-This release is a small follow-up to `0.2.2` that restores the bundled fridge fixture used by tests and crate packaging verification, and includes a small README wording refinement.
+This release focuses on find quality and observability: score is now always visible, scoring internals are debuggable, and ranking behavior is calibrated to be more stable across real-world query patterns.
 
 ## Highlights
 
-- restore `graph-example-fridge.json` used by the full test suite and packaged crate verification
-- keep `cargo test` and `cargo package` green again after the earlier cleanup commit
-- small README wording refinement around local-first git-friendly project memory
+- always return `score` in `node find` output (CLI and JSON)
+- add `--debug-score` with detailed score breakdown (raw relevance, normalization, lexical boost, authority cap/application)
+- recalibrate ranking with normalized relevance + capped authority (`feedback` and `importance`)
+- improve fuzzy and BM25 matching behavior (facts/notes coverage, phrase/token handling, Unicode tokenization)
+- optimize find runtime with per-query cached neighbor/note context and token-based BM25 document reuse
+- extend baseline quality report with `ndcg@k`
 
 ## Why this release matters
 
-- the crate published to crates.io now contains the missing fixture again
-- CI and local full-suite verification match the published source state
-- the README copy stays aligned with the git-friendly local-memory positioning
+- users can now inspect and trust ranking decisions directly from `find`
+- rankings are less sensitive to outliers and metadata over-dominance
+- better relevance for multi-token and cross-field queries while preserving typo tolerance
+- improved search throughput on larger graphs via less repeated work
 
 ## Installation
 

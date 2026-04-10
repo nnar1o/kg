@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.4] - 2026-04-10
+
+### Added
+- always return `score` for `kg <graph> node find` in CLI and JSON output
+- add `--debug-score` to expose score breakdown (`raw_relevance`, normalization, lexical/authority components)
+- add `ndcg@k` to baseline golden-set metrics alongside hit-rate/top1/MRR
+
+### Changed
+- recalibrate find scoring with normalized relevance and capped authority boost (`feedback` + `importance`)
+- improve fuzzy ranking coverage for `key_facts`, attached notes, and neighbor context while preserving entity-first ranking
+- tighten BM25 lexical boost behavior for phrase/token matching and improve Unicode token handling
+- optimize find performance by caching notes/neighbors per query and reusing tokenized BM25 documents with field weighting
+
 ## [0.2.3] - 2026-04-08
 
 ### Fixed
