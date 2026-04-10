@@ -37,6 +37,7 @@ pub(crate) fn execute_node(
             output_size,
             json,
             debug_score,
+            tune,
             vector_query,
         } => {
             if mode == crate::cli::FindMode::Vector {
@@ -76,8 +77,18 @@ pub(crate) fn execute_node(
                 return Ok(result);
             }
 
-            let bm25_index = if mode == crate::cli::FindMode::Bm25 {
+            let bm25_index = if matches!(
+                mode,
+                crate::cli::FindMode::Bm25 | crate::cli::FindMode::Hybrid
+            ) {
                 load_graph_index(context.path).ok().flatten()
+            } else {
+                None
+            };
+            let tune_parsed = if let Some(raw) = tune.as_deref() {
+                Some(crate::output::FindTune::parse(raw).ok_or_else(|| {
+                    anyhow!("invalid --tune value, expected key=value pairs for bm25,fuzzy,vector")
+                })?)
             } else {
                 None
             };
@@ -106,9 +117,10 @@ pub(crate) fn execute_node(
                     find_mode,
                     debug_score,
                     bm25_index.as_ref(),
+                    tune_parsed.as_ref(),
                 )
             } else if full {
-                output::render_find_with_index(
+                output::render_find_with_index_tuned(
                     context.graph_file,
                     &queries,
                     limit,
@@ -117,9 +129,10 @@ pub(crate) fn execute_node(
                     full,
                     debug_score,
                     bm25_index.as_ref(),
+                    tune_parsed.as_ref(),
                 )
             } else {
-                output::render_find_adaptive_with_index(
+                output::render_find_adaptive_with_index_tuned(
                     context.graph_file,
                     &queries,
                     limit,
@@ -128,6 +141,7 @@ pub(crate) fn execute_node(
                     output_size,
                     debug_score,
                     bm25_index.as_ref(),
+                    tune_parsed.as_ref(),
                 )
             };
             let duration_ms = timer.elapsed_ms();

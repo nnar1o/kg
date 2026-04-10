@@ -447,7 +447,7 @@ pub enum NodeCommand {
         queries: Vec<String>,
         #[arg(long, default_value_t = 5)]
         limit: usize,
-        #[arg(long, value_enum, default_value_t = FindMode::Fuzzy)]
+        #[arg(long, value_enum, default_value_t = FindMode::Hybrid)]
         mode: FindMode,
         #[arg(long)]
         full: bool,
@@ -457,6 +457,9 @@ pub enum NodeCommand {
         json: bool,
         #[arg(long)]
         debug_score: bool,
+        /// Optional tuning weights for find ranking, e.g. bm25=0.6,fuzzy=0.3,vector=0.1
+        #[arg(long)]
+        tune: Option<String>,
         /// Query vector for --mode vector (comma-separated f32 values)
         #[arg(long, value_delimiter = ',')]
         vector_query: Option<Vec<f32>>,
@@ -485,6 +488,7 @@ pub enum NodeCommand {
 pub enum FindMode {
     Fuzzy,
     Bm25,
+    Hybrid,
     Vector,
 }
 

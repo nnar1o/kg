@@ -19,6 +19,7 @@ pub mod output;
 mod schema;
 mod scoring;
 mod storage;
+mod text_norm;
 mod validate;
 mod vectors;
 
@@ -772,12 +773,14 @@ pub(crate) fn render_find_json_with_index(
     mode: output::FindMode,
     debug_score: bool,
     index: Option<&Bm25Index>,
+    tune: Option<&output::FindTune>,
 ) -> String {
     let mut total = 0usize;
     let mut results = Vec::new();
     for query in queries {
-        let (count, scored_nodes) =
-            output::find_scored_nodes_and_total_with_index(graph, query, limit, true, mode, index);
+        let (count, scored_nodes) = output::find_scored_nodes_and_total_with_index_tuned(
+            graph, query, limit, true, mode, index, tune,
+        );
         total += count;
         let nodes = scored_nodes
             .into_iter()
@@ -2551,6 +2554,7 @@ pub(crate) fn map_find_mode(mode: CliFindMode) -> output::FindMode {
     match mode {
         CliFindMode::Fuzzy => output::FindMode::Fuzzy,
         CliFindMode::Bm25 => output::FindMode::Bm25,
+        CliFindMode::Hybrid => output::FindMode::Hybrid,
         CliFindMode::Vector => output::FindMode::Fuzzy,
     }
 }

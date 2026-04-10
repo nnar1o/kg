@@ -5,6 +5,7 @@ use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use crate::graph::{Edge, GraphFile, Node, Note};
 use crate::index::Bm25Index;
+use crate::text_norm;
 
 const BM25_K1: f64 = 1.5;
 const BM25_B: f64 = 0.75;
@@ -37,6 +38,49 @@ const SCORE_META_MAX_CAP: i64 = 240;
 pub enum FindMode {
     Fuzzy,
     Bm25,
+    Hybrid,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FindTune {
+    pub bm25: f64,
+    pub fuzzy: f64,
+    pub vector: f64,
+}
+
+impl FindTune {
+    pub fn parse(raw: &str) -> Option<Self> {
+        let mut tune = Self::default();
+        for part in raw.split(',') {
+            let (key, value) = part.split_once('=')?;
+            let value = value.trim().parse::<f64>().ok()?;
+            match key.trim() {
+                "bm25" => tune.bm25 = value,
+                "fuzzy" => tune.fuzzy = value,
+                "vector" => tune.vector = value,
+                _ => return None,
+            }
+        }
+        Some(tune.clamped())
+    }
+
+    fn clamped(self) -> Self {
+        Self {
+            bm25: self.bm25.clamp(0.0, 1.0),
+            fuzzy: self.fuzzy.clamp(0.0, 1.0),
+            vector: self.vector.clamp(0.0, 1.0),
+        }
+    }
+}
+
+impl Default for FindTune {
+    fn default() -> Self {
+        Self {
+            bm25: 0.55,
+            fuzzy: 0.35,
+            vector: 0.10,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -177,9 +221,34 @@ pub fn render_find_with_index(
     debug_score: bool,
     index: Option<&Bm25Index>,
 ) -> String {
+    render_find_with_index_tuned(
+        graph,
+        queries,
+        limit,
+        include_features,
+        mode,
+        full,
+        debug_score,
+        index,
+        None,
+    )
+}
+
+pub fn render_find_with_index_tuned(
+    graph: &GraphFile,
+    queries: &[String],
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    full: bool,
+    debug_score: bool,
+    index: Option<&Bm25Index>,
+    tune: Option<&FindTune>,
+) -> String {
     let mut sections = Vec::new();
     for query in queries {
-        let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+        let matches =
+            find_all_matches_with_index(graph, query, include_features, mode, index, tune);
         let total = matches.len();
         let visible: Vec<_> = matches.into_iter().take(limit).collect();
         let shown = visible.len();
@@ -200,7 +269,7 @@ pub fn find_nodes(
     include_features: bool,
     mode: FindMode,
 ) -> Vec<Node> {
-    find_matches_with_index(graph, query, limit, include_features, mode, None)
+    find_matches_with_index(graph, query, limit, include_features, mode, None, None)
         .into_iter()
         .map(|item| item.node.clone())
         .collect()
@@ -214,7 +283,22 @@ pub fn find_nodes_with_index(
     mode: FindMode,
     index: Option<&Bm25Index>,
 ) -> Vec<Node> {
-    find_matches_with_index(graph, query, limit, include_features, mode, index)
+    find_matches_with_index(graph, query, limit, include_features, mode, index, None)
+        .into_iter()
+        .map(|item| item.node.clone())
+        .collect()
+}
+
+pub fn find_nodes_with_index_tuned(
+    graph: &GraphFile,
+    query: &str,
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    index: Option<&Bm25Index>,
+    tune: Option<&FindTune>,
+) -> Vec<Node> {
+    find_matches_with_index(graph, query, limit, include_features, mode, index, tune)
         .into_iter()
         .map(|item| item.node.clone())
         .collect()
@@ -228,7 +312,7 @@ pub fn find_nodes_and_total_with_index(
     mode: FindMode,
     index: Option<&Bm25Index>,
 ) -> (usize, Vec<Node>) {
-    let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+    let matches = find_all_matches_with_index(graph, query, include_features, mode, index, None);
     let total = matches.len();
     let nodes = matches
         .into_iter()
@@ -246,7 +330,27 @@ pub fn find_scored_nodes_and_total_with_index(
     mode: FindMode,
     index: Option<&Bm25Index>,
 ) -> (usize, Vec<ScoredNodeResult>) {
-    let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+    find_scored_nodes_and_total_with_index_tuned(
+        graph,
+        query,
+        limit,
+        include_features,
+        mode,
+        index,
+        None,
+    )
+}
+
+pub fn find_scored_nodes_and_total_with_index_tuned(
+    graph: &GraphFile,
+    query: &str,
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    index: Option<&Bm25Index>,
+    tune: Option<&FindTune>,
+) -> (usize, Vec<ScoredNodeResult>) {
+    let matches = find_all_matches_with_index(graph, query, include_features, mode, index, tune);
     let total = matches.len();
     let nodes = matches
         .into_iter()
@@ -289,7 +393,8 @@ pub fn count_find_results_with_index(
 ) -> usize {
     let mut total = 0;
     for query in queries {
-        total += find_all_matches_with_index(graph, query, include_features, mode, index).len();
+        total +=
+            find_all_matches_with_index(graph, query, include_features, mode, index, None).len();
     }
     total
 }
@@ -333,10 +438,35 @@ pub fn render_find_adaptive_with_index(
     debug_score: bool,
     index: Option<&Bm25Index>,
 ) -> String {
+    render_find_adaptive_with_index_tuned(
+        graph,
+        queries,
+        limit,
+        include_features,
+        mode,
+        target_chars,
+        debug_score,
+        index,
+        None,
+    )
+}
+
+pub fn render_find_adaptive_with_index_tuned(
+    graph: &GraphFile,
+    queries: &[String],
+    limit: usize,
+    include_features: bool,
+    mode: FindMode,
+    target_chars: Option<usize>,
+    debug_score: bool,
+    index: Option<&Bm25Index>,
+    tune: Option<&FindTune>,
+) -> String {
     let target = clamp_target_chars(target_chars);
     let mut sections = Vec::new();
     for query in queries {
-        let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+        let matches =
+            find_all_matches_with_index(graph, query, include_features, mode, index, tune);
         let total = matches.len();
         let visible: Vec<_> = matches.into_iter().take(limit).collect();
         let section = if visible.len() == 1 {
@@ -1176,8 +1306,10 @@ fn find_matches_with_index<'a>(
     include_features: bool,
     mode: FindMode,
     index: Option<&Bm25Index>,
+    tune: Option<&FindTune>,
 ) -> Vec<ScoredNode<'a>> {
-    let mut matches = find_all_matches_with_index(graph, query, include_features, mode, index);
+    let mut matches =
+        find_all_matches_with_index(graph, query, include_features, mode, index, tune);
     matches.truncate(limit);
     matches
 }
@@ -1188,18 +1320,25 @@ fn find_all_matches_with_index<'a>(
     include_features: bool,
     mode: FindMode,
     index: Option<&Bm25Index>,
+    tune: Option<&FindTune>,
 ) -> Vec<ScoredNode<'a>> {
     let context = FindQueryContext::build(graph);
+    let rewritten_query = rewrite_query(query);
+    let fuzzy_query = if rewritten_query.is_empty() {
+        query.to_owned()
+    } else {
+        rewritten_query
+    };
     let mut scored: Vec<ScoredNode<'a>> = match mode {
         FindMode::Fuzzy => {
-            let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+            let pattern = Pattern::parse(&fuzzy_query, CaseMatching::Ignore, Normalization::Smart);
             let mut matcher = Matcher::new(Config::DEFAULT);
             let candidates = graph
                 .nodes
                 .iter()
                 .filter(|node| include_features || node.r#type != "Feature")
                 .filter_map(|node| {
-                    score_node(&context, node, query, &pattern, &mut matcher).map(|score| {
+                    score_node(&context, node, &fuzzy_query, &pattern, &mut matcher).map(|score| {
                         RawCandidate {
                             node,
                             raw_relevance: score as f64,
@@ -1213,9 +1352,17 @@ fn find_all_matches_with_index<'a>(
         FindMode::Bm25 => compose_scores(score_bm25_raw(
             graph,
             &context,
-            query,
+            &fuzzy_query,
             include_features,
             index,
+        )),
+        FindMode::Hybrid => compose_scores(score_hybrid_raw(
+            graph,
+            &context,
+            &fuzzy_query,
+            include_features,
+            index,
+            tune.copied().unwrap_or_default(),
         )),
     };
 
@@ -1303,7 +1450,7 @@ fn score_bm25_raw<'a>(
     include_features: bool,
     index: Option<&Bm25Index>,
 ) -> Vec<RawCandidate<'a>> {
-    let terms = tokenize(query);
+    let terms = text_norm::expand_query_terms(query);
     if terms.is_empty() {
         return Vec::new();
     }
@@ -1388,6 +1535,75 @@ fn score_bm25_raw<'a>(
     scored
 }
 
+fn score_hybrid_raw<'a>(
+    graph: &'a GraphFile,
+    context: &FindQueryContext<'a>,
+    query: &str,
+    include_features: bool,
+    index: Option<&Bm25Index>,
+    tune: FindTune,
+) -> Vec<RawCandidate<'a>> {
+    let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+    let mut matcher = Matcher::new(Config::DEFAULT);
+
+    let mut fuzzy_raw = HashMap::new();
+    for node in graph
+        .nodes
+        .iter()
+        .filter(|node| include_features || node.r#type != "Feature")
+    {
+        if let Some(score) = score_node(context, node, query, &pattern, &mut matcher) {
+            fuzzy_raw.insert(node.id.as_str(), score as f64);
+        }
+    }
+
+    let bm25_candidates = score_bm25_raw(graph, context, query, include_features, index);
+    let mut bm25_raw = HashMap::new();
+    let mut lexical_boost = HashMap::new();
+    for candidate in bm25_candidates {
+        bm25_raw.insert(candidate.node.id.as_str(), candidate.raw_relevance);
+        lexical_boost.insert(candidate.node.id.as_str(), candidate.lexical_boost);
+    }
+
+    let fuzzy_norm = normalize_raw_scores(&fuzzy_raw);
+    let bm25_norm = normalize_raw_scores(&bm25_raw);
+    let total_weight = (tune.bm25 + tune.fuzzy + tune.vector).max(0.0001);
+
+    graph
+        .nodes
+        .iter()
+        .filter(|node| include_features || node.r#type != "Feature")
+        .filter_map(|node| {
+            let f = fuzzy_norm.get(node.id.as_str()).copied().unwrap_or(0.0);
+            let b = bm25_norm.get(node.id.as_str()).copied().unwrap_or(0.0);
+            let combined = ((tune.fuzzy * f) + (tune.bm25 * b)) / total_weight;
+            if combined <= 0.0 {
+                return None;
+            }
+            Some(RawCandidate {
+                node,
+                raw_relevance: combined * 1000.0,
+                lexical_boost: lexical_boost.get(node.id.as_str()).copied().unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+fn normalize_raw_scores<'a>(raw: &'a HashMap<&'a str, f64>) -> HashMap<&'a str, f64> {
+    let max_raw = raw.values().copied().fold(0.0f64, f64::max);
+    let max_log = max_raw.ln_1p();
+    raw.iter()
+        .map(|(id, value)| {
+            let normalized = if max_log > 0.0 {
+                value.ln_1p() / max_log
+            } else {
+                0.0
+            };
+            (*id, normalized.clamp(0.0, 1.0))
+        })
+        .collect()
+}
+
 fn node_document_terms(context: &FindQueryContext<'_>, node: &Node) -> Vec<String> {
     let mut tokens = Vec::new();
     push_terms(&mut tokens, &node.id, BM25_ID_WEIGHT);
@@ -1435,21 +1651,11 @@ fn push_terms(target: &mut Vec<String>, value: &str, weight: usize) {
 }
 
 fn tokenize(text: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    for ch in text.chars() {
-        if ch.is_alphanumeric() {
-            for lower in ch.to_lowercase() {
-                current.push(lower);
-            }
-        } else if !current.is_empty() {
-            tokens.push(std::mem::take(&mut current));
-        }
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    tokens
+    text_norm::tokenize(text)
+}
+
+fn rewrite_query(query: &str) -> String {
+    text_norm::expand_query_terms(query).join(" ")
 }
 
 fn bm25_lexical_boost(query_terms: &[String], document_terms: &[String]) -> i64 {
@@ -1808,7 +2014,7 @@ mod tests {
         ));
 
         let results =
-            find_all_matches_with_index(&graph, "smart home api", true, FindMode::Bm25, None);
+            find_all_matches_with_index(&graph, "smart home api", true, FindMode::Bm25, None, None);
         let high_score = score_for(&results, "concept:high");
         let low_score = score_for(&results, "concept:low");
         assert!(high_score > low_score);

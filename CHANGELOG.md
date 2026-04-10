@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.10] - 2026-04-11
+
+### Added
+- shared text normalization module used by both `score-all` and `node find`, including mandatory pure-number token removal, EN/PL stopword filtering, stemming, and synonym canonicalization
+- `node find --mode hybrid` with weighted BM25 + fuzzy fusion and query rewrite/expansion
+- optional `--tune bm25=...,fuzzy=...,vector=...` for controlling hybrid ranking weights
+
+### Changed
+- default `node find` mode is now `hybrid`
+- score calculators use IDF-weighted overlap for description and attribute bundle components
+- `score-all` cache metadata now marks normalization version (`normalization=v2`)
+
 ## [0.2.9] - 2026-04-11
 
 ### Added

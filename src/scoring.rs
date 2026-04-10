@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 
 use crate::graph::{Edge, EdgeProperties, GraphFile};
+use crate::text_norm;
 
 pub(crate) struct ScoreAllConfig {
     pub min_desc_len: usize,
@@ -24,19 +25,25 @@ pub(crate) struct ScoreAllOutcome {
 
 trait PairScoreCalculator {
     fn key(&self) -> &'static str;
-    fn score(&self, left: &NodeProfile, right: &NodeProfile) -> f64;
+    fn score(&self, left: &NodeProfile, right: &NodeProfile, ctx: &ScoreContext) -> f64;
 }
 
 struct DescriptionRepeatCalculator;
 struct AttributeBundleCalculator;
+
+#[derive(Debug, Default)]
+struct ScoreContext {
+    desc_idf: HashMap<String, f64>,
+    bundle_idf: HashMap<String, f64>,
+}
 
 impl PairScoreCalculator for DescriptionRepeatCalculator {
     fn key(&self) -> &'static str {
         "C1"
     }
 
-    fn score(&self, left: &NodeProfile, right: &NodeProfile) -> f64 {
-        overlap_score(&left.desc_shingles, &right.desc_shingles)
+    fn score(&self, left: &NodeProfile, right: &NodeProfile, ctx: &ScoreContext) -> f64 {
+        weighted_overlap_score(&left.desc_shingles, &right.desc_shingles, &ctx.desc_idf)
     }
 }
 
@@ -45,8 +52,8 @@ impl PairScoreCalculator for AttributeBundleCalculator {
         "C2"
     }
 
-    fn score(&self, left: &NodeProfile, right: &NodeProfile) -> f64 {
-        overlap_score(&left.bundle_tokens, &right.bundle_tokens)
+    fn score(&self, left: &NodeProfile, right: &NodeProfile, ctx: &ScoreContext) -> f64 {
+        weighted_overlap_score(&left.bundle_tokens, &right.bundle_tokens, &ctx.bundle_idf)
     }
 }
 
@@ -62,6 +69,7 @@ pub(crate) fn compute_all_pair_scores_to_cache(
     config: &ScoreAllConfig,
 ) -> Result<ScoreAllOutcome> {
     let profiles = build_profiles(source_graph, config.min_desc_len);
+    let context = build_score_context(&profiles, source_graph.nodes.len());
     let calculators: Vec<Box<dyn PairScoreCalculator>> = vec![
         Box::new(DescriptionRepeatCalculator),
         Box::new(AttributeBundleCalculator),
@@ -72,6 +80,8 @@ pub(crate) fn compute_all_pair_scores_to_cache(
     ]);
 
     let mut result = GraphFile::new(&format!("{}.score", source_graph.metadata.name));
+    result.metadata.description =
+        "Similarity scores and derived clusters (normalization=v2)".to_owned();
     result.nodes = source_graph.nodes.clone();
     result.notes.clear();
     result.edges.clear();
@@ -89,7 +99,7 @@ pub(crate) fn compute_all_pair_scores_to_cache(
             for calc in &calculators {
                 raw_scores.insert(
                     calc.key(),
-                    clamp_01(calc.score(left_profile, right_profile)),
+                    clamp_01(calc.score(left_profile, right_profile, &context)),
                 );
             }
 
@@ -332,14 +342,14 @@ fn build_profiles(graph: &GraphFile, min_desc_len: usize) -> HashMap<String, Nod
     for node in &graph.nodes {
         let mut profile = NodeProfile::default();
 
-        let normalized_desc = normalize_text(&node.properties.description);
+        let normalized_desc = text_norm::normalize_text(&node.properties.description);
         if normalized_desc.len() >= min_desc_len {
             profile.desc_shingles = word_shingles(&normalized_desc, 3);
         }
 
         profile
             .bundle_tokens
-            .insert(format!("type:{}", normalize_text(&node.r#type)));
+            .insert(format!("type:{}", text_norm::normalize_text(&node.r#type)));
         insert_value_tokens(&mut profile.bundle_tokens, "name", &node.name);
         insert_value_tokens(
             &mut profile.bundle_tokens,
@@ -369,9 +379,9 @@ fn build_profiles(graph: &GraphFile, min_desc_len: usize) -> HashMap<String, Nod
                 .unwrap_or("unknown");
             profile.bundle_tokens.insert(format!(
                 "out:{}:{}:{}",
-                normalize_text(&edge.relation),
-                normalize_text(target_type),
-                normalize_text(&edge.target_id)
+                text_norm::normalize_text(&edge.relation),
+                text_norm::normalize_text(target_type),
+                text_norm::normalize_text(&edge.target_id)
             ));
         }
         for edge in graph.edges.iter().filter(|edge| edge.target_id == node.id) {
@@ -381,9 +391,9 @@ fn build_profiles(graph: &GraphFile, min_desc_len: usize) -> HashMap<String, Nod
                 .unwrap_or("unknown");
             profile.bundle_tokens.insert(format!(
                 "in:{}:{}:{}",
-                normalize_text(&edge.relation),
-                normalize_text(source_type),
-                normalize_text(&edge.source_id)
+                text_norm::normalize_text(&edge.relation),
+                text_norm::normalize_text(source_type),
+                text_norm::normalize_text(&edge.source_id)
             ));
         }
 
@@ -393,28 +403,40 @@ fn build_profiles(graph: &GraphFile, min_desc_len: usize) -> HashMap<String, Nod
     out
 }
 
+fn build_score_context(profiles: &HashMap<String, NodeProfile>, doc_count: usize) -> ScoreContext {
+    let desc_sets: Vec<&HashSet<String>> = profiles.values().map(|p| &p.desc_shingles).collect();
+    let bundle_sets: Vec<&HashSet<String>> = profiles.values().map(|p| &p.bundle_tokens).collect();
+    ScoreContext {
+        desc_idf: build_idf(&desc_sets, doc_count),
+        bundle_idf: build_idf(&bundle_sets, doc_count),
+    }
+}
+
+fn build_idf(token_sets: &[&HashSet<String>], doc_count: usize) -> HashMap<String, f64> {
+    let mut df: HashMap<String, usize> = HashMap::new();
+    for set in token_sets {
+        for token in *set {
+            *df.entry(token.clone()).or_insert(0) += 1;
+        }
+    }
+    let n = doc_count.max(1) as f64;
+    let mut idf = HashMap::new();
+    for (token, count) in df {
+        let c = count as f64;
+        let value = ((n + 1.0) / (c + 1.0)).ln() + 1.0;
+        idf.insert(token, value.max(0.05));
+    }
+    idf
+}
+
 fn insert_value_tokens(tokens: &mut HashSet<String>, key: &str, raw: &str) {
-    let normalized = normalize_text(raw);
+    let normalized = text_norm::normalize_text(raw);
     if normalized.is_empty() {
         return;
     }
-    tokens.insert(format!("{}:{}", key, normalized));
-}
-
-fn normalize_text(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut prev_sep = true;
-    for ch in raw.chars() {
-        let lower = ch.to_ascii_lowercase();
-        if lower.is_ascii_alphanumeric() {
-            out.push(lower);
-            prev_sep = false;
-        } else if !prev_sep {
-            out.push(' ');
-            prev_sep = true;
-        }
+    for token in normalized.split_whitespace() {
+        tokens.insert(format!("{}:{}", key, token));
     }
-    out.trim().to_owned()
 }
 
 fn word_shingles(text: &str, width: usize) -> HashSet<String> {
@@ -432,6 +454,7 @@ fn word_shingles(text: &str, width: usize) -> HashSet<String> {
     out
 }
 
+#[cfg(test)]
 fn overlap_score(left: &HashSet<String>, right: &HashSet<String>) -> f64 {
     if left.is_empty() || right.is_empty() {
         return 0.0;
@@ -444,6 +467,31 @@ fn overlap_score(left: &HashSet<String>, right: &HashSet<String>) -> f64 {
         0.0
     } else {
         intersect / min_size
+    };
+    clamp_01(0.35 * jaccard + 0.65 * containment)
+}
+
+fn weighted_overlap_score(
+    left: &HashSet<String>,
+    right: &HashSet<String>,
+    token_weights: &HashMap<String, f64>,
+) -> f64 {
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+
+    let weight = |token: &String| token_weights.get(token).copied().unwrap_or(1.0);
+    let intersect: f64 = left.intersection(right).map(weight).sum();
+    let union: f64 = left.union(right).map(weight).sum();
+    let left_sum: f64 = left.iter().map(weight).sum();
+    let right_sum: f64 = right.iter().map(weight).sum();
+    let min_sum = left_sum.min(right_sum);
+
+    let jaccard = if union == 0.0 { 0.0 } else { intersect / union };
+    let containment = if min_sum == 0.0 {
+        0.0
+    } else {
+        intersect / min_sum
     };
     clamp_01(0.35 * jaccard + 0.65 * containment)
 }
@@ -495,6 +543,7 @@ mod tests {
         detect_communities, overlap_score, weighted_score, word_shingles,
     };
     use crate::graph::{EdgeProperties, GraphFile, Node, NodeProperties};
+    use crate::text_norm;
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -517,6 +566,33 @@ mod tests {
     fn shingles_fallback_to_single_fragment_for_short_text() {
         let shingles = word_shingles("short text", 3);
         assert_eq!(shingles, HashSet::from(["short text".to_owned()]));
+    }
+
+    #[test]
+    fn normalize_text_removes_stopwords_and_numbers() {
+        let normalized = text_norm::normalize_text("The 123 cooling and 45 heating system");
+        assert_eq!(normalized, "cool heat system");
+    }
+
+    #[test]
+    fn normalize_text_handles_polish_stopwords() {
+        let normalized = text_norm::normalize_text("to jest test i analiza danych");
+        assert_eq!(normalized, "test analiza danych");
+    }
+
+    #[test]
+    fn normalize_text_keeps_contextual_alphanumeric_numbers() {
+        let normalized = text_norm::normalize_text("API v2 on S3 with latency 10ms and 42");
+        assert_eq!(normalized, "api v2 s3 latency 10m");
+    }
+
+    #[test]
+    fn normalize_text_maps_default_synonyms() {
+        let normalized = text_norm::normalize_text("Auth login for fridge database");
+        assert_eq!(
+            normalized,
+            "authentication authentication refrigeration data_store"
+        );
     }
 
     #[test]
