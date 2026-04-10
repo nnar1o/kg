@@ -1,4 +1,3 @@
-use std::cmp::Reverse;
 use std::collections::{HashSet, VecDeque};
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
@@ -22,6 +21,9 @@ const BM25_PHRASE_MATCH_BOOST: i64 = 120;
 const BM25_TOKEN_MATCH_BOOST: i64 = 45;
 const IMPORTANCE_NEUTRAL: i64 = 4;
 const IMPORTANCE_STEP_BOOST: i64 = 22;
+const SCORE_META_MAX_RATIO: f64 = 0.35;
+const SCORE_META_MIN_CAP: i64 = 30;
+const SCORE_META_MAX_CAP: i64 = 240;
 
 #[derive(Debug, Clone, Copy)]
 pub enum FindMode {
@@ -33,6 +35,44 @@ pub enum FindMode {
 struct ScoredNode<'a> {
     score: i64,
     node: &'a Node,
+    breakdown: ScoreBreakdown,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ScoreBreakdown {
+    raw_relevance: f64,
+    normalized_relevance: i64,
+    lexical_boost: i64,
+    feedback_boost: i64,
+    importance_boost: i64,
+    authority_raw: i64,
+    authority_applied: i64,
+    authority_cap: i64,
+}
+
+struct RawCandidate<'a> {
+    node: &'a Node,
+    raw_relevance: f64,
+    lexical_boost: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoreBreakdownResult {
+    pub raw_relevance: f64,
+    pub normalized_relevance: i64,
+    pub lexical_boost: i64,
+    pub feedback_boost: i64,
+    pub importance_boost: i64,
+    pub authority_raw: i64,
+    pub authority_applied: i64,
+    pub authority_cap: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoredNodeResult {
+    pub score: i64,
+    pub node: Node,
+    pub breakdown: ScoreBreakdownResult,
 }
 
 pub fn render_find(
@@ -43,7 +83,16 @@ pub fn render_find(
     mode: FindMode,
     full: bool,
 ) -> String {
-    render_find_with_index(graph, queries, limit, include_features, mode, full, None)
+    render_find_with_index(
+        graph,
+        queries,
+        limit,
+        include_features,
+        mode,
+        full,
+        false,
+        None,
+    )
 }
 
 pub fn render_find_with_index(
@@ -53,6 +102,7 @@ pub fn render_find_with_index(
     include_features: bool,
     mode: FindMode,
     full: bool,
+    debug_score: bool,
     index: Option<&Bm25Index>,
 ) -> String {
     let mut sections = Vec::new();
@@ -63,7 +113,7 @@ pub fn render_find_with_index(
         let shown = visible.len();
         let mut lines = vec![render_result_header(query, shown, total)];
         for scored in visible {
-            lines.push(render_scored_node_block(graph, &scored, full));
+            lines.push(render_scored_node_block(graph, &scored, full, debug_score));
         }
         push_limit_omission_line(&mut lines, shown, total);
         sections.push(lines.join("\n"));
@@ -123,13 +173,26 @@ pub fn find_scored_nodes_and_total_with_index(
     include_features: bool,
     mode: FindMode,
     index: Option<&Bm25Index>,
-) -> (usize, Vec<(i64, Node)>) {
+) -> (usize, Vec<ScoredNodeResult>) {
     let matches = find_all_matches_with_index(graph, query, include_features, mode, index);
     let total = matches.len();
     let nodes = matches
         .into_iter()
         .take(limit)
-        .map(|item| (item.score, item.node.clone()))
+        .map(|item| ScoredNodeResult {
+            score: item.score,
+            node: item.node.clone(),
+            breakdown: ScoreBreakdownResult {
+                raw_relevance: item.breakdown.raw_relevance,
+                normalized_relevance: item.breakdown.normalized_relevance,
+                lexical_boost: item.breakdown.lexical_boost,
+                feedback_boost: item.breakdown.feedback_boost,
+                importance_boost: item.breakdown.importance_boost,
+                authority_raw: item.breakdown.authority_raw,
+                authority_applied: item.breakdown.authority_applied,
+                authority_cap: item.breakdown.authority_cap,
+            },
+        })
         .collect();
     (total, nodes)
 }
@@ -195,6 +258,7 @@ pub fn render_find_adaptive_with_index(
     include_features: bool,
     mode: FindMode,
     target_chars: Option<usize>,
+    debug_score: bool,
     index: Option<&Bm25Index>,
 ) -> String {
     let target = clamp_target_chars(target_chars);
@@ -204,9 +268,9 @@ pub fn render_find_adaptive_with_index(
         let total = matches.len();
         let visible: Vec<_> = matches.into_iter().take(limit).collect();
         let section = if visible.len() == 1 {
-            render_single_result_section(graph, query, &visible[0], total, target)
+            render_single_result_section(graph, query, &visible[0], total, target, debug_score)
         } else {
-            render_multi_result_section(graph, query, &visible, total, target)
+            render_multi_result_section(graph, query, &visible, total, target, debug_score)
         };
         sections.push(section);
     }
@@ -249,6 +313,7 @@ fn render_single_result_section(
     node: &ScoredNode<'_>,
     total_available: usize,
     target: usize,
+    debug_score: bool,
 ) -> String {
     let header = render_result_header(query, 1, total_available);
     let full = render_single_result_candidate(
@@ -260,6 +325,7 @@ fn render_single_result_section(
         DetailLevel::Rich,
         8,
         true,
+        debug_score,
     );
     if fits_target_chars(&full, target) {
         return full.trim_end().to_owned();
@@ -282,6 +348,7 @@ fn render_single_result_section(
                 detail,
                 edge_cap,
                 false,
+                debug_score,
             ),
             depth,
             detail,
@@ -299,9 +366,10 @@ fn render_multi_result_section(
     nodes: &[ScoredNode<'_>],
     total_available: usize,
     target: usize,
+    debug_score: bool,
 ) -> String {
     let visible_total = nodes.len();
-    let full = render_full_result_section(graph, query, nodes, total_available);
+    let full = render_full_result_section(graph, query, nodes, total_available, debug_score);
     if fits_target_chars(&full, target) {
         return full;
     }
@@ -323,7 +391,12 @@ fn render_multi_result_section(
         let mut lines = vec![render_result_header(query, shown, total_available)];
         for node in nodes.iter().take(shown) {
             lines.extend(render_scored_node_candidate_lines(
-                graph, node, 0, detail, edge_cap,
+                graph,
+                node,
+                0,
+                detail,
+                edge_cap,
+                debug_score,
             ));
             if depth > 0 {
                 lines.extend(render_neighbor_layers(graph, node.node, depth, detail));
@@ -389,10 +462,11 @@ fn render_full_result_section(
     query: &str,
     nodes: &[ScoredNode<'_>],
     total_available: usize,
+    debug_score: bool,
 ) -> String {
     let mut lines = vec![render_result_header(query, nodes.len(), total_available)];
     for node in nodes {
-        lines.push(render_scored_node_block(graph, node, true));
+        lines.push(render_scored_node_block(graph, node, true, debug_score));
     }
     push_limit_omission_line(&mut lines, nodes.len(), total_available);
     lines.join("\n")
@@ -438,13 +512,19 @@ fn render_single_result_candidate(
     detail: DetailLevel,
     edge_cap: usize,
     full: bool,
+    debug_score: bool,
 ) -> String {
     let mut lines = vec![header.to_owned()];
     if full {
-        lines.push(render_scored_node_block(graph, node, true));
+        lines.push(render_scored_node_block(graph, node, true, debug_score));
     } else {
         lines.extend(render_scored_node_candidate_lines(
-            graph, node, depth, detail, edge_cap,
+            graph,
+            node,
+            depth,
+            detail,
+            edge_cap,
+            debug_score,
         ));
     }
     push_limit_omission_line(&mut lines, 1, total_available);
@@ -471,19 +551,51 @@ fn render_scored_node_candidate_lines(
     depth: usize,
     detail: DetailLevel,
     edge_cap: usize,
+    debug_score: bool,
 ) -> Vec<String> {
     let mut lines = vec![format!("score: {}", node.score)];
+    if debug_score {
+        lines.push(render_score_debug_line(node));
+    }
     lines.extend(render_single_node_candidate_lines(
         graph, node.node, depth, detail, edge_cap,
     ));
     lines
 }
 
-fn render_scored_node_block(graph: &GraphFile, node: &ScoredNode<'_>, full: bool) -> String {
+fn render_scored_node_block(
+    graph: &GraphFile,
+    node: &ScoredNode<'_>,
+    full: bool,
+    debug_score: bool,
+) -> String {
+    if debug_score {
+        format!(
+            "score: {}\n{}\n{}",
+            node.score,
+            render_score_debug_line(node),
+            render_node_block(graph, node.node, full)
+        )
+    } else {
+        format!(
+            "score: {}\n{}",
+            node.score,
+            render_node_block(graph, node.node, full)
+        )
+    }
+}
+
+fn render_score_debug_line(node: &ScoredNode<'_>) -> String {
     format!(
-        "score: {}\n{}",
-        node.score,
-        render_node_block(graph, node.node, full)
+        "score_debug: raw_relevance={:.3} normalized_relevance={} lexical_boost={} feedback_boost={} importance_boost={} authority_raw={} authority_applied={} authority_cap={}",
+        node.breakdown.raw_relevance,
+        node.breakdown.normalized_relevance,
+        node.breakdown.lexical_boost,
+        node.breakdown.feedback_boost,
+        node.breakdown.importance_boost,
+        node.breakdown.authority_raw,
+        node.breakdown.authority_applied,
+        node.breakdown.authority_cap,
     )
 }
 
@@ -1030,31 +1142,79 @@ fn find_all_matches_with_index<'a>(
     mode: FindMode,
     index: Option<&Bm25Index>,
 ) -> Vec<ScoredNode<'a>> {
-    let mut scored: Vec<(i64, Reverse<&str>, &'a Node)> = match mode {
+    let mut scored: Vec<ScoredNode<'a>> = match mode {
         FindMode::Fuzzy => {
             let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
             let mut matcher = Matcher::new(Config::DEFAULT);
-            graph
+            let candidates = graph
                 .nodes
                 .iter()
                 .filter(|node| include_features || node.r#type != "Feature")
                 .filter_map(|node| {
                     score_node(graph, node, query, &pattern, &mut matcher).map(|score| {
-                        let base = score as i64;
-                        let boost = feedback_boost(node);
-                        let importance = importance_boost(node);
-                        (base + boost + importance, Reverse(node.id.as_str()), node)
+                        RawCandidate {
+                            node,
+                            raw_relevance: score as f64,
+                            lexical_boost: 0,
+                        }
                     })
                 })
-                .collect()
+                .collect();
+            compose_scores(candidates)
         }
-        FindMode::Bm25 => score_bm25(graph, query, include_features, index),
+        FindMode::Bm25 => compose_scores(score_bm25_raw(graph, query, include_features, index)),
     };
 
-    scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    scored.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.node.id.cmp(&right.node.id))
+    });
     scored
+}
+
+fn compose_scores<'a>(candidates: Vec<RawCandidate<'a>>) -> Vec<ScoredNode<'a>> {
+    let max_raw = candidates
+        .iter()
+        .map(|candidate| candidate.raw_relevance)
+        .fold(0.0f64, f64::max);
+
+    candidates
         .into_iter()
-        .map(|(score, _, node)| ScoredNode { score, node })
+        .filter_map(|candidate| {
+            if candidate.raw_relevance <= 0.0 {
+                return None;
+            }
+            let normalized_relevance = if max_raw > 0.0 {
+                ((candidate.raw_relevance / max_raw) * 1000.0).round() as i64
+            } else {
+                0
+            };
+            let feedback = feedback_boost(candidate.node);
+            let importance = importance_boost(candidate.node);
+            let authority_raw = feedback + importance;
+            let relative_cap =
+                ((normalized_relevance as f64) * SCORE_META_MAX_RATIO).round() as i64;
+            let authority_cap = relative_cap.max(SCORE_META_MIN_CAP).min(SCORE_META_MAX_CAP);
+            let authority_applied = authority_raw.clamp(-authority_cap, authority_cap);
+            let final_score = normalized_relevance + authority_applied;
+
+            Some(ScoredNode {
+                score: final_score,
+                node: candidate.node,
+                breakdown: ScoreBreakdown {
+                    raw_relevance: candidate.raw_relevance,
+                    normalized_relevance,
+                    lexical_boost: candidate.lexical_boost,
+                    feedback_boost: feedback,
+                    importance_boost: importance,
+                    authority_raw,
+                    authority_applied,
+                    authority_cap,
+                },
+            })
+        })
         .collect()
 }
 
@@ -1073,12 +1233,12 @@ fn importance_boost(node: &Node) -> i64 {
     (i64::from(node.properties.importance) - IMPORTANCE_NEUTRAL) * IMPORTANCE_STEP_BOOST
 }
 
-fn score_bm25<'a>(
+fn score_bm25_raw<'a>(
     graph: &'a GraphFile,
     query: &str,
     include_features: bool,
     index: Option<&Bm25Index>,
-) -> Vec<(i64, Reverse<&'a str>, &'a Node)> {
+) -> Vec<RawCandidate<'a>> {
     let terms = tokenize(query);
     if terms.is_empty() {
         return Vec::new();
@@ -1093,12 +1253,12 @@ fn score_bm25<'a>(
                 if !include_features && node.r#type == "Feature" {
                     return None;
                 }
-                let boost = feedback_boost(node) as f64;
                 let lexical_boost = bm25_lexical_boost(query, &node_document_text(graph, node));
-                let importance = importance_boost(node);
-                let combined =
-                    (score as f64 * 100.0 + boost).round() as i64 + lexical_boost + importance;
-                Some((combined, Reverse(node.id.as_str()), node))
+                Some(RawCandidate {
+                    node,
+                    raw_relevance: score as f64 * 100.0 + lexical_boost as f64,
+                    lexical_boost,
+                })
             })
             .collect();
     }
@@ -1155,11 +1315,12 @@ fn score_bm25<'a>(
             score += idf * (tf * (BM25_K1 + 1.0) / denom);
         }
         if score > 0.0 {
-            let boost = feedback_boost(node) as f64;
-            let lexical_boost = bm25_lexical_boost(query, &document) as f64;
-            let importance = importance_boost(node) as f64;
-            let combined = score * 100.0 + boost + lexical_boost + importance;
-            scored.push((combined.round() as i64, Reverse(node.id.as_str()), node));
+            let lexical_boost = bm25_lexical_boost(query, &document);
+            scored.push(RawCandidate {
+                node,
+                raw_relevance: score * 100.0 + lexical_boost as f64,
+                lexical_boost,
+            });
         }
     }
 
@@ -1224,19 +1385,35 @@ fn tokenize(text: &str) -> Vec<String> {
 }
 
 fn bm25_lexical_boost(query: &str, document: &str) -> i64 {
-    let query_norm = query.trim().to_lowercase();
-    if query_norm.is_empty() {
+    let query_terms = tokenize(query);
+    if query_terms.is_empty() {
         return 0;
     }
-    let document_norm = document.to_lowercase();
-    if document_norm.contains(&query_norm) {
+    let document_terms = tokenize(document);
+    if document_terms.is_empty() {
+        return 0;
+    }
+    if contains_token_phrase(&document_terms, &query_terms) {
         return BM25_PHRASE_MATCH_BOOST;
     }
-    let matched_tokens = query_norm
-        .split_whitespace()
-        .filter(|token| document_norm.contains(token))
+    let document_vocab: std::collections::HashSet<&str> =
+        document_terms.iter().map(String::as_str).collect();
+    let query_vocab: std::collections::HashSet<&str> =
+        query_terms.iter().map(String::as_str).collect();
+    let matched_tokens = query_vocab
+        .iter()
+        .filter(|token| document_vocab.contains(**token))
         .count() as i64;
     matched_tokens * BM25_TOKEN_MATCH_BOOST
+}
+
+fn contains_token_phrase(document_terms: &[String], query_terms: &[String]) -> bool {
+    if query_terms.is_empty() || query_terms.len() > document_terms.len() {
+        return false;
+    }
+    document_terms
+        .windows(query_terms.len())
+        .any(|window| window == query_terms)
 }
 
 fn score_node(
@@ -1355,10 +1532,10 @@ fn score_primary_field(
     weight: u32,
 ) -> u32 {
     let bonus = textual_bonus(query, value);
-    if bonus == 0 {
+    let fuzzy = score_field(pattern, matcher, value).unwrap_or(0);
+    if bonus == 0 && fuzzy == 0 {
         return 0;
     }
-    let fuzzy = score_field(pattern, matcher, value).unwrap_or(0);
     (fuzzy + bonus) * weight
 }
 
@@ -1370,10 +1547,10 @@ fn score_secondary_field(
     weight: u32,
 ) -> u32 {
     let bonus = textual_bonus(query, value);
-    if bonus == 0 {
+    let fuzzy = score_field(pattern, matcher, value).unwrap_or(0);
+    if bonus == 0 && fuzzy == 0 {
         return 0;
     }
-    let fuzzy = score_field(pattern, matcher, value).unwrap_or(0);
     (fuzzy + bonus / 2) * weight
 }
 
@@ -1455,11 +1632,11 @@ mod tests {
         }
     }
 
-    fn score_for(results: &[(i64, Reverse<&str>, &Node)], id: &str) -> i64 {
+    fn score_for(results: &[ScoredNode<'_>], id: &str) -> i64 {
         results
             .iter()
-            .find(|(_, _, node)| node.id == id)
-            .map(|(score, _, _)| *score)
+            .find(|item| item.node.id == id)
+            .map(|item| item.score)
             .expect("score for node")
     }
 
@@ -1559,10 +1736,57 @@ mod tests {
             0,
         ));
 
-        let results = score_bm25(&graph, "smart home api", true, None);
+        let results =
+            find_all_matches_with_index(&graph, "smart home api", true, FindMode::Bm25, None);
         let high_score = score_for(&results, "concept:high");
         let low_score = score_for(&results, "concept:low");
         assert!(high_score > low_score);
+    }
+
+    #[test]
+    fn final_score_caps_authority_boost_for_weak_relevance() {
+        let weak = make_node(
+            "concept:weak",
+            "Weak",
+            "smart home api",
+            &[],
+            &[],
+            6,
+            300.0,
+            1,
+        );
+        let strong = make_node(
+            "concept:strong",
+            "Strong",
+            "smart home api smart home api smart home api smart home api",
+            &[],
+            &[],
+            4,
+            0.0,
+            0,
+        );
+        let candidates = vec![
+            RawCandidate {
+                node: &weak,
+                raw_relevance: 12.0,
+                lexical_boost: 0,
+            },
+            RawCandidate {
+                node: &strong,
+                raw_relevance: 100.0,
+                lexical_boost: 0,
+            },
+        ];
+        let scored = compose_scores(candidates);
+        let weak_scored = scored
+            .iter()
+            .find(|item| item.node.id == "concept:weak")
+            .expect("weak node");
+        assert_eq!(
+            weak_scored.breakdown.authority_applied,
+            weak_scored.breakdown.authority_cap
+        );
+        assert!(weak_scored.breakdown.authority_raw > weak_scored.breakdown.authority_cap);
     }
 
     #[test]

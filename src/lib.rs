@@ -426,6 +426,20 @@ struct FindQueryResult {
 struct ScoredFindNode {
     score: i64,
     node: Node,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    score_breakdown: Option<ScoredFindBreakdown>,
+}
+
+#[derive(Debug, Serialize)]
+struct ScoredFindBreakdown {
+    raw_relevance: f64,
+    normalized_relevance: i64,
+    lexical_boost: i64,
+    feedback_boost: i64,
+    importance_boost: i64,
+    authority_raw: i64,
+    authority_applied: i64,
+    authority_cap: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -439,6 +453,7 @@ pub(crate) fn render_find_json_with_index(
     queries: &[String],
     limit: usize,
     mode: output::FindMode,
+    debug_score: bool,
     index: Option<&Bm25Index>,
 ) -> String {
     let mut total = 0usize;
@@ -449,7 +464,20 @@ pub(crate) fn render_find_json_with_index(
         total += count;
         let nodes = scored_nodes
             .into_iter()
-            .map(|(score, node)| ScoredFindNode { score, node })
+            .map(|entry| ScoredFindNode {
+                score: entry.score,
+                node: entry.node,
+                score_breakdown: debug_score.then_some(ScoredFindBreakdown {
+                    raw_relevance: entry.breakdown.raw_relevance,
+                    normalized_relevance: entry.breakdown.normalized_relevance,
+                    lexical_boost: entry.breakdown.lexical_boost,
+                    feedback_boost: entry.breakdown.feedback_boost,
+                    importance_boost: entry.breakdown.importance_boost,
+                    authority_raw: entry.breakdown.authority_raw,
+                    authority_applied: entry.breakdown.authority_applied,
+                    authority_cap: entry.breakdown.authority_cap,
+                }),
+            })
             .collect();
         results.push(FindQueryResult {
             query: query.clone(),
@@ -2426,6 +2454,7 @@ struct GoldenSetMetrics {
     hit_rate: f64,
     top1_rate: f64,
     mrr: f64,
+    ndcg_at_k: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -2580,6 +2609,7 @@ fn eval_golden_set(graph: &GraphFile, args: &BaselineArgs) -> Result<Option<Gold
             hit_rate: 0.0,
             top1_rate: 0.0,
             mrr: 0.0,
+            ndcg_at_k: 0.0,
         }));
     }
 
@@ -2587,6 +2617,7 @@ fn eval_golden_set(graph: &GraphFile, args: &BaselineArgs) -> Result<Option<Gold
     let mut hits_any = 0usize;
     let mut top1_hits = 0usize;
     let mut mrr_sum = 0.0;
+    let mut ndcg_sum = 0.0;
 
     for case in &cases {
         let results = output::find_nodes(
@@ -2612,6 +2643,23 @@ fn eval_golden_set(graph: &GraphFile, args: &BaselineArgs) -> Result<Option<Gold
             }
             mrr_sum += 1.0 / rank as f64;
         }
+
+        let mut dcg = 0.0;
+        for (idx, node) in results.iter().enumerate() {
+            if case.expected.iter().any(|id| id == &node.id) {
+                let denom = (idx as f64 + 2.0).log2();
+                dcg += 1.0 / denom;
+            }
+        }
+        let ideal_hits = case.expected.len().min(results.len());
+        let mut idcg = 0.0;
+        for rank in 0..ideal_hits {
+            let denom = (rank as f64 + 2.0).log2();
+            idcg += 1.0 / denom;
+        }
+        if idcg > 0.0 {
+            ndcg_sum += dcg / idcg;
+        }
     }
 
     let total = cases.len() as f64;
@@ -2622,6 +2670,7 @@ fn eval_golden_set(graph: &GraphFile, args: &BaselineArgs) -> Result<Option<Gold
         hit_rate: hits_any as f64 / total,
         top1_rate: top1_hits as f64 / total,
         mrr: mrr_sum / total,
+        ndcg_at_k: ndcg_sum / total,
     }))
 }
 
@@ -2746,6 +2795,7 @@ pub(crate) fn render_baseline_report(
         lines.push(format!("- hit_rate: {:.1}%", golden.hit_rate * 100.0));
         lines.push(format!("- top1_rate: {:.1}%", golden.top1_rate * 100.0));
         lines.push(format!("- mrr: {:.3}", golden.mrr));
+        lines.push(format!("- ndcg@k: {:.3}", golden.ndcg_at_k));
     }
 
     Ok(format!("{}\n", lines.join("\n")))

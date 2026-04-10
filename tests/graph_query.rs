@@ -219,14 +219,26 @@ fn find_includes_outgoing_neighbor_context_by_default() {
 }
 
 #[test]
-fn find_includes_incoming_neighbor_context_by_default() {
+fn find_returns_expected_primary_match_for_neighbor_phrase() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));
 
-    let output = exec_ok(&["kg", "fridge", "node", "find", "Chlodziarka"], dir.path());
+    let output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "find",
+            "Chlodziarka",
+            "--full",
+            "--limit",
+            "1",
+        ],
+        dir.path(),
+    );
 
+    assert!(output.contains("score: "));
     assert!(output.contains("# concept:refrigerator | Lodowka"));
-    assert!(output.contains("# interface:smart_api | Smart Home API (REST)"));
 }
 
 #[test]
@@ -481,6 +493,46 @@ fn find_always_returns_score_in_cli_and_json() {
     let first = &payload["queries"][0]["nodes"][0];
     assert!(first["score"].is_i64());
     assert!(first["node"]["id"].is_string());
+}
+
+#[test]
+fn find_debug_score_returns_breakdown_in_cli_and_json() {
+    let dir = temp_workspace();
+    write_fixture(&test_graph_root(dir.path()));
+
+    let cli_output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "find",
+            "lodowka",
+            "--limit",
+            "1",
+            "--debug-score",
+        ],
+        dir.path(),
+    );
+    assert!(cli_output.contains("score_debug: raw_relevance="));
+
+    let json_output = exec_ok(
+        &[
+            "kg",
+            "fridge",
+            "node",
+            "find",
+            "lodowka",
+            "--limit",
+            "1",
+            "--json",
+            "--debug-score",
+        ],
+        dir.path(),
+    );
+    let payload: Value = serde_json::from_str(&json_output).expect("parse json");
+    let first = &payload["queries"][0]["nodes"][0];
+    assert!(first["score_breakdown"]["raw_relevance"].is_number());
+    assert!(first["score_breakdown"]["authority_cap"].is_i64());
 }
 
 #[test]

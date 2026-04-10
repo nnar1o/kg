@@ -36,6 +36,7 @@ pub(crate) fn execute_node(
             full,
             output_size,
             json,
+            debug_score,
             vector_query,
         } => {
             if mode == crate::cli::FindMode::Vector {
@@ -103,6 +104,7 @@ pub(crate) fn execute_node(
                     &queries,
                     limit,
                     find_mode,
+                    debug_score,
                     bm25_index.as_ref(),
                 )
             } else if full {
@@ -113,6 +115,7 @@ pub(crate) fn execute_node(
                     true,
                     find_mode,
                     full,
+                    debug_score,
                     bm25_index.as_ref(),
                 )
             } else {
@@ -123,6 +126,7 @@ pub(crate) fn execute_node(
                     true,
                     find_mode,
                     output_size,
+                    debug_score,
                     bm25_index.as_ref(),
                 )
             };

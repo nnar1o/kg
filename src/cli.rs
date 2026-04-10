@@ -410,6 +410,8 @@ pub enum NodeCommand {
         output_size: Option<usize>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        debug_score: bool,
         /// Query vector for --mode vector (comma-separated f32 values)
         #[arg(long, value_delimiter = ',')]
         vector_query: Option<Vec<f32>>,

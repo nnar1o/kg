@@ -54,4 +54,5 @@ ts_ms=3\tuid=cccccc\taction=PICK\tpick=1\tselected=concept:refrigerator\tgraph=f
     assert!(output.contains("feedback_events_per_1000_find_ops: 1500.0"));
     assert!(output.contains("golden_set:"));
     assert!(output.contains("cases: 2"));
+    assert!(output.contains("ndcg@k:"));
 }
