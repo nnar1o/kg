@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.11] - 2026-04-11
+
+### Added
+- internal metadata node `^:graph_info` with persistent `graph_uuid=...`, auto-generated on graph load/save when missing
+- `node find --include-metadata` flag to include metadata nodes in search results when explicitly requested
+
+### Fixed
+- deduplicate `node find` results using normalized node IDs to avoid duplicate hits from inconsistent ID casing/formatting
+- align access-log counts with actual tuned `find` output by logging per-query result counts from tuned ranking path
+- remove unintended `vector` weight influence from hybrid ranking denominator when vector scoring is not active
+- reject `baseline --mode vector` explicitly instead of silently falling back to fuzzy behavior
+- exclude metadata nodes (`^`) from `score-all` pairwise similarity generation
+
 ## [0.2.10] - 2026-04-11
 
 ### Added
