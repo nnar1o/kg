@@ -1372,6 +1372,8 @@ fn find_all_matches_with_index<'a>(
             .cmp(&left.score)
             .then_with(|| left.node.id.cmp(&right.node.id))
     });
+    let mut seen_ids = HashSet::new();
+    scored.retain(|item| seen_ids.insert(item.node.id.as_str()));
     scored
 }
 
@@ -2079,5 +2081,44 @@ mod tests {
         assert_eq!(feedback_boost(&positive), 46);
         assert_eq!(feedback_boost(&negative), -92);
         assert_eq!(feedback_boost(&saturated), 300);
+    }
+
+    #[test]
+    fn find_deduplicates_results_by_node_id_for_single_query() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(make_node(
+            "concept:rule",
+            "Business Rule",
+            "Rule for billing decisions",
+            &["Business rule validation"],
+            &["billing rule"],
+            0.5,
+            0.0,
+            0,
+        ));
+        graph.nodes.push(make_node(
+            "concept:rule",
+            "Business Rule Duplicate",
+            "Duplicate record with same id",
+            &["Business rule duplicate"],
+            &[],
+            0.5,
+            0.0,
+            0,
+        ));
+
+        let results = find_all_matches_with_index(
+            &graph,
+            "business rule",
+            true,
+            FindMode::Hybrid,
+            None,
+            None,
+        );
+        let rule_hits = results
+            .iter()
+            .filter(|item| item.node.id == "concept:rule")
+            .count();
+        assert_eq!(rule_hits, 1);
     }
 }
