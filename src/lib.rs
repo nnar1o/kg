@@ -770,6 +770,7 @@ pub(crate) fn render_find_json_with_index(
     graph: &GraphFile,
     queries: &[String],
     limit: usize,
+    include_metadata: bool,
     mode: output::FindMode,
     debug_score: bool,
     index: Option<&Bm25Index>,
@@ -779,7 +780,14 @@ pub(crate) fn render_find_json_with_index(
     let mut results = Vec::new();
     for query in queries {
         let (count, scored_nodes) = output::find_scored_nodes_and_total_with_index_tuned(
-            graph, query, limit, true, mode, index, tune,
+            graph,
+            query,
+            limit,
+            true,
+            include_metadata,
+            mode,
+            index,
+            tune,
         );
         total += count;
         let nodes = scored_nodes
@@ -2969,6 +2977,10 @@ fn compute_quality_score(snapshot: &crate::analysis::QualitySnapshot) -> Baselin
 }
 
 fn eval_golden_set(graph: &GraphFile, args: &BaselineArgs) -> Result<Option<GoldenSetMetrics>> {
+    if matches!(args.mode, CliFindMode::Vector) {
+        anyhow::bail!("baseline does not support --mode vector");
+    }
+
     let Some(path) = args.golden.as_ref() else {
         return Ok(None);
     };
@@ -3002,6 +3014,7 @@ fn eval_golden_set(graph: &GraphFile, args: &BaselineArgs) -> Result<Option<Gold
             &case.query,
             args.find_limit,
             args.include_features,
+            false,
             mode,
         );
 
@@ -3566,5 +3579,25 @@ mod tests {
             .expect("latest")
             .expect("some path");
         assert_eq!(latest, newer);
+    }
+
+    #[test]
+    fn baseline_rejects_vector_mode() {
+        let graph = fixture_graph();
+        let err = eval_golden_set(
+            &graph,
+            &BaselineArgs {
+                find_limit: 5,
+                include_features: true,
+                mode: CliFindMode::Vector,
+                golden: None,
+                json: false,
+            },
+        )
+        .expect_err("vector mode should be rejected for baseline");
+        assert!(
+            err.to_string()
+                .contains("baseline does not support --mode vector")
+        );
     }
 }

@@ -37,6 +37,7 @@ pub(crate) fn execute_node(
             output_size,
             json,
             debug_score,
+            include_metadata,
             tune,
             vector_query,
         } => {
@@ -96,17 +97,19 @@ pub(crate) fn execute_node(
             let find_mode = crate::map_find_mode(mode);
             let timer = access_log::Timer::new();
             let mut query_hits: Vec<Vec<String>> = Vec::new();
-            let mut results_count = 0usize;
+            let mut query_result_counts: Vec<usize> = Vec::new();
             for query in &queries {
-                let matches = output::find_nodes_with_index(
+                let matches = output::find_nodes_with_index_tuned(
                     context.graph_file,
                     query,
                     limit,
                     true,
+                    include_metadata,
                     find_mode,
                     bm25_index.as_ref(),
+                    tune_parsed.as_ref(),
                 );
-                results_count += matches.len();
+                query_result_counts.push(matches.len());
                 query_hits.push(matches.into_iter().map(|node| node.id).collect());
             }
             let result = if json {
@@ -114,6 +117,7 @@ pub(crate) fn execute_node(
                     context.graph_file,
                     &queries,
                     limit,
+                    include_metadata,
                     find_mode,
                     debug_score,
                     bm25_index.as_ref(),
@@ -125,6 +129,7 @@ pub(crate) fn execute_node(
                     &queries,
                     limit,
                     true,
+                    include_metadata,
                     find_mode,
                     full,
                     debug_score,
@@ -137,6 +142,7 @@ pub(crate) fn execute_node(
                     &queries,
                     limit,
                     true,
+                    include_metadata,
                     find_mode,
                     output_size,
                     debug_score,
@@ -146,9 +152,8 @@ pub(crate) fn execute_node(
             };
             let duration_ms = timer.elapsed_ms();
 
-            for query in &queries {
-                let entry =
-                    access_log::AccessLogEntry::new(query.clone(), results_count, duration_ms);
+            for (query, count) in queries.iter().zip(query_result_counts.into_iter()) {
+                let entry = access_log::AccessLogEntry::new(query.clone(), count, duration_ms);
                 if let Err(error) = access_log::append_entry(context.path, &entry) {
                     eprintln!("warning: failed to log access: {}", error);
                 }

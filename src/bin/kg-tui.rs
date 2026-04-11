@@ -84,6 +84,7 @@ fn main() -> Result<()> {
                     query,
                     search_limit,
                     search_include,
+                    false,
                     search_mode,
                 )
             };

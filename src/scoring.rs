@@ -5,6 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 
 use crate::graph::{Edge, EdgeProperties, GraphFile};
+
+const METADATA_NODE_TYPE: &str = "^";
 use crate::text_norm;
 
 pub(crate) struct ScoreAllConfig {
@@ -87,11 +89,17 @@ pub(crate) fn compute_all_pair_scores_to_cache(
     result.edges.clear();
 
     let mut pair_count = 0usize;
-    for i in 0..source_graph.nodes.len() {
-        for j in (i + 1)..source_graph.nodes.len() {
+    let candidate_nodes: Vec<&crate::graph::Node> = source_graph
+        .nodes
+        .iter()
+        .filter(|node| node.r#type != METADATA_NODE_TYPE)
+        .collect();
+
+    for i in 0..candidate_nodes.len() {
+        for j in (i + 1)..candidate_nodes.len() {
             pair_count += 1;
-            let left = &source_graph.nodes[i];
-            let right = &source_graph.nodes[j];
+            let left = candidate_nodes[i];
+            let right = candidate_nodes[j];
             let left_profile = profiles.get(left.id.as_str()).expect("profile exists");
             let right_profile = profiles.get(right.id.as_str()).expect("profile exists");
 

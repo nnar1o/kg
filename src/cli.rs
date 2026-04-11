@@ -457,6 +457,8 @@ pub enum NodeCommand {
         json: bool,
         #[arg(long)]
         debug_score: bool,
+        #[arg(long)]
+        include_metadata: bool,
         /// Optional tuning weights for find ranking, e.g. bm25=0.6,fuzzy=0.3,vector=0.1
         #[arg(long)]
         tune: Option<String>,

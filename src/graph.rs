@@ -9,6 +9,10 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use serde::{Deserialize, Serialize};
 
+const GRAPH_INFO_NODE_ID: &str = "^:graph_info";
+const GRAPH_INFO_NODE_TYPE: &str = "^";
+const GRAPH_UUID_FACT_PREFIX: &str = "graph_uuid=";
+
 /// Write `data` to `dest` atomically:
 /// 1. Write to `dest.tmp`
 /// 2. If `dest` already exists, copy it to `dest.bak`
@@ -1424,12 +1428,17 @@ impl GraphFile {
             })?
         };
         normalize_graph_ids(&mut graph);
+        let created_graph_info = ensure_graph_info_node(&mut graph);
         graph.refresh_counts();
+        if created_graph_info {
+            graph.save(path)?;
+        }
         Ok(graph)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
         let mut graph = self.clone();
+        ensure_graph_info_node(&mut graph);
         graph.refresh_counts();
         let ext = path
             .extension()
@@ -1506,9 +1515,82 @@ fn normalize_graph_ids(graph: &mut GraphFile) {
     }
 }
 
+fn ensure_graph_info_node(graph: &mut GraphFile) -> bool {
+    if let Some(node) = graph.node_by_id_mut(GRAPH_INFO_NODE_ID) {
+        let mut changed = false;
+        if node.r#type != GRAPH_INFO_NODE_TYPE {
+            node.r#type = GRAPH_INFO_NODE_TYPE.to_owned();
+            changed = true;
+        }
+        if node.name.is_empty() {
+            node.name = "Graph Metadata".to_owned();
+            changed = true;
+        }
+        if node.properties.description.is_empty() {
+            node.properties.description =
+                "Internal graph metadata for cross-graph linking".to_owned();
+            changed = true;
+        }
+        if !node
+            .properties
+            .key_facts
+            .iter()
+            .any(|fact| fact.starts_with(GRAPH_UUID_FACT_PREFIX))
+        {
+            node.properties
+                .key_facts
+                .push(format!("{GRAPH_UUID_FACT_PREFIX}{}", generate_graph_uuid()));
+            changed = true;
+        }
+        return changed;
+    }
+
+    graph.nodes.push(Node {
+        id: GRAPH_INFO_NODE_ID.to_owned(),
+        r#type: GRAPH_INFO_NODE_TYPE.to_owned(),
+        name: "Graph Metadata".to_owned(),
+        properties: NodeProperties {
+            description: "Internal graph metadata for cross-graph linking".to_owned(),
+            domain_area: "internal_metadata".to_owned(),
+            provenance: "A".to_owned(),
+            importance: 1.0,
+            key_facts: vec![format!("{GRAPH_UUID_FACT_PREFIX}{}", generate_graph_uuid())],
+            ..NodeProperties::default()
+        },
+        source_files: vec!["DOC .kg/internal/graph_info".to_owned()],
+    });
+    true
+}
+
+fn generate_graph_uuid() -> String {
+    let mut bytes = [0u8; 10];
+    if fs::File::open("/dev/urandom")
+        .and_then(|mut file| {
+            use std::io::Read;
+            file.read_exact(&mut bytes)
+        })
+        .is_err()
+    {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let pid = std::process::id() as u128;
+        let mixed = nanos ^ (pid << 64) ^ (nanos.rotate_left(17));
+        bytes.copy_from_slice(&mixed.to_be_bytes()[6..16]);
+    }
+    let mut out = String::with_capacity(20);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{GraphFile, parse_kg};
+    use super::{
+        GRAPH_INFO_NODE_ID, GRAPH_INFO_NODE_TYPE, GRAPH_UUID_FACT_PREFIX, GraphFile, parse_kg,
+    };
 
     #[test]
     fn save_and_load_kg_roundtrip_keeps_core_fields() {
@@ -1549,9 +1631,11 @@ mod tests {
         assert!(raw.contains("> R datastore:settings"));
 
         let loaded = GraphFile::load(&path).expect("load kg");
-        assert_eq!(loaded.nodes.len(), 1);
+        assert_eq!(loaded.nodes.len(), 2);
         assert_eq!(loaded.edges.len(), 1);
-        let node = &loaded.nodes[0];
+        let node = loaded
+            .node_by_id("concept:refrigerator")
+            .expect("domain node");
         assert_eq!(node.properties.importance, 5.0);
         assert_eq!(node.properties.provenance, "U");
         assert_eq!(node.name, "Lodowka");
@@ -1581,7 +1665,8 @@ mod tests {
 
         let loaded = GraphFile::load(&path).expect("load legacy kg");
         assert_eq!(loaded.metadata.name, "legacy");
-        assert!(loaded.nodes.is_empty());
+        assert_eq!(loaded.nodes.len(), 1);
+        assert!(loaded.node_by_id(GRAPH_INFO_NODE_ID).is_some());
     }
 
     #[test]
@@ -1595,8 +1680,15 @@ mod tests {
         .expect("write kg");
 
         let loaded = GraphFile::load(&path).expect("invalid timestamp should be ignored");
-        assert_eq!(loaded.nodes.len(), 1);
-        assert!(loaded.nodes[0].properties.created_at.is_empty());
+        assert_eq!(loaded.nodes.len(), 2);
+        assert!(
+            loaded
+                .node_by_id("concept:x")
+                .expect("concept node")
+                .properties
+                .created_at
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1625,7 +1717,7 @@ mod tests {
         .expect("write kg");
 
         let loaded = GraphFile::load(&path).expect("load kg");
-        let node = &loaded.nodes[0];
+        let node = loaded.node_by_id("concept:x").expect("concept node");
         assert_eq!(node.name, " Name   With   Spaces ");
         assert_eq!(node.properties.description, " Desc   with   spaces ");
         assert_eq!(node.properties.alias.len(), 1);
@@ -1730,7 +1822,9 @@ mod tests {
         assert!(raw.contains("b line1\\nline2\\\\nkeep"));
 
         let loaded = GraphFile::load(&path).expect("load kg");
-        let node = &loaded.nodes[0];
+        let node = loaded
+            .node_by_id("concept:refrigerator")
+            .expect("domain node");
         assert_eq!(node.name, "Lodowka\nSmart");
         assert_eq!(node.properties.description, "Linia 1\nLinia 2\\nliteral");
         assert_eq!(node.properties.provenance, "user\nimport");
@@ -1882,5 +1976,29 @@ mod tests {
         let raw = std::fs::read_to_string(&path).expect("read kg");
         assert!(!raw.contains("\nE \n"));
         assert!(!raw.contains("\nP \n"));
+    }
+
+    #[test]
+    fn load_generates_graph_info_node_when_missing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("meta.kg");
+        let raw = "@ K:concept:x\nN X\nD Desc\nV 0.5\nP U\nS docs/a.md\n";
+        std::fs::write(&path, raw).expect("write kg");
+
+        let loaded = GraphFile::load(&path).expect("load kg");
+        let info = loaded
+            .node_by_id(GRAPH_INFO_NODE_ID)
+            .expect("graph info node should be generated");
+        assert_eq!(info.r#type, GRAPH_INFO_NODE_TYPE);
+        assert!(
+            info.properties
+                .key_facts
+                .iter()
+                .any(|fact| fact.starts_with(GRAPH_UUID_FACT_PREFIX))
+        );
+
+        let persisted = std::fs::read_to_string(&path).expect("read persisted kg");
+        assert!(persisted.contains("graph_info"));
+        assert!(persisted.contains("graph_uuid="));
     }
 }
