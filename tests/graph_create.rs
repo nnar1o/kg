@@ -11,8 +11,9 @@ fn create_graph_writes_empty_graph_file() {
     assert!(!test_graph_root(dir.path()).join("fridge.json").exists());
     let graph = load_graph(&test_graph_root(dir.path()).join("fridge.kg"));
     assert_eq!(graph.metadata.name, "fridge");
-    assert_eq!(graph.metadata.node_count, 0);
-    assert!(graph.nodes.is_empty());
+    assert_eq!(graph.metadata.node_count, 1);
+    assert_eq!(graph.nodes.len(), 1);
+    assert!(graph.nodes.iter().any(|node| node.id == "^:graph_info"));
 }
 
 #[test]

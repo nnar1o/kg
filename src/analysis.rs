@@ -21,6 +21,7 @@ pub fn filtered_nodes<'a>(
     graph
         .nodes
         .iter()
+        .filter(|node| node.r#type != "^")
         .filter(|node| include_features || node.r#type != "Feature")
         .filter(|node| node_types.is_empty() || node_types.iter().any(|t| t == &node.r#type))
         .collect()

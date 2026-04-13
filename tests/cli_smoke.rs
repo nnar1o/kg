@@ -107,3 +107,46 @@ fn kg_ignores_invalid_kg_entry_and_warns_with_line_fragment() {
     assert!(kglog.contains("invalid E timestamp at line 3"));
     assert!(kglog.contains("fragment: E not-a-timestamp"));
 }
+
+#[test]
+fn kg_node_add_minimal_command_applies_safe_defaults() {
+    let dir = tempdir().expect("tempdir");
+
+    let create = Command::new(cargo_bin("kg"))
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .args(["create", "fridge"])
+        .output()
+        .expect("run kg create");
+    assert!(create.status.success());
+
+    let add = Command::new(cargo_bin("kg"))
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .args([
+            "graph",
+            "fridge",
+            "node",
+            "add",
+            "concept:refrigerator",
+            "--type",
+            "Concept",
+            "--name",
+            "Refrigerator",
+        ])
+        .output()
+        .expect("run kg node add");
+    assert!(add.status.success());
+
+    let stats = Command::new(cargo_bin("kg"))
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .args(["graph", "fridge", "stats", "--by-type"])
+        .output()
+        .expect("run kg stats");
+    assert!(stats.status.success());
+    let stdout = String::from_utf8_lossy(&stats.stdout);
+    assert!(stdout.contains("nodes: 1"));
+    assert!(stdout.contains("Concept: 1"));
+    assert!(!stdout.contains("^:"));
+}

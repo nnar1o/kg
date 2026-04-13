@@ -1,24 +1,21 @@
-# kg v0.2.4
+# kg v0.2.12
 
 `kg-mcp` is a lightweight local alternative to classic RAG systems when you want structured, editable, git-friendly project memory instead of document chunk retrieval.
 
-This release focuses on find quality and observability: score is now always visible, scoring internals are debuggable, and ranking behavior is calibrated to be more stable across real-world query patterns.
+This release focuses on CLI correctness and smoother graph authoring defaults: stats no longer include internal metadata nodes, and the documented minimal `node add` command now works out of the box.
 
 ## Highlights
 
-- always return `score` in `node find` output (CLI and JSON)
-- add `--debug-score` with detailed score breakdown (raw relevance, normalization, lexical boost, authority cap/application)
-- recalibrate ranking with normalized relevance + capped authority (`feedback` and `importance`)
-- improve fuzzy and BM25 matching behavior (facts/notes coverage, phrase/token handling, Unicode tokenization)
-- optimize find runtime with per-query cached neighbor/note context and token-based BM25 document reuse
-- extend baseline quality report with `ndcg@k`
+- exclude internal `^:graph_info` metadata nodes from `kg graph <graph> stats` counts and type breakdowns
+- make minimal `kg graph <graph> node add <id> --type <Type> --name <Name>` apply safe metadata defaults
+- keep validation guarantees while removing the UX mismatch between optional-looking flags and runtime-required metadata
+- add integration coverage for the minimal `node add` path and stats behavior
 
 ## Why this release matters
 
-- users can now inspect and trust ranking decisions directly from `find`
-- rankings are less sensitive to outliers and metadata over-dominance
-- better relevance for multi-token and cross-field queries while preserving typo tolerance
-- improved search throughput on larger graphs via less repeated work
+- `stats` now reflects user-authored graph content instead of internal bookkeeping nodes
+- onboarding and docs-aligned `node add` commands now work without trial-and-error metadata flags
+- regressions are covered with smoke/integration tests to keep these paths stable
 
 ## Installation
 

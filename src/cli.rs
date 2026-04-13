@@ -675,16 +675,16 @@ pub struct AddNodeArgs {
     pub node_type: String,
     #[arg(long)]
     pub name: String,
-    #[arg(long, default_value = "")]
-    pub description: String,
-    #[arg(long, default_value = "")]
-    pub domain_area: String,
-    #[arg(long, default_value = "")]
-    pub provenance: String,
+    #[arg(long)]
+    pub description: Option<String>,
+    #[arg(long)]
+    pub domain_area: Option<String>,
+    #[arg(long)]
+    pub provenance: Option<String>,
     #[arg(long)]
     pub confidence: Option<f64>,
-    #[arg(long, default_value = "")]
-    pub created_at: String,
+    #[arg(long)]
+    pub created_at: Option<String>,
     #[arg(long, default_value_t = 0.5)]
     pub importance: f64,
     #[arg(long = "fact")]

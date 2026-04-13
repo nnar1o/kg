@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.12] - 2026-04-13
+
+### Fixed
+- exclude internal metadata nodes (`^:graph_info`) from `kg graph <graph> stats` output and counts
+- make minimal `kg graph <graph> node add ...` workflow succeed by applying safe defaults for required metadata and sources
+
+### Changed
+- align create/check integration tests with canonicalized custom node IDs and persistent graph metadata node behavior
+- add CLI smoke regression coverage for minimal `node add` defaults path
+
 ## [0.2.11] - 2026-04-11
 
 ### Added

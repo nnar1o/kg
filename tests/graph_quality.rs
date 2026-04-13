@@ -187,10 +187,9 @@ fn graph_check_reports_validation_errors() {
     );
     assert!(output.contains("= check"));
     assert!(output.contains("status: INVALID"));
-    assert!(output.contains("node id bad-id does not match prefix:snake_case"));
-    assert!(output.contains("node bad-id missing name"));
-    assert!(output.contains("node bad-id missing source_files"));
-    assert!(output.contains("confidence out of range"));
+    assert!(output.contains("node id weirdtype:bad-id invalid for custom type weirdtype"));
+    assert!(output.contains("node weirdtype:bad-id missing name"));
+    assert!(output.contains("node weirdtype:bad-id missing source_files"));
     assert!(output.contains("importance out of range"));
 }
 
