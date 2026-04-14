@@ -393,6 +393,60 @@ fn is_valid_iso_date(value: &str) -> bool {
         && is_digit(9)
 }
 
+fn current_utc_timestamp() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    let remaining = secs % 86_400;
+    let hours = remaining / 3_600;
+    let minutes = (remaining % 3_600) / 60;
+    let seconds = remaining % 60;
+
+    let days_since_epoch = secs / 86_400;
+    let (year, month, day) = days_to_date(days_since_epoch as i64);
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, seconds
+    )
+}
+
+fn days_to_date(days: i64) -> (i64, u32, u32) {
+    let mut year = 1970;
+    let mut remaining_days = days;
+
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    let month_days = if is_leap_year(year) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1;
+    for &days_in_month in &month_days {
+        if remaining_days < days_in_month as i64 {
+            return (year, month, (remaining_days + 1) as u32);
+        }
+        remaining_days -= days_in_month as i64;
+        month += 1;
+    }
+
+    (year, 12, 31)
+}
+
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
 fn validate_source_reference(value: &str) -> Result<(), String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -442,10 +496,25 @@ fn prevalidate_node_batch_items(
     let mut seen_ids = HashSet::new();
 
     for item in nodes {
-        let id = match kg::canonicalize_node_id_for_type(&item.id, &item.node_type) {
+        let NodeAddBatchItem {
+            id: raw_id,
+            node_type,
+            name,
+            description,
+            domain_area,
+            provenance,
+            confidence,
+            created_at,
+            importance,
+            facts,
+            aliases,
+            sources,
+        } = item;
+
+        let id = match kg::canonicalize_node_id_for_type(&raw_id, &node_type) {
             Ok(value) => value,
             Err(err) => {
-                failed.push(json!({ "id": item.id, "error": err }));
+                failed.push(json!({ "id": raw_id, "error": err }));
                 continue;
             }
         };
@@ -455,36 +524,29 @@ fn prevalidate_node_batch_items(
             continue;
         }
 
-        if !kg::is_valid_node_type(&item.node_type) {
+        if !kg::is_valid_node_type(&node_type) {
             failed.push(json!({
                 "id": id,
-                "error": format!("invalid node_type '{}': expected non-empty ASCII token without whitespace", item.node_type)
+                "error": format!("invalid node_type '{}': expected non-empty ASCII token without whitespace", node_type)
             }));
             continue;
         }
 
-        if item.sources.is_empty() {
-            failed.push(json!({ "id": id, "error": "at least one source is required" }));
+        if name.trim().is_empty() {
+            failed.push(json!({ "id": id, "error": "name is required and cannot be empty" }));
             continue;
         }
 
-        let description = item.description.unwrap_or_default();
-        let domain_area = item.domain_area.unwrap_or_default();
-        let provenance = item.provenance.unwrap_or_default();
-        let created_at = item.created_at.unwrap_or_default();
-        let Some(confidence) = item.confidence else {
-            failed.push(json!({
-                "id": id,
-                "error": "confidence is required and must be in range 0..1"
-            }));
-            continue;
-        };
-        let Some(importance) = item.importance else {
-            failed.push(json!({
-                "id": id,
-                "error": "importance is required and must be in range 0..1"
-            }));
-            continue;
+        let description = description.unwrap_or_else(|| name.clone());
+        let domain_area = domain_area.unwrap_or_else(|| node_type.to_ascii_lowercase());
+        let provenance = provenance.unwrap_or_else(|| "U".to_owned());
+        let confidence = confidence.unwrap_or(0.8);
+        let created_at = created_at.unwrap_or_else(current_utc_timestamp);
+        let importance = importance.unwrap_or(0.5);
+        let sources = if sources.is_empty() {
+            vec!["DOC kg graph node add".to_owned()]
+        } else {
+            sources
         };
 
         if description.trim().is_empty()
@@ -531,7 +593,7 @@ fn prevalidate_node_batch_items(
         }
 
         let mut source_error = None;
-        for source in &item.sources {
+        for source in &sources {
             if let Err(err) = validate_source_reference(source) {
                 source_error = Some(format!("invalid source '{}': {err}", source));
                 break;
@@ -544,17 +606,17 @@ fn prevalidate_node_batch_items(
 
         prepared.push(PreparedNodeBatchItem {
             id,
-            node_type: item.node_type,
-            name: item.name,
+            node_type,
+            name,
             description,
             domain_area,
             provenance,
             confidence,
             created_at,
             importance,
-            facts: item.facts,
-            aliases: item.aliases,
-            sources: item.sources,
+            facts,
+            aliases,
+            sources,
         });
     }
 
@@ -1006,13 +1068,14 @@ impl KgMcpServer {
         failed_count: usize,
         results: &[serde_json::Value],
     ) -> String {
+        let status = if failed_count > 0 { "ERROR" } else { "OK" };
         let mut lines = vec![if dry_run {
             format!(
-                "OK (dry_run would_add={} failed={})",
-                ok_count, failed_count
+                "{} (dry_run would_add={} failed={})",
+                status, ok_count, failed_count
             )
         } else {
-            format!("OK (added={} failed={})", ok_count, failed_count)
+            format!("{} (added={} failed={})", status, ok_count, failed_count)
         }];
 
         for result in results.iter().filter(|result| result["ok"] == false) {
@@ -1022,6 +1085,60 @@ impl KgMcpServer {
                 result["relation"].as_str().unwrap_or("?"),
                 result["target_id"].as_str().unwrap_or("?"),
                 result["error"].as_str().unwrap_or("unknown error")
+            ));
+        }
+
+        format!("{}\n", lines.join("\n"))
+    }
+
+    fn format_node_batch_output(
+        &self,
+        created_count: usize,
+        skipped_count: usize,
+        failed: &[serde_json::Value],
+    ) -> String {
+        let failed_count = failed.len();
+        let status = if failed_count > 0 { "ERROR" } else { "OK" };
+        let mut lines = vec![format!(
+            "{} (created={} skipped={} failed={})",
+            status, created_count, skipped_count, failed_count
+        )];
+
+        for item in failed {
+            lines.push(format!(
+                "- node {} failed: {}",
+                item.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                item.get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error")
+            ));
+        }
+
+        format!("{}\n", lines.join("\n"))
+    }
+
+    fn format_feedback_batch_output(
+        &self,
+        ok_count: usize,
+        failed_count: usize,
+        items: &[serde_json::Value],
+    ) -> String {
+        let status = if failed_count > 0 { "ERROR" } else { "OK" };
+        let mut lines = vec![format!(
+            "{} (ok={} failed={})",
+            status, ok_count, failed_count
+        )];
+
+        for item in items
+            .iter()
+            .filter(|item| item.get("status") == Some(&json!("error")))
+        {
+            lines.push(format!(
+                "- feedback '{}' failed: {}",
+                item.get("line").and_then(|v| v.as_str()).unwrap_or("?"),
+                item.get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error")
             ));
         }
 
@@ -1692,7 +1809,8 @@ impl KgMcpServer {
             let lines = std::mem::take(feedback_buffer);
             match this.run_feedback_batch(lines.clone(), &mode) {
                 Ok(result) => {
-                    let content = format!("OK (ok={} failed={})\n", result.ok, result.failed);
+                    let content =
+                        this.format_feedback_batch_output(result.ok, result.failed, &result.items);
                     output.push_str("> feedback\n");
                     output.push_str(&content);
                     steps.push(json!({
@@ -2046,7 +2164,7 @@ impl KgMcpServer {
 
         let result = self.run_feedback_batch(args.lines, &mode)?;
         let has_errors = result.failed > 0;
-        let content = format!("OK (ok={} failed={})\n", result.ok, result.failed);
+        let content = self.format_feedback_batch_output(result.ok, result.failed, &result.items);
 
         Ok(CallToolResult {
             content: vec![Content::text(content)],
@@ -2123,10 +2241,7 @@ impl KgMcpServer {
         if prepared_nodes.is_empty() {
             let has_errors = !failed.is_empty();
             return Ok(CallToolResult {
-                content: vec![Content::text(format!(
-                    "OK (created=0 skipped=0 failed={})\n",
-                    failed.len()
-                ))],
+                content: vec![Content::text(self.format_node_batch_output(0, 0, &failed))],
                 structured_content: Some(json!({
                     "graph": graph,
                     "path": path.display().to_string(),
@@ -2213,11 +2328,10 @@ impl KgMcpServer {
         }
 
         Ok(CallToolResult {
-            content: vec![Content::text(format!(
-                "OK (created={} skipped={} failed={})\n",
+            content: vec![Content::text(self.format_node_batch_output(
                 created.len(),
                 skipped.len(),
-                failed.len()
+                &failed,
             ))],
             structured_content: Some(json!({
                 "graph": graph,
@@ -4155,9 +4269,12 @@ mod tests {
             .expect("feedback batch result");
 
         assert_eq!(result.is_error, Some(true));
+        let content = KgMcpServer::render_text_content(&result);
         let structured = result.structured_content.expect("structured content");
         assert_eq!(structured["ok"], 0);
         assert_eq!(structured["failed"], 1);
+        assert!(content.contains("ERROR (ok=0 failed=1)"));
+        assert!(content.contains("- feedback 'totally invalid' failed: invalid feedback line"));
     }
 
     #[test]
@@ -4190,6 +4307,7 @@ mod tests {
             .expect("node batch result");
 
         assert_eq!(result.is_error, Some(true));
+        let content = KgMcpServer::render_text_content(&result);
         let structured = result.structured_content.expect("structured content");
         assert_eq!(
             structured["created"]
@@ -4202,6 +4320,118 @@ mod tests {
             structured["failed"].as_array().expect("failed array").len(),
             1
         );
+        assert!(content.contains("ERROR (created=0 skipped=0 failed=1)"));
+        assert!(content.contains("- node X:bad_node failed:"));
+    }
+
+    #[test]
+    fn kg_node_add_batch_uses_single_add_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let result = server
+            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
+                graph: "fridge".to_owned(),
+                mode: Some("best_effort".to_owned()),
+                on_conflict: None,
+                nodes: vec![NodeAddBatchItem {
+                    id: "concept:batch_defaults_node".to_owned(),
+                    node_type: "Concept".to_owned(),
+                    name: "Batch Defaults Node".to_owned(),
+                    description: None,
+                    domain_area: None,
+                    provenance: None,
+                    confidence: None,
+                    created_at: None,
+                    importance: None,
+                    facts: vec![],
+                    aliases: vec![],
+                    sources: vec![],
+                }],
+            }))
+            .expect("node batch result");
+
+        assert_eq!(result.is_error, Some(false));
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(
+            structured["created"]
+                .as_array()
+                .expect("created array")
+                .len(),
+            1
+        );
+
+        let graph = load_test_graph(cwd);
+        let node = graph
+            .node_by_id("concept:batch_defaults_node")
+            .expect("defaulted node");
+        assert_eq!(node.properties.description, "Batch Defaults Node");
+        assert_eq!(node.properties.domain_area, "concept");
+        assert_eq!(node.properties.provenance, "U");
+        assert_eq!(node.properties.confidence, Some(0.8));
+        assert_eq!(node.properties.importance, 0.5);
+        assert!(is_valid_iso_utc_timestamp(&node.properties.created_at));
+        assert_eq!(node.source_files, vec!["DOC kg graph node add".to_owned()]);
+    }
+
+    #[test]
+    fn kg_node_add_batch_content_lists_all_failures() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let result = server
+            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
+                graph: "fridge".to_owned(),
+                mode: Some("best_effort".to_owned()),
+                on_conflict: None,
+                nodes: vec![
+                    NodeAddBatchItem {
+                        id: "concept:bad_conf".to_owned(),
+                        node_type: "Concept".to_owned(),
+                        name: "Bad Confidence".to_owned(),
+                        description: None,
+                        domain_area: None,
+                        provenance: None,
+                        confidence: Some(2.0),
+                        created_at: None,
+                        importance: None,
+                        facts: vec![],
+                        aliases: vec![],
+                        sources: vec!["DOC /tmp/source.md".to_owned()],
+                    },
+                    NodeAddBatchItem {
+                        id: "concept:bad_source".to_owned(),
+                        node_type: "Concept".to_owned(),
+                        name: "Bad Source".to_owned(),
+                        description: None,
+                        domain_area: None,
+                        provenance: None,
+                        confidence: None,
+                        created_at: None,
+                        importance: None,
+                        facts: vec![],
+                        aliases: vec![],
+                        sources: vec!["WRONGSOURCE".to_owned()],
+                    },
+                ],
+            }))
+            .expect("node batch result");
+
+        assert_eq!(result.is_error, Some(true));
+        let content = KgMcpServer::render_text_content(&result);
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(
+            structured["failed"].as_array().expect("failed array").len(),
+            2
+        );
+
+        assert!(content.contains("ERROR (created=0 skipped=0 failed=2)"));
+        assert!(content.contains("- node concept:bad_conf failed:"));
+        assert!(content.contains("- node concept:bad_source failed:"));
     }
 }
 
