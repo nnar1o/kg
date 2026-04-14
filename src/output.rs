@@ -14,11 +14,13 @@ const MIN_TARGET_CHARS: usize = 300;
 const MAX_TARGET_CHARS: usize = 12_000;
 const FUZZY_NEIGHBOR_CONTEXT_CAP: u32 = 220;
 const FUZZY_NO_PRIMARY_CONTEXT_DIVISOR: u32 = 3;
+const FUZZY_NEIGHBOR_CONTEXT_DIVISOR: u32 = 3;
 const FUZZY_DESCRIPTION_WEIGHT: u32 = 2;
 const FUZZY_FACT_WEIGHT: u32 = 2;
 const FUZZY_NOTE_BODY_WEIGHT: u32 = 1;
 const FUZZY_NOTE_TAG_WEIGHT: u32 = 2;
 const BM25_PHRASE_MATCH_BOOST: i64 = 120;
+const BM25_PROXIMITY_MATCH_BOOST: i64 = 80;
 const BM25_TOKEN_MATCH_BOOST: i64 = 45;
 const BM25_ID_WEIGHT: usize = 5;
 const BM25_NAME_WEIGHT: usize = 4;
@@ -28,6 +30,11 @@ const BM25_FACT_WEIGHT: usize = 2;
 const BM25_NOTE_BODY_WEIGHT: usize = 1;
 const BM25_NOTE_TAG_WEIGHT: usize = 1;
 const BM25_NEIGHBOR_WEIGHT: usize = 1;
+const BM25_SELF_CONTEXT_WEIGHT: f64 = 3.0;
+const BM25_NEIGHBOR_CONTEXT_WEIGHT: f64 = 1.0;
+const BM25_PROXIMITY_WINDOW_TOKENS: usize = 6;
+const FACT_VOLUME_BASE_CHARS: f64 = 500.0;
+const FACT_VOLUME_MIN_FACTOR: f64 = 0.35;
 const IMPORTANCE_NEUTRAL: f64 = 0.5;
 const IMPORTANCE_MAX_ABS_BOOST: f64 = 66.0;
 const SCORE_META_MAX_RATIO: f64 = 0.35;
@@ -266,7 +273,13 @@ pub fn render_find_with_index_tuned(
         let shown = visible.len();
         let mut lines = vec![render_result_header(query, shown, total)];
         for scored in visible {
-            lines.push(render_scored_node_block(graph, &scored, full, debug_score));
+            lines.push(render_scored_node_block(
+                graph,
+                &scored,
+                full,
+                debug_score,
+                Some(query.as_str()),
+            ));
         }
         push_limit_omission_line(&mut lines, shown, total);
         sections.push(lines.join("\n"));
@@ -610,6 +623,7 @@ fn render_single_result_section(
     let header = render_result_header(query, 1, total_available);
     let full = render_single_result_candidate(
         graph,
+        query,
         &header,
         node,
         total_available,
@@ -633,6 +647,7 @@ fn render_single_result_section(
         candidates.push(Candidate {
             rendered: render_single_result_candidate(
                 graph,
+                query,
                 &header,
                 node,
                 total_available,
@@ -684,6 +699,7 @@ fn render_multi_result_section(
         for node in nodes.iter().take(shown) {
             lines.extend(render_scored_node_candidate_lines(
                 graph,
+                query,
                 node,
                 0,
                 detail,
@@ -758,7 +774,13 @@ fn render_full_result_section(
 ) -> String {
     let mut lines = vec![render_result_header(query, nodes.len(), total_available)];
     for node in nodes {
-        lines.push(render_scored_node_block(graph, node, true, debug_score));
+        lines.push(render_scored_node_block(
+            graph,
+            node,
+            true,
+            debug_score,
+            Some(query),
+        ));
     }
     push_limit_omission_line(&mut lines, nodes.len(), total_available);
     lines.join("\n")
@@ -791,12 +813,13 @@ fn render_single_node_candidate(
     detail: DetailLevel,
     edge_cap: usize,
 ) -> String {
-    let lines = render_single_node_candidate_lines(graph, node, depth, detail, edge_cap);
+    let lines = render_single_node_candidate_lines(graph, node, depth, detail, edge_cap, None);
     format!("{}\n", lines.join("\n"))
 }
 
 fn render_single_result_candidate(
     graph: &GraphFile,
+    query: &str,
     header: &str,
     node: &ScoredNode<'_>,
     total_available: usize,
@@ -808,10 +831,17 @@ fn render_single_result_candidate(
 ) -> String {
     let mut lines = vec![header.to_owned()];
     if full {
-        lines.push(render_scored_node_block(graph, node, true, debug_score));
+        lines.push(render_scored_node_block(
+            graph,
+            node,
+            true,
+            debug_score,
+            Some(query),
+        ));
     } else {
         lines.extend(render_scored_node_candidate_lines(
             graph,
+            query,
             node,
             depth,
             detail,
@@ -829,8 +859,9 @@ fn render_single_node_candidate_lines(
     depth: usize,
     detail: DetailLevel,
     edge_cap: usize,
+    query: Option<&str>,
 ) -> Vec<String> {
-    let mut lines = render_node_lines_with_edges(graph, node, detail, edge_cap);
+    let mut lines = render_node_lines_with_edges(graph, node, detail, edge_cap, query);
     if depth > 0 {
         lines.extend(render_neighbor_layers(graph, node, depth, detail));
     }
@@ -839,6 +870,7 @@ fn render_single_node_candidate_lines(
 
 fn render_scored_node_candidate_lines(
     graph: &GraphFile,
+    query: &str,
     node: &ScoredNode<'_>,
     depth: usize,
     detail: DetailLevel,
@@ -850,7 +882,12 @@ fn render_scored_node_candidate_lines(
         lines.push(render_score_debug_line(node));
     }
     lines.extend(render_single_node_candidate_lines(
-        graph, node.node, depth, detail, edge_cap,
+        graph,
+        node.node,
+        depth,
+        detail,
+        edge_cap,
+        Some(query),
     ));
     lines
 }
@@ -860,19 +897,20 @@ fn render_scored_node_block(
     node: &ScoredNode<'_>,
     full: bool,
     debug_score: bool,
+    query: Option<&str>,
 ) -> String {
     if debug_score {
         format!(
             "score: {}\n{}\n{}",
             node.score,
             render_score_debug_line(node),
-            render_node_block(graph, node.node, full)
+            render_node_block_with_query(graph, node.node, full, query)
         )
     } else {
         format!(
             "score: {}\n{}",
             node.score,
-            render_node_block(graph, node.node, full)
+            render_node_block_with_query(graph, node.node, full, query)
         )
     }
 }
@@ -950,9 +988,10 @@ fn render_node_lines_with_edges(
     node: &Node,
     detail: DetailLevel,
     edge_cap: usize,
+    query: Option<&str>,
 ) -> Vec<String> {
     let mut lines = render_node_identity_lines(node, detail);
-    lines.extend(render_node_link_lines(graph, node, edge_cap));
+    lines.extend(render_node_link_lines(graph, node, edge_cap, query));
     lines
 }
 
@@ -1011,8 +1050,25 @@ fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
     lines
 }
 
-fn render_node_link_lines(graph: &GraphFile, node: &Node, edge_cap: usize) -> Vec<String> {
-    let incident = incident_edges(graph, &node.id);
+fn render_node_link_lines(
+    graph: &GraphFile,
+    node: &Node,
+    edge_cap: usize,
+    query: Option<&str>,
+) -> Vec<String> {
+    let mut incident = incident_edges(graph, &node.id);
+    if let Some(query) = query {
+        let query_terms = text_norm::expand_query_terms(query);
+        if !query_terms.is_empty() {
+            incident.sort_by(|left, right| {
+                let right_relevance = incident_edge_query_relevance(right, &query_terms);
+                let left_relevance = incident_edge_query_relevance(left, &query_terms);
+                right_relevance
+                    .cmp(&left_relevance)
+                    .then_with(|| incident_edge_default_cmp(left, right))
+            });
+        }
+    }
     if incident.is_empty() {
         return Vec::new();
     }
@@ -1078,17 +1134,54 @@ fn incident_edges<'a>(graph: &'a GraphFile, node_id: &str) -> Vec<IncidentEdge<'
             }
         }
     }
-    edges.sort_by(|left, right| {
-        right
-            .related
-            .properties
-            .importance
-            .partial_cmp(&left.related.properties.importance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| left.edge.relation.cmp(&right.edge.relation))
-            .then_with(|| left.related.id.cmp(&right.related.id))
-    });
+    edges.sort_by(incident_edge_default_cmp);
     edges
+}
+
+fn incident_edge_default_cmp(
+    left: &IncidentEdge<'_>,
+    right: &IncidentEdge<'_>,
+) -> std::cmp::Ordering {
+    right
+        .related
+        .properties
+        .importance
+        .partial_cmp(&left.related.properties.importance)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then_with(|| left.edge.relation.cmp(&right.edge.relation))
+        .then_with(|| left.related.id.cmp(&right.related.id))
+}
+
+fn incident_edge_query_relevance(edge: &IncidentEdge<'_>, query_terms: &[String]) -> i64 {
+    if query_terms.is_empty() {
+        return 0;
+    }
+    let related = edge.related;
+    let mut score = 0;
+    score += query_overlap_score(&related.id, query_terms, 6);
+    score += query_overlap_score(&related.name, query_terms, 5);
+    score += query_overlap_score(&related.properties.description, query_terms, 2);
+    score += query_overlap_score(&edge.edge.relation, query_terms, 2);
+    score += query_overlap_score(&edge.edge.properties.detail, query_terms, 2);
+    for alias in &related.properties.alias {
+        score += query_overlap_score(alias, query_terms, 4);
+    }
+    score
+}
+
+fn query_overlap_score(value: &str, query_terms: &[String], weight: i64) -> i64 {
+    if value.is_empty() || query_terms.is_empty() {
+        return 0;
+    }
+    let value_terms: HashSet<String> = tokenize(value).into_iter().collect();
+    if value_terms.is_empty() {
+        return 0;
+    }
+    let matches = query_terms
+        .iter()
+        .filter(|term| value_terms.contains(term.as_str()))
+        .count() as i64;
+    matches * weight
 }
 
 fn summarize_relations(edges: &[IncidentEdge<'_>]) -> (String, String) {
@@ -1117,6 +1210,15 @@ fn join_relation_counts(counts: &std::collections::BTreeMap<String, usize>) -> S
 }
 
 fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
+    render_node_block_with_query(graph, node, full, None)
+}
+
+fn render_node_block_with_query(
+    graph: &GraphFile,
+    node: &Node,
+    full: bool,
+    query: Option<&str>,
+) -> String {
     let mut lines = Vec::new();
     lines.push(format!(
         "# {} | {} [{}]",
@@ -1212,12 +1314,12 @@ fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
         }
     }
 
-    for edge in outgoing_edges(graph, &node.id, full) {
+    for edge in outgoing_edges(graph, &node.id, full, query) {
         if let Some(target) = graph.node_by_id(&edge.target_id) {
             lines.extend(render_edge_lines("->", edge, target, full));
         }
     }
-    for edge in incoming_edges(graph, &node.id, full) {
+    for edge in incoming_edges(graph, &node.id, full, query) {
         if let Some(source) = graph.node_by_id(&edge.source_id) {
             lines.extend(render_edge_lines("<-", edge, source, full));
         }
@@ -1226,30 +1328,96 @@ fn render_node_block(graph: &GraphFile, node: &Node, full: bool) -> String {
     lines.join("\n")
 }
 
-fn outgoing_edges<'a>(graph: &'a GraphFile, node_id: &str, full: bool) -> Vec<&'a Edge> {
+fn outgoing_edges<'a>(
+    graph: &'a GraphFile,
+    node_id: &str,
+    full: bool,
+    query: Option<&str>,
+) -> Vec<&'a Edge> {
     let mut edges: Vec<&Edge> = graph
         .edges
         .iter()
         .filter(|edge| edge.source_id == node_id)
         .collect();
-    edges.sort_by_key(|edge| (&edge.relation, &edge.target_id));
+    if let Some(query) = query {
+        let query_terms = text_norm::expand_query_terms(query);
+        if !query_terms.is_empty() {
+            edges.sort_by(|left, right| {
+                let right_score = directed_edge_query_relevance(graph, right, false, &query_terms);
+                let left_score = directed_edge_query_relevance(graph, left, false, &query_terms);
+                right_score
+                    .cmp(&left_score)
+                    .then_with(|| left.relation.cmp(&right.relation))
+                    .then_with(|| left.target_id.cmp(&right.target_id))
+            });
+        } else {
+            edges.sort_by_key(|edge| (&edge.relation, &edge.target_id));
+        }
+    } else {
+        edges.sort_by_key(|edge| (&edge.relation, &edge.target_id));
+    }
     if !full {
         edges.truncate(3);
     }
     edges
 }
 
-fn incoming_edges<'a>(graph: &'a GraphFile, node_id: &str, full: bool) -> Vec<&'a Edge> {
+fn incoming_edges<'a>(
+    graph: &'a GraphFile,
+    node_id: &str,
+    full: bool,
+    query: Option<&str>,
+) -> Vec<&'a Edge> {
     let mut edges: Vec<&Edge> = graph
         .edges
         .iter()
         .filter(|edge| edge.target_id == node_id)
         .collect();
-    edges.sort_by_key(|edge| (&edge.relation, &edge.source_id));
+    if let Some(query) = query {
+        let query_terms = text_norm::expand_query_terms(query);
+        if !query_terms.is_empty() {
+            edges.sort_by(|left, right| {
+                let right_score = directed_edge_query_relevance(graph, right, true, &query_terms);
+                let left_score = directed_edge_query_relevance(graph, left, true, &query_terms);
+                right_score
+                    .cmp(&left_score)
+                    .then_with(|| left.relation.cmp(&right.relation))
+                    .then_with(|| left.source_id.cmp(&right.source_id))
+            });
+        } else {
+            edges.sort_by_key(|edge| (&edge.relation, &edge.source_id));
+        }
+    } else {
+        edges.sort_by_key(|edge| (&edge.relation, &edge.source_id));
+    }
     if !full {
         edges.truncate(3);
     }
     edges
+}
+
+fn directed_edge_query_relevance(
+    graph: &GraphFile,
+    edge: &Edge,
+    incoming: bool,
+    query_terms: &[String],
+) -> i64 {
+    let related = if incoming {
+        graph.node_by_id(&edge.source_id)
+    } else {
+        graph.node_by_id(&edge.target_id)
+    };
+    let mut score = query_overlap_score(&edge.relation, query_terms, 2)
+        + query_overlap_score(&edge.properties.detail, query_terms, 2);
+    if let Some(node) = related {
+        score += query_overlap_score(&node.id, query_terms, 6);
+        score += query_overlap_score(&node.name, query_terms, 5);
+        score += query_overlap_score(&node.properties.description, query_terms, 2);
+        for alias in &node.properties.alias {
+            score += query_overlap_score(alias, query_terms, 4);
+        }
+    }
+    score
 }
 
 fn render_edge_lines(prefix: &str, edge: &Edge, related: &Node, full: bool) -> Vec<String> {
@@ -1571,29 +1739,40 @@ fn score_bm25_raw<'a>(
                 if !node_is_searchable(node, include_features, include_metadata) {
                     return None;
                 }
-                let document_terms = node_document_terms(context, node);
-                let lexical_boost = bm25_lexical_boost(&terms, &document_terms);
+                let self_terms = node_self_document_terms(context, node);
+                let neighbor_score =
+                    best_neighbor_bm25_score_with_index(context, node, &terms, idx);
+                let base_score = combine_bm25_components(node, score as f64, neighbor_score);
+                if base_score <= 0.0 {
+                    return None;
+                }
+                let lexical_boost = bm25_lexical_boost_with_idf(&terms, &self_terms, |term| {
+                    idx.idf.get(term).copied().unwrap_or(0.0) as f64
+                });
+                let proximity_boost = bm25_proximity_boost(context, node, &terms);
                 Some(RawCandidate {
                     node,
-                    raw_relevance: score as f64 * 100.0 + lexical_boost as f64,
-                    lexical_boost,
+                    raw_relevance: base_score * 100.0
+                        + lexical_boost as f64
+                        + proximity_boost as f64,
+                    lexical_boost: lexical_boost + proximity_boost,
                 })
             })
             .collect();
     }
 
-    let mut docs: Vec<(&'a Node, Vec<String>)> = graph
+    let docs: Vec<(&'a Node, Vec<String>)> = graph
         .nodes
         .iter()
         .filter(|node| node_is_searchable(node, include_features, include_metadata))
-        .map(|node| (node, node_document_terms(context, node)))
+        .map(|node| (node, node_self_document_terms(context, node)))
         .collect();
 
     if docs.is_empty() {
         return Vec::new();
     }
 
-    let mut df: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut df: HashMap<String, usize> = HashMap::new();
     for term in &terms {
         let mut count = 0usize;
         for (_, tokens) in &docs {
@@ -1601,7 +1780,7 @@ fn score_bm25_raw<'a>(
                 count += 1;
             }
         }
-        df.insert(term.as_str(), count);
+        df.insert(term.clone(), count);
     }
 
     let total_docs = docs.len() as f64;
@@ -1609,34 +1788,33 @@ fn score_bm25_raw<'a>(
         .iter()
         .map(|(_, tokens)| tokens.len() as f64)
         .sum::<f64>()
-        / total_docs;
+        / total_docs.max(1.0);
+
+    let mut idf_by_term: HashMap<String, f64> = HashMap::new();
+    for term in &terms {
+        let df_t = *df.get(term).unwrap_or(&0) as f64;
+        let idf = (1.0 + (total_docs - df_t + 0.5) / (df_t + 0.5)).ln();
+        idf_by_term.insert(term.clone(), idf);
+    }
 
     let mut scored = Vec::new();
 
-    for (node, tokens) in docs.drain(..) {
-        let dl = tokens.len() as f64;
-        if dl == 0.0 {
+    for (node, self_terms) in docs {
+        let self_score = bm25_document_score(&terms, &self_terms, &idf_by_term, avgdl);
+        let neighbor_score = best_neighbor_bm25_score(context, node, &terms, &idf_by_term, avgdl);
+        let base_score = combine_bm25_components(node, self_score, neighbor_score);
+        if base_score <= 0.0 {
             continue;
         }
-        let mut score = 0.0f64;
-        for term in &terms {
-            let tf = tokens.iter().filter(|t| *t == term).count() as f64;
-            if tf == 0.0 {
-                continue;
-            }
-            let df_t = *df.get(term.as_str()).unwrap_or(&0) as f64;
-            let idf = (1.0 + (total_docs - df_t + 0.5) / (df_t + 0.5)).ln();
-            let denom = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avgdl));
-            score += idf * (tf * (BM25_K1 + 1.0) / denom);
-        }
-        if score > 0.0 {
-            let lexical_boost = bm25_lexical_boost(&terms, &tokens);
-            scored.push(RawCandidate {
-                node,
-                raw_relevance: score * 100.0 + lexical_boost as f64,
-                lexical_boost,
-            });
-        }
+        let lexical_boost = bm25_lexical_boost_with_idf(&terms, &self_terms, |term| {
+            idf_by_term.get(term).copied().unwrap_or(0.0)
+        });
+        let proximity_boost = bm25_proximity_boost(context, node, &terms);
+        scored.push(RawCandidate {
+            node,
+            raw_relevance: base_score * 100.0 + lexical_boost as f64 + proximity_boost as f64,
+            lexical_boost: lexical_boost + proximity_boost,
+        });
     }
 
     scored
@@ -1723,7 +1901,7 @@ fn node_is_searchable(node: &Node, include_features: bool, include_metadata: boo
     (include_features || node.r#type != "Feature") && (include_metadata || node.r#type != "^")
 }
 
-fn node_document_terms(context: &FindQueryContext<'_>, node: &Node) -> Vec<String> {
+fn node_self_document_terms(context: &FindQueryContext<'_>, node: &Node) -> Vec<String> {
     let mut tokens = Vec::new();
     push_terms(&mut tokens, &node.id, BM25_ID_WEIGHT);
     push_terms(&mut tokens, &node.name, BM25_NAME_WEIGHT);
@@ -1744,19 +1922,122 @@ fn node_document_terms(context: &FindQueryContext<'_>, node: &Node) -> Vec<Strin
             push_terms(&mut tokens, tag, BM25_NOTE_TAG_WEIGHT);
         }
     }
-    for neighbor in context.neighbors_for(&node.id) {
-        push_terms(&mut tokens, &neighbor.id, BM25_NEIGHBOR_WEIGHT);
-        push_terms(&mut tokens, &neighbor.name, BM25_NEIGHBOR_WEIGHT);
-        push_terms(
-            &mut tokens,
-            &neighbor.properties.description,
-            BM25_NEIGHBOR_WEIGHT,
-        );
-        for alias in &neighbor.properties.alias {
-            push_terms(&mut tokens, alias, BM25_NEIGHBOR_WEIGHT);
-        }
+    tokens
+}
+
+fn neighbor_document_terms(neighbor: &Node) -> Vec<String> {
+    let mut tokens = Vec::new();
+    push_terms(&mut tokens, &neighbor.id, BM25_NEIGHBOR_WEIGHT);
+    push_terms(&mut tokens, &neighbor.name, BM25_NEIGHBOR_WEIGHT);
+    push_terms(
+        &mut tokens,
+        &neighbor.properties.description,
+        BM25_NEIGHBOR_WEIGHT,
+    );
+    for alias in &neighbor.properties.alias {
+        push_terms(&mut tokens, alias, BM25_NEIGHBOR_WEIGHT);
     }
     tokens
+}
+
+fn fact_volume_normalizer(node: &Node) -> f64 {
+    let fact_chars = node
+        .properties
+        .key_facts
+        .iter()
+        .map(|fact| fact.chars().count())
+        .sum::<usize>() as f64;
+    if fact_chars <= 0.0 {
+        return 1.0;
+    }
+    let scaled = FACT_VOLUME_BASE_CHARS.sqrt() / fact_chars.sqrt();
+    scaled.clamp(FACT_VOLUME_MIN_FACTOR, 1.0)
+}
+
+fn bm25_document_score(
+    query_terms: &[String],
+    document_terms: &[String],
+    idf_by_term: &HashMap<String, f64>,
+    avgdl: f64,
+) -> f64 {
+    if query_terms.is_empty() || document_terms.is_empty() {
+        return 0.0;
+    }
+    let dl = document_terms.len() as f64;
+    if dl <= 0.0 {
+        return 0.0;
+    }
+    let mut score = 0.0;
+    for term in query_terms {
+        let tf = document_terms.iter().filter(|token| *token == term).count() as f64;
+        if tf <= 0.0 {
+            continue;
+        }
+        let idf = idf_by_term.get(term).copied().unwrap_or(0.0);
+        if idf <= 0.0 {
+            continue;
+        }
+        let denom = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avgdl.max(1.0)));
+        score += idf * (tf * (BM25_K1 + 1.0) / denom);
+    }
+    score
+}
+
+fn best_neighbor_bm25_score(
+    context: &FindQueryContext<'_>,
+    node: &Node,
+    query_terms: &[String],
+    idf_by_term: &HashMap<String, f64>,
+    avgdl: f64,
+) -> f64 {
+    context
+        .neighbors_for(&node.id)
+        .iter()
+        .map(|neighbor| {
+            let neighbor_terms = neighbor_document_terms(neighbor);
+            bm25_document_score(query_terms, &neighbor_terms, idf_by_term, avgdl)
+        })
+        .fold(0.0f64, f64::max)
+}
+
+fn best_neighbor_bm25_score_with_index(
+    context: &FindQueryContext<'_>,
+    node: &Node,
+    query_terms: &[String],
+    index: &Bm25Index,
+) -> f64 {
+    let avgdl = index.avg_doc_len as f64;
+    context
+        .neighbors_for(&node.id)
+        .iter()
+        .map(|neighbor| {
+            let neighbor_terms = neighbor_document_terms(neighbor);
+            let dl = neighbor_terms.len() as f64;
+            if dl <= 0.0 {
+                return 0.0;
+            }
+            let mut score = 0.0;
+            for term in query_terms {
+                let idf = index.idf.get(term).copied().unwrap_or(0.0) as f64;
+                if idf <= 0.0 {
+                    continue;
+                }
+                let tf = neighbor_terms.iter().filter(|token| *token == term).count() as f64;
+                if tf <= 0.0 {
+                    continue;
+                }
+                let denom = tf + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avgdl.max(1.0)));
+                score += idf * (tf * (BM25_K1 + 1.0) / denom);
+            }
+            score
+        })
+        .fold(0.0f64, f64::max)
+}
+
+fn combine_bm25_components(node: &Node, self_score: f64, neighbor_score: f64) -> f64 {
+    let combined =
+        BM25_SELF_CONTEXT_WEIGHT * self_score + BM25_NEIGHBOR_CONTEXT_WEIGHT * neighbor_score;
+    combined * fact_volume_normalizer(node)
 }
 
 fn push_terms(target: &mut Vec<String>, value: &str, weight: usize) {
@@ -1777,7 +2058,14 @@ fn rewrite_query(query: &str) -> String {
     text_norm::expand_query_terms(query).join(" ")
 }
 
-fn bm25_lexical_boost(query_terms: &[String], document_terms: &[String]) -> i64 {
+fn bm25_lexical_boost_with_idf<F>(
+    query_terms: &[String],
+    document_terms: &[String],
+    idf_for: F,
+) -> i64
+where
+    F: Fn(&str) -> f64,
+{
     if query_terms.is_empty() || document_terms.is_empty() {
         return 0;
     }
@@ -1786,15 +2074,77 @@ fn bm25_lexical_boost(query_terms: &[String], document_terms: &[String]) -> i64 
     }
     let document_vocab: HashSet<&str> = document_terms.iter().map(String::as_str).collect();
     let query_vocab: HashSet<&str> = query_terms.iter().map(String::as_str).collect();
-    let matched_tokens = query_vocab
-        .iter()
-        .filter(|token| document_vocab.contains(**token))
-        .count() as i64;
-    if matched_tokens == 0 {
+    let mut total_idf = 0.0;
+    let mut matched_idf = 0.0;
+    let mut matched_terms = 0i64;
+    for term in query_vocab {
+        let idf = idf_for(term).max(0.0);
+        total_idf += if idf > 0.0 { idf } else { 1.0 };
+        if document_vocab.contains(term) {
+            matched_terms += 1;
+            matched_idf += if idf > 0.0 { idf } else { 1.0 };
+        }
+    }
+    if matched_terms == 0 {
         return 0;
     }
-    let query_token_count = query_vocab.len() as i64;
-    (matched_tokens * BM25_TOKEN_MATCH_BOOST + query_token_count - 1) / query_token_count
+    ((matched_idf / total_idf.max(1.0)) * BM25_TOKEN_MATCH_BOOST as f64).round() as i64
+}
+
+fn bm25_proximity_boost(
+    context: &FindQueryContext<'_>,
+    node: &Node,
+    query_terms: &[String],
+) -> i64 {
+    if query_terms.len() < 2 {
+        return 0;
+    }
+    let mut best_span_hits = proximity_hits_in_text(&node.id, query_terms)
+        .max(proximity_hits_in_text(&node.name, query_terms))
+        .max(proximity_hits_in_text(
+            &node.properties.description,
+            query_terms,
+        ));
+    for alias in &node.properties.alias {
+        best_span_hits = best_span_hits.max(proximity_hits_in_text(alias, query_terms));
+    }
+    for fact in &node.properties.key_facts {
+        best_span_hits = best_span_hits.max(proximity_hits_in_text(fact, query_terms));
+    }
+    for note in context.notes_for(&node.id) {
+        best_span_hits = best_span_hits.max(proximity_hits_in_text(&note.body, query_terms));
+        for tag in &note.tags {
+            best_span_hits = best_span_hits.max(proximity_hits_in_text(tag, query_terms));
+        }
+    }
+    if best_span_hits < 2 {
+        0
+    } else {
+        BM25_PROXIMITY_MATCH_BOOST + (best_span_hits as i64 - 2) * 20
+    }
+}
+
+fn proximity_hits_in_text(value: &str, query_terms: &[String]) -> usize {
+    if value.is_empty() || query_terms.len() < 2 {
+        return 0;
+    }
+    let tokens = tokenize(value);
+    if tokens.len() < 2 {
+        return 0;
+    }
+    let query_vocab: HashSet<&str> = query_terms.iter().map(String::as_str).collect();
+    let mut best = 0usize;
+    for start in 0..tokens.len() {
+        let end = (start + BM25_PROXIMITY_WINDOW_TOKENS).min(tokens.len());
+        let mut seen: HashSet<&str> = HashSet::new();
+        for token in &tokens[start..end] {
+            if query_vocab.contains(token.as_str()) {
+                seen.insert(token.as_str());
+            }
+        }
+        best = best.max(seen.len());
+    }
+    best
 }
 
 fn contains_token_phrase(document_terms: &[String], query_terms: &[String]) -> bool {
@@ -1843,18 +2193,17 @@ fn score_node(
         &node.properties.description,
         FUZZY_DESCRIPTION_WEIGHT,
     );
+    let mut facts_score = 0;
     for fact in &node.properties.key_facts {
-        contextual_score += score_secondary_field(query, pattern, matcher, fact, FUZZY_FACT_WEIGHT);
+        facts_score += score_secondary_field(query, pattern, matcher, fact, FUZZY_FACT_WEIGHT);
     }
+    let facts_factor = fact_volume_normalizer(node);
+    contextual_score += ((facts_score as f64) * facts_factor).round() as u32;
     contextual_score += score_notes_context(context, node, query, pattern, matcher);
 
     let neighbor_context = score_neighbor_context(context, node, query, pattern, matcher)
         .min(FUZZY_NEIGHBOR_CONTEXT_CAP);
-    contextual_score += if primary_hits > 0 {
-        neighbor_context / 2
-    } else {
-        neighbor_context
-    };
+    contextual_score += neighbor_context / FUZZY_NEIGHBOR_CONTEXT_DIVISOR;
 
     if primary_hits == 0 {
         contextual_score /= FUZZY_NO_PRIMARY_CONTEXT_DIVISOR;
@@ -2022,6 +2371,15 @@ mod tests {
         }
     }
 
+    fn make_edge(source_id: &str, relation: &str, target_id: &str) -> Edge {
+        Edge {
+            source_id: source_id.to_owned(),
+            relation: relation.to_owned(),
+            target_id: target_id.to_owned(),
+            properties: crate::graph::EdgeProperties::default(),
+        }
+    }
+
     fn score_for(results: &[ScoredNode<'_>], id: &str) -> i64 {
         results
             .iter()
@@ -2049,15 +2407,15 @@ mod tests {
     fn bm25_lexical_boost_prefers_phrase_then_tokens() {
         let query_terms = tokenize("smart home api");
         assert_eq!(
-            bm25_lexical_boost(&query_terms, &tokenize("x smart home api y")),
+            bm25_lexical_boost_with_idf(&query_terms, &tokenize("x smart home api y"), |_| 1.0),
             120
         );
         assert_eq!(
-            bm25_lexical_boost(&query_terms, &tokenize("smart x api y home")),
+            bm25_lexical_boost_with_idf(&query_terms, &tokenize("smart x api y home"), |_| 1.0),
             45
         );
         assert_eq!(
-            bm25_lexical_boost(&query_terms, &tokenize("nothing here")),
+            bm25_lexical_boost_with_idf(&query_terms, &tokenize("nothing here"), |_| 1.0),
             0
         );
     }
@@ -2144,6 +2502,120 @@ mod tests {
         let high_score = score_for(&results, "concept:high");
         let low_score = score_for(&results, "concept:low");
         assert!(high_score > low_score);
+    }
+
+    #[test]
+    fn bm25_prefers_self_match_over_neighbor_only_match() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(make_node(
+            "concept:self_hit",
+            "Batch plugin output directory",
+            "",
+            &["BatchPlugin OUTPUT_DIR rule in WebLogic path"],
+            &[],
+            0.5,
+            0.0,
+            0,
+        ));
+        graph.nodes.push(make_node(
+            "concept:hub",
+            "Integration Hub",
+            "gateway for many systems",
+            &[],
+            &[],
+            0.5,
+            0.0,
+            0,
+        ));
+        graph.nodes.push(make_node(
+            "concept:neighbor_hit",
+            "BatchPlugin OUTPUT_DIR in WebLogic",
+            "",
+            &[],
+            &[],
+            0.5,
+            0.0,
+            0,
+        ));
+        graph
+            .edges
+            .push(make_edge("concept:hub", "HAS", "concept:neighbor_hit"));
+
+        let results = find_all_matches_with_index(
+            &graph,
+            "BatchPlugin OUTPUT_DIR WebLogic",
+            true,
+            false,
+            FindMode::Bm25,
+            None,
+            None,
+        );
+
+        assert!(results.iter().any(|item| item.node.id == "concept:hub"));
+        assert!(score_for(&results, "concept:self_hit") > score_for(&results, "concept:hub"));
+    }
+
+    #[test]
+    fn link_rendering_sorts_incident_edges_by_query_relevance() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(make_node(
+            "concept:center",
+            "Center",
+            "",
+            &[],
+            &[],
+            0.5,
+            0.0,
+            0,
+        ));
+        graph.nodes.push(make_node(
+            "concept:relevant",
+            "Push notification template",
+            "",
+            &[],
+            &[],
+            0.2,
+            0.0,
+            0,
+        ));
+        graph.nodes.push(make_node(
+            "concept:irrelevant_a",
+            "Billing ledger",
+            "",
+            &[],
+            &[],
+            0.9,
+            0.0,
+            0,
+        ));
+        graph.nodes.push(make_node(
+            "concept:irrelevant_b",
+            "Audit trail",
+            "",
+            &[],
+            &[],
+            0.8,
+            0.0,
+            0,
+        ));
+        graph
+            .edges
+            .push(make_edge("concept:center", "HAS", "concept:irrelevant_a"));
+        graph
+            .edges
+            .push(make_edge("concept:center", "HAS", "concept:irrelevant_b"));
+        graph
+            .edges
+            .push(make_edge("concept:center", "HAS", "concept:relevant"));
+
+        let center = graph.node_by_id("concept:center").expect("center node");
+        let lines = render_node_link_lines(&graph, center, 2, Some("push notification template"));
+
+        let first_edge = lines
+            .iter()
+            .find(|line| line.starts_with("-> "))
+            .expect("first edge line");
+        assert!(first_edge.contains("concept:relevant"));
     }
 
     #[test]

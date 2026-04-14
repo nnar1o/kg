@@ -472,6 +472,18 @@ fn validate_source_reference(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_source_reference(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let source_type = trimmed.split_whitespace().next().unwrap_or_default();
+    if VALID_SOURCE_TYPES.contains(&source_type) {
+        return trimmed.to_owned();
+    }
+    format!("DOC {trimmed}")
+}
+
 #[derive(Debug, Clone)]
 struct PreparedNodeBatchItem {
     id: String,
@@ -547,6 +559,9 @@ fn prevalidate_node_batch_items(
             vec!["DOC kg graph node add".to_owned()]
         } else {
             sources
+                .into_iter()
+                .map(|source| normalize_source_reference(&source))
+                .collect()
         };
 
         if description.trim().is_empty()
@@ -1129,16 +1144,22 @@ impl KgMcpServer {
             status, ok_count, failed_count
         )];
 
-        for item in items
-            .iter()
-            .filter(|item| item.get("status") == Some(&json!("error")))
-        {
+        for item in items {
+            let is_failed = item.get("status").and_then(|v| v.as_str()) == Some("error")
+                || item.get("graph_update").and_then(|v| v.as_str()) == Some("error");
+            if !is_failed {
+                continue;
+            }
+
+            let error_message = item
+                .get("error")
+                .and_then(|v| v.as_str())
+                .or_else(|| item.get("graph_error").and_then(|v| v.as_str()))
+                .unwrap_or("unknown error");
             lines.push(format!(
                 "- feedback '{}' failed: {}",
                 item.get("line").and_then(|v| v.as_str()).unwrap_or("?"),
-                item.get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown error")
+                error_message
             ));
         }
 
@@ -1410,8 +1431,6 @@ impl KgMcpServer {
         let mut log_lines = String::new();
         let mut items = Vec::with_capacity(entries.len());
         let mut updates: Vec<FeedbackUpdate> = Vec::new();
-        let mut ok = 0usize;
-
         {
             let mut state = self.feedback_state.lock().map_err(|_| {
                 McpError::internal_error(
@@ -1471,7 +1490,6 @@ impl KgMcpServer {
                         );
                         log_lines.push_str(&log_line);
 
-                        ok += 1;
                         items.push(json!({
                             "line": line,
                             "status": "ok",
@@ -1526,6 +1544,11 @@ impl KgMcpServer {
                             Some(Err(msg)) => {
                                 obj.insert("graph_update".to_owned(), json!("error"));
                                 obj.insert("graph_error".to_owned(), json!(msg));
+                                obj.insert("status".to_owned(), json!("error"));
+                                obj.insert(
+                                    "error".to_owned(),
+                                    json!(format!("graph update failed: {msg}")),
+                                );
                             }
                             None => {}
                         }
@@ -1538,6 +1561,7 @@ impl KgMcpServer {
             .iter()
             .filter(|v| v.get("status") == Some(&json!("error")))
             .count();
+        let ok = items.len().saturating_sub(failed);
 
         Ok(FeedbackBatchRun { ok, failed, items })
     }
@@ -2289,7 +2313,7 @@ impl KgMcpServer {
                 continue;
             }
 
-            graph_file.nodes.push(kg::Node {
+            let node = kg::Node {
                 id: id.clone(),
                 r#type: item.node_type,
                 name: item.name,
@@ -2305,7 +2329,21 @@ impl KgMcpServer {
                     ..kg::NodeProperties::default()
                 },
                 source_files: item.sources,
-            });
+            };
+
+            if let Err(err) = kg::validate_node_add_with_schema(&self.cwd, &node) {
+                let error = err.to_string();
+                if mode == "atomic" {
+                    return Err(McpError::invalid_params(
+                        "schema violation",
+                        Some(json!({ "id": id, "error": error })),
+                    ));
+                }
+                failed.push(json!({ "id": id, "error": error }));
+                continue;
+            }
+
+            graph_file.nodes.push(node);
             created.push(id);
         }
 
@@ -4278,6 +4316,43 @@ mod tests {
     }
 
     #[test]
+    fn kg_feedback_batch_marks_error_on_graph_update_failure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        {
+            let mut state = server.feedback_state.lock().expect("feedback lock");
+            state.finds.insert(
+                "abc123".to_owned(),
+                FindContext {
+                    created_at_ms: KgMcpServer::now_ms(),
+                    graph: "missing_graph".to_owned(),
+                    queries: vec!["smart fridge".to_owned()],
+                    candidate_ids: vec!["concept:refrigerator".to_owned()],
+                },
+            );
+        }
+
+        let result = server
+            .kg_feedback_batch(Parameters(FeedbackBatchArgs {
+                lines: vec!["uid=abc123 YES".to_owned()],
+                mode: Some("best_effort".to_owned()),
+            }))
+            .expect("feedback batch result");
+
+        assert_eq!(result.is_error, Some(true));
+        let content = KgMcpServer::render_text_content(&result);
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(structured["ok"], 0);
+        assert_eq!(structured["failed"], 1);
+        assert_eq!(structured["items"][0]["graph_update"], "error");
+        assert!(content.contains("ERROR (ok=0 failed=1)"));
+        assert!(content.contains("- feedback 'uid=abc123 YES' failed: graph update failed:"));
+    }
+
+    #[test]
     fn kg_node_add_batch_marks_error_on_prevalidation_failures() {
         let dir = tempfile::tempdir().expect("tempdir");
         let cwd = dir.path();
@@ -4377,6 +4452,98 @@ mod tests {
     }
 
     #[test]
+    fn kg_node_add_batch_normalizes_sources_like_single_add() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let result = server
+            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
+                graph: "fridge".to_owned(),
+                mode: Some("best_effort".to_owned()),
+                on_conflict: None,
+                nodes: vec![NodeAddBatchItem {
+                    id: "concept:batch_source_normalized".to_owned(),
+                    node_type: "Concept".to_owned(),
+                    name: "Batch Source Normalized".to_owned(),
+                    description: None,
+                    domain_area: None,
+                    provenance: None,
+                    confidence: None,
+                    created_at: None,
+                    importance: None,
+                    facts: vec![],
+                    aliases: vec![],
+                    sources: vec!["/tmp/source.md".to_owned()],
+                }],
+            }))
+            .expect("node batch result");
+
+        assert_eq!(result.is_error, Some(false));
+        let graph = load_test_graph(cwd);
+        let node = graph
+            .node_by_id("concept:batch_source_normalized")
+            .expect("normalized source node");
+        assert_eq!(node.source_files, vec!["DOC /tmp/source.md".to_owned()]);
+    }
+
+    #[test]
+    fn kg_node_add_batch_applies_schema_validation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = dir.path();
+        write_test_graph_workspace(cwd);
+        fs::write(
+            cwd.join(".kg.schema.toml"),
+            "[node_types]\nallowed = [\"Process\"]\n",
+        )
+        .expect("write schema");
+
+        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
+        let result = server
+            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
+                graph: "fridge".to_owned(),
+                mode: Some("best_effort".to_owned()),
+                on_conflict: None,
+                nodes: vec![NodeAddBatchItem {
+                    id: "concept:schema_rejected".to_owned(),
+                    node_type: "Concept".to_owned(),
+                    name: "Schema Rejected".to_owned(),
+                    description: None,
+                    domain_area: None,
+                    provenance: None,
+                    confidence: None,
+                    created_at: None,
+                    importance: None,
+                    facts: vec![],
+                    aliases: vec![],
+                    sources: vec!["DOC /tmp/source.md".to_owned()],
+                }],
+            }))
+            .expect("node batch result");
+
+        assert_eq!(result.is_error, Some(true));
+        let content = KgMcpServer::render_text_content(&result);
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(
+            structured["created"]
+                .as_array()
+                .expect("created array")
+                .len(),
+            0
+        );
+        assert_eq!(
+            structured["failed"].as_array().expect("failed array").len(),
+            1
+        );
+        assert!(content.contains("ERROR (created=0 skipped=0 failed=1)"));
+        assert!(content.contains("node type 'Concept' is not allowed by schema"));
+
+        let graph = load_test_graph(cwd);
+        assert!(graph.node_by_id("concept:schema_rejected").is_none());
+    }
+
+    #[test]
     fn kg_node_add_batch_content_lists_all_failures() {
         let dir = tempfile::tempdir().expect("tempdir");
         let cwd = dir.path();
@@ -4415,7 +4582,7 @@ mod tests {
                         importance: None,
                         facts: vec![],
                         aliases: vec![],
-                        sources: vec!["WRONGSOURCE".to_owned()],
+                        sources: vec!["   ".to_owned()],
                     },
                 ],
             }))

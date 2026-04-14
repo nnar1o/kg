@@ -1,21 +1,21 @@
-# kg v0.2.12
+# kg v0.2.14
 
-`kg-mcp` is a lightweight local alternative to classic RAG systems when you want structured, editable, git-friendly project memory instead of document chunk retrieval.
+`kg-mcp` now handles batch writes much closer to single-command behavior and reports failures in a way that is actionable for MCP clients.
 
-This release focuses on CLI correctness and smoother graph authoring defaults: stats no longer include internal metadata nodes, and the documented minimal `node add` command now works out of the box.
+This release focuses on reliability and diagnostics for batch node/feedback operations.
 
 ## Highlights
 
-- exclude internal `^:graph_info` metadata nodes from `kg graph <graph> stats` counts and type breakdowns
-- make minimal `kg graph <graph> node add <id> --type <Type> --name <Name>` apply safe metadata defaults
-- keep validation guarantees while removing the UX mismatch between optional-looking flags and runtime-required metadata
-- add integration coverage for the minimal `node add` path and stats behavior
+- apply schema validation in `kg_node_add_batch`, matching single `node add` expectations
+- normalize explicit batch `sources` using the same rules as single add
+- fix feedback batch accounting so graph update failures are counted and reported as real failures
+- standardize batch summaries to `OK`/`ERROR` with per-item failure lines (no more confusing `Error: OK (...)`)
 
 ## Why this release matters
 
-- `stats` now reflects user-authored graph content instead of internal bookkeeping nodes
-- onboarding and docs-aligned `node add` commands now work without trial-and-error metadata flags
-- regressions are covered with smoke/integration tests to keep these paths stable
+- batch and single-node add behavior is now consistent for schema-enforced projects
+- MCP clients can show precise failure diagnostics without losing successful items
+- operators can trust batch feedback status counters when partial graph updates fail
 
 ## Installation
 

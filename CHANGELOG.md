@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.14] - 2026-04-14
+
+### Fixed
+- align `kg-mcp` `kg_node_add_batch` with single-node add schema behavior by applying schema validation before persist in batch mode
+- normalize explicit `sources` in batch add to match single-add semantics and keep source references consistent
+- make MCP feedback batch accounting treat graph update failures as failed items with clear error output
+- return explicit `ERROR (...)` summaries with per-item failure lines for node/feedback batch outputs to avoid ambiguous `Error: OK (...)` client messages
+
+## [0.2.13] - 2026-04-14
+
+### Changed
+- rebalance `node find` ranking to reduce hub/neighbor dominance by separating self-match and neighbor-context BM25 scoring with explicit weighting
+- add IDF-aware lexical boost, proximity boost, and fact-volume normalization to improve relevance on large, dense graphs
+- sort rendered link lists in compact/adaptive/full find outputs by query relevance when a query is present
+
+### Fixed
+- stabilize adaptive find/get rendering parity integration checks by normalizing link-line order in tests where query-relevance sorting is expected
+
 ## [0.2.12] - 2026-04-13
 
 ### Fixed

@@ -99,6 +99,17 @@ pub(crate) fn bail_on_schema_violations(violations: &[SchemaViolation]) -> Resul
     Ok(())
 }
 
+pub fn validate_node_add_with_schema(cwd: &Path, node: &Node) -> Result<()> {
+    let schema = GraphSchema::discover(cwd)
+        .with_context(|| format!("failed to discover schema from {}", cwd.display()))?
+        .map(|(_, schema)| schema);
+    if let Some(schema) = schema.as_ref() {
+        let violations = schema.validate_node_add(node);
+        bail_on_schema_violations(&violations)?;
+    }
+    Ok(())
+}
+
 fn validate_graph_with_schema(graph: &GraphFile, schema: &GraphSchema) -> Vec<SchemaViolation> {
     let mut all_violations = Vec::new();
     for node in &graph.nodes {

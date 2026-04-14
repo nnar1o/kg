@@ -21,6 +21,26 @@ fn strip_score_lines(output: &str) -> String {
         .join("\n")
 }
 
+fn normalize_link_order(output: &str) -> String {
+    let mut lines: Vec<&str> = output.lines().collect();
+    let mut indices = Vec::new();
+    let mut links = Vec::new();
+
+    for (idx, line) in lines.iter().enumerate() {
+        if line.starts_with("-> ") || line.starts_with("<- ") {
+            indices.push(idx);
+            links.push(*line);
+        }
+    }
+
+    links.sort_unstable();
+    for (slot, idx) in indices.into_iter().enumerate() {
+        lines[idx] = links[slot];
+    }
+
+    lines.join("\n")
+}
+
 fn parse_find_header_counts(output: &str) -> (usize, usize) {
     let header = output.lines().next().expect("find header");
     let counts = header
@@ -282,7 +302,10 @@ fn find_single_result_matches_get_full_rendering() {
 
     let find_body = strip_find_wrapper(&find_output);
     assert!(find_body.contains("score: "));
-    assert_eq!(strip_score_lines(&find_body).trim(), get_output.trim());
+    assert_eq!(
+        normalize_link_order(&strip_score_lines(&find_body)).trim(),
+        normalize_link_order(&get_output).trim()
+    );
 }
 
 #[test]
@@ -319,7 +342,10 @@ fn find_single_result_matches_get_adaptive_rendering() {
 
     let find_body = strip_find_wrapper(&find_output);
     assert!(find_body.contains("score: "));
-    assert_eq!(strip_score_lines(&find_body).trim(), get_output.trim());
+    assert_eq!(
+        normalize_link_order(&strip_score_lines(&find_body)).trim(),
+        normalize_link_order(&get_output).trim()
+    );
 }
 
 #[test]
