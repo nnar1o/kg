@@ -359,6 +359,18 @@ fn list_graphs_shows_available_graph_names() {
 }
 
 #[test]
+fn list_graphs_scans_configured_additional_dirs() {
+    let dir = temp_workspace();
+    let extra = dir.path().join("extra-graphs");
+    write_fixture(&extra);
+    write_config(dir.path(), "graph_dirs = [\"extra-graphs\"]\n");
+
+    let output = exec_ok(&["kg", "list"], dir.path());
+    assert!(output.contains("= graphs (1)"));
+    assert!(output.contains("- fridge"));
+}
+
+#[test]
 fn note_list_shows_omitted_marker_with_limit() {
     let dir = temp_workspace();
     write_fixture(&test_graph_root(dir.path()));
@@ -631,6 +643,21 @@ fn resolve_graph_path_uses_config_mapping() {
         dir.path(),
     );
     assert!(output.contains("# concept:refrigerator | Lodowka"));
+}
+
+#[test]
+fn resolve_graph_path_uses_additional_scan_dirs() {
+    let dir = temp_workspace();
+    let extra = dir.path().join("extra-graphs");
+    write_fixture(&extra);
+    write_config(dir.path(), "graph_dirs = [\"extra-graphs\"]\n");
+
+    let output = exec_ok(
+        &["kg", "fridge", "node", "get", "concept:refrigerator"],
+        dir.path(),
+    );
+    assert!(output.contains("# concept:refrigerator | Lodowka"));
+    assert!(extra.join("fridge.kg").exists());
 }
 
 #[test]

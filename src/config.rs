@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,6 +12,8 @@ pub struct KgConfig {
     pub backend: Option<String>,
     #[serde(default)]
     pub graph_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub graph_dirs: Vec<PathBuf>,
     #[serde(default, deserialize_with = "deserialize_nudge_percent")]
     pub nudge: Option<u8>,
     #[serde(default, deserialize_with = "deserialize_user_short_uid")]
@@ -38,9 +40,23 @@ impl KgConfig {
         toml::from_str(&raw).with_context(|| format!("invalid config TOML: {}", path.display()))
     }
 
-    pub fn graph_dir(&self, config_path: &Path) -> Option<PathBuf> {
+    pub fn graph_dirs(&self, config_path: &Path) -> Vec<PathBuf> {
         let base = config_path.parent().unwrap_or_else(|| Path::new("."));
-        self.graph_dir.as_ref().map(|dir| resolve_path(base, dir))
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        if let Some(dir) = self.graph_dir.as_ref() {
+            let resolved = resolve_path(base, dir);
+            if seen.insert(resolved.clone()) {
+                out.push(resolved);
+            }
+        }
+        for dir in &self.graph_dirs {
+            let resolved = resolve_path(base, dir);
+            if seen.insert(resolved.clone()) {
+                out.push(resolved);
+            }
+        }
+        out
     }
 
     pub fn graph_path(&self, config_path: &Path, name: &str) -> Option<PathBuf> {
@@ -197,6 +213,7 @@ mod tests {
     use super::{
         DEFAULT_NUDGE_PERCENT, KgConfig, normalize_user_short_uid, resolve_user_short_uid_with_env,
     };
+    use std::path::PathBuf;
 
     #[test]
     fn nudge_defaults_to_twenty() {
@@ -248,5 +265,25 @@ mod tests {
 
         let saved = std::fs::read_to_string(dir.path().join(".kg.toml")).expect("read config");
         assert!(saved.contains("user_short_uid = \""));
+    }
+
+    #[test]
+    fn graph_dirs_resolve_relative_paths_and_deduplicate() {
+        let config: KgConfig = toml::from_str(
+            "graph_dir = \"graphs\"\ngraph_dirs = [\"graphs\", \"extra\", \"/tmp/kg\"]\n",
+        )
+        .expect("config");
+
+        let config_path = PathBuf::from("/workspace/project/.kg.toml");
+        let dirs = config.graph_dirs(&config_path);
+
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/workspace/project/graphs"),
+                PathBuf::from("/workspace/project/extra"),
+                PathBuf::from("/tmp/kg"),
+            ]
+        );
     }
 }

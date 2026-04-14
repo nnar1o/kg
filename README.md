@@ -167,6 +167,30 @@ If uncertain, ask or add a note instead of inventing facts.
 
 ## Tips
 
+### Project config (`.kg.toml`)
+
+`kg` looks for `.kg.toml` in the current directory and its parent directories.
+
+Example:
+
+```toml
+backend = "json" # json backend writes native .kg files by default
+graph_dir = ".kg/graphs"
+graph_dirs = ["../shared-graphs", "../team-graphs"]
+nudge = 20
+user_short_uid = "dev_01"
+
+[graphs]
+payments = "graphs/payments.kg"
+```
+
+Notes:
+
+- `backend = "json"` is the default and prefers `.kg` text graphs.
+- `backend = "redb"` stores graphs in `.db` files.
+- `graph_dir` sets a primary graph directory.
+- `graph_dirs` adds extra directories scanned by `kg list` and graph resolution.
+
 ### Keep Graphs in Git
 
 The default graph directory is `~/.kg/graphs`.

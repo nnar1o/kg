@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.15] - 2026-04-15
+
+### Added
+- support `graph_dirs = ["..."]` in `.kg.toml` to add extra graph directories scanned during graph resolution and `kg list`
+
+### Changed
+- clarify config docs in README: `backend = "json"` is the default `.kg` text-graph runtime, while `backend = "redb"` stores `.db` files
+
 ## [0.2.14] - 2026-04-14
 
 ### Fixed

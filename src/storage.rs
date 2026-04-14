@@ -74,10 +74,11 @@ impl JsonGraphStore {
         })
     }
 
-    fn config_graph_dir(&self) -> Option<PathBuf> {
+    fn config_graph_dirs(&self) -> Vec<PathBuf> {
         self.config
             .as_ref()
-            .and_then(|(config_path, config)| config.graph_dir(config_path))
+            .map(|(config_path, config)| config.graph_dirs(config_path))
+            .unwrap_or_default()
     }
 
     fn config_graph_path(&self, graph: &str) -> Option<PathBuf> {
@@ -354,10 +355,11 @@ impl RedbGraphStore {
         })
     }
 
-    fn config_graph_dir(&self) -> Option<PathBuf> {
+    fn config_graph_dirs(&self) -> Vec<PathBuf> {
         self.config
             .as_ref()
-            .and_then(|(config_path, config)| config.graph_dir(config_path))
+            .map(|(config_path, config)| config.graph_dirs(config_path))
+            .unwrap_or_default()
     }
 
     fn config_graph_path(&self, graph: &str) -> Option<PathBuf> {
@@ -409,7 +411,7 @@ impl GraphStore for JsonGraphStore {
                 return Ok(path);
             }
         }
-        if let Some(config_graph_dir) = self.config_graph_dir() {
+        for config_graph_dir in self.config_graph_dirs() {
             let direct = config_graph_dir.join(graph);
             let json = config_graph_dir.join(format!("{graph}.json"));
             let kg = config_graph_dir.join(format!("{graph}.kg"));
@@ -455,9 +457,7 @@ impl GraphStore for JsonGraphStore {
 
     fn list_graphs(&self) -> Result<Vec<(String, PathBuf)>> {
         let mut dirs = vec![self.graph_root.clone(), self.cwd.join(".kg").join("graphs")];
-        if let Some(config_graph_dir) = self.config_graph_dir() {
-            dirs.push(config_graph_dir);
-        }
+        dirs.extend(self.config_graph_dirs());
         dirs.sort();
         dirs.dedup();
 
@@ -532,7 +532,7 @@ impl GraphStore for RedbGraphStore {
                 return Ok(path);
             }
         }
-        if let Some(config_graph_dir) = self.config_graph_dir() {
+        for config_graph_dir in self.config_graph_dirs() {
             let direct = config_graph_dir.join(graph);
             let db = config_graph_dir.join(format!("{graph}.db"));
             if direct.is_file() {
@@ -561,9 +561,7 @@ impl GraphStore for RedbGraphStore {
 
     fn list_graphs(&self) -> Result<Vec<(String, PathBuf)>> {
         let mut dirs = vec![self.graph_root.clone(), self.cwd.join(".kg").join("graphs")];
-        if let Some(config_graph_dir) = self.config_graph_dir() {
-            dirs.push(config_graph_dir);
-        }
+        dirs.extend(self.config_graph_dirs());
         dirs.sort();
         dirs.dedup();
 

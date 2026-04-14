@@ -1,6 +1,6 @@
 [package]
 name = "kg-cli"
-version = "0.2.14"
+version = "0.2.15"
 edition = "2024"
 description = "A knowledge graph CLI tool for managing structured information"
 license = "Apache-2.0"
