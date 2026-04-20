@@ -38,7 +38,7 @@ mkdir -p "$install_dir"
 
 for bin in $BINARIES; do
     asset="$bin-$target"
-    url="https://github.com/$OWNER/$REPO/releases/latest/download/$asset"
+    url="https://github.com/$OWNER/$REPO/releases/download/v0.2.15/$asset"
     echo "Downloading $bin..."
     curl -fsSL "$url" -o "$install_dir/$bin"
     chmod +x "$install_dir/$bin"
