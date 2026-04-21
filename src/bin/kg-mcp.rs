@@ -104,13 +104,20 @@ struct NodeAddArgs {
     created_at: Option<String>,
     #[serde(default)]
     importance: Option<f64>,
-    #[serde(default)]
+#[serde(default)]
     facts: Vec<String>,
     #[serde(default)]
     aliases: Vec<String>,
     #[serde(default)]
     sources: Vec<String>,
+    #[serde(default)]
+    valid_from: Option<String>,
+    #[serde(default)]
+    valid_to: Option<String>,
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct NodeRemoveArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct NodeModifyArgs {
@@ -154,6 +161,10 @@ struct EdgeAddArgs {
     target_id: String,
     #[serde(default)]
     detail: Option<String>,
+    #[serde(default)]
+    valid_from: Option<String>,
+    #[serde(default)]
+    valid_to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -163,6 +174,10 @@ struct EdgeAddBatchItem {
     target_id: String,
     #[serde(default)]
     detail: Option<String>,
+    #[serde(default)]
+    valid_from: Option<String>,
+    #[serde(default)]
+    valid_to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -307,6 +322,10 @@ struct NodeAddBatchItem {
     aliases: Vec<String>,
     #[serde(default)]
     sources: Vec<String>,
+    #[serde(default)]
+    valid_from: Option<String>,
+    #[serde(default)]
+    valid_to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -500,6 +519,8 @@ struct PreparedNodeBatchItem {
     facts: Vec<String>,
     aliases: Vec<String>,
     sources: Vec<String>,
+    valid_from: String,
+    valid_to: String,
 }
 
 fn prevalidate_node_batch_items(
@@ -523,6 +544,8 @@ fn prevalidate_node_batch_items(
             facts,
             aliases,
             sources,
+            valid_from,
+            valid_to,
         } = item;
 
         let id = match kg::canonicalize_node_id_for_type(&raw_id, &node_type) {
@@ -634,6 +657,8 @@ fn prevalidate_node_batch_items(
             facts,
             aliases,
             sources,
+            valid_from: valid_from.unwrap_or_default(),
+            valid_to: valid_to.unwrap_or_default(),
         });
     }
 
@@ -647,6 +672,8 @@ struct PreparedEdgeBatchItem {
     relation: String,
     target_id: String,
     detail: Option<String>,
+    valid_from: String,
+    valid_to: String,
 }
 
 fn prevalidate_edge_batch_items(
@@ -716,6 +743,8 @@ fn prevalidate_edge_batch_items(
             relation,
             target_id,
             detail: edge.detail,
+            valid_from: edge.valid_from.unwrap_or_default(),
+            valid_to: edge.valid_to.unwrap_or_default(),
         });
     }
 
@@ -1077,6 +1106,8 @@ impl KgMcpServer {
             target_id: edge.target_id.clone(),
             properties: kg::EdgeProperties {
                 detail: edge.detail.clone().unwrap_or_default(),
+                valid_from: edge.valid_from.clone(),
+                valid_to: edge.valid_to.clone(),
                 ..kg::EdgeProperties::default()
             },
         });
@@ -2401,7 +2432,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_node_add",
-        description = "Add a new node to a graph. Valid node_type: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug. ID must match <type_code>:snake_case (legacy <prefix>:snake_case also accepted). Prefer `kg` when combining multiple actions."
+        description = "Add a new node to a graph. Valid node_type: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug. Supports valid_from/valid_to for temporal validity. Prefer `kg` when combining multiple actions."
     )]
     fn kg_node_add(
         &self,
@@ -2463,12 +2494,20 @@ impl KgMcpServer {
             cmd.push("--source".to_owned());
             cmd.push(source);
         }
+        if let Some(valid_from) = args.valid_from {
+            cmd.push("--valid-from".to_owned());
+            cmd.push(valid_from);
+        }
+        if let Some(valid_to) = args.valid_to {
+            cmd.push("--valid-to".to_owned());
+            cmd.push(valid_to);
+        }
         self.execute_kg(cmd)
     }
 
     #[tool(
         name = "kg_node_modify",
-        description = "Modify an existing node. Prefer `kg` when combining multiple actions."
+        description = "Modify an existing node. Supports valid_from/valid_to for temporal validity. Prefer `kg` when combining multiple actions."
     )]
     fn kg_node_modify(
         &self,
@@ -2519,6 +2558,14 @@ impl KgMcpServer {
             cmd.push("--source".to_owned());
             cmd.push(source);
         }
+        if let Some(valid_from) = args.valid_from {
+            cmd.push("--valid-from".to_owned());
+            cmd.push(valid_from);
+        }
+        if let Some(valid_to) = args.valid_to {
+            cmd.push("--valid-to".to_owned());
+            cmd.push(valid_to);
+        }
         self.execute_kg(cmd)
     }
 
@@ -2540,7 +2587,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_edge_add",
-        description = "Add an edge between two nodes. Valid relations: HAS, STORED_IN, TRIGGERS, CREATED_BY, AFFECTED_BY, AVAILABLE_IN, DOCUMENTED_IN, DEPENDS_ON, TRANSITIONS, DECIDED_BY, GOVERNED_BY, USES, READS_FROM. Prefer `kg` when combining multiple actions."
+        description = "Add an edge between two nodes. Valid relations: HAS, STORED_IN, TRIGGERS, CREATED_BY, AFFECTED_BY, AVAILABLE_IN, DOCUMENTED_IN, DEPENDS_ON, TRANSITIONS, DECIDED_BY, GOVERNED_BY, USES, READS_FROM. Supports valid_from/valid_to for temporal validity. Prefer `kg` when combining multiple actions."
     )]
     fn kg_edge_add(
         &self,
@@ -2567,6 +2614,14 @@ impl KgMcpServer {
         if let Some(detail) = args.detail {
             cmd.push("--detail".to_owned());
             cmd.push(detail);
+        }
+        if let Some(valid_from) = args.valid_from {
+            cmd.push("--valid-from".to_owned());
+            cmd.push(valid_from);
+        }
+        if let Some(valid_to) = args.valid_to {
+            cmd.push("--valid-to".to_owned());
+            cmd.push(valid_to);
         }
         self.execute_kg(cmd)
     }
