@@ -480,7 +480,7 @@ fn matches_node(node: &Node, filter: &Filter) -> bool {
         "domain" | "domain_area" => compare(&node.properties.domain_area, filter),
         "provenance" => compare(&node.properties.provenance, filter),
         "alias" => compare_list(&node.properties.alias, filter),
-        "fact" | "key_fact" => compare_list(&node.properties.key_facts, filter),
+        "fact" | "key_fact" | "facts" => compare_list(&node.properties.key_facts, filter),
         "source" | "source_file" => compare_list(&node.source_files, filter),
         "confidence" => {
             if let Some(c) = node.properties.confidence {
