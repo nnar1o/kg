@@ -112,6 +112,37 @@ pub(crate) fn execute_kql(graph: &GraphFile, args: KqlArgs) -> Result<String> {
     }
 }
 
+/// Execute list command - convenience wrapper around KQL
+pub(crate) fn execute_list(graph: &GraphFile, args: &crate::cli::ListArgs) -> Result<String> {
+    // Build KQL query from list arguments
+    let mut query = String::from("node");
+
+    // Add type filter
+    if let Some(ref node_type) = args.r#type {
+        if !node_type.is_empty() {
+            query.push_str(&format!(" type={}", node_type));
+        }
+    }
+
+    // Add since filter (created_at >= date)
+    if let Some(ref since) = args.since {
+        if !since.is_empty() {
+            query.push_str(&format!(" created_at>={}", since));
+        }
+    }
+
+    // Add sorting and limit
+    query.push_str(" sort=-created_at");
+    if let Some(limit) = args.limit {
+        query.push_str(&format!(" limit={}", limit));
+    } else {
+        query.push_str(" limit=50");
+    }
+
+    // Execute via KQL
+    kql::render_query(graph, &query)
+}
+
 pub(crate) fn execute_feedback_summary(
     cwd: &Path,
     graph_name: &str,

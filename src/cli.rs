@@ -158,6 +158,8 @@ pub enum GraphCommand {
     },
     #[command(about = "Show graph statistics")]
     Stats(StatsArgs),
+    #[command(name = "list", about = "List all nodes with optional filters (KQL-based)")]
+    List(ListArgs),
     #[command(about = "Run integrity validation checks")]
     Check(CheckArgs),
     #[command(about = "Run deep audit validation checks")]
@@ -186,6 +188,8 @@ pub enum GraphCommand {
     AccessLog(AccessLogArgs),
     #[command(name = "access-stats", about = "Show access log statistics")]
     AccessStats(AccessStatsArgs),
+    #[command(name = "access-paths", about = "Detect query paths from access logs")]
+    AccessPaths(AccessLogArgs),
     #[command(name = "import-csv", about = "Import nodes/edges/notes from CSV")]
     ImportCsv(ImportCsvArgs),
     #[command(name = "import-md", about = "Import nodes/notes from Markdown")]
@@ -249,6 +253,18 @@ pub struct ScoreAllArgs {
     pub membership_top_k: usize,
 }
 
+#[derive(Debug, Args, Clone)]
+pub struct ListArgs {
+    #[arg(long, help = "Filter by node type, e.g. Bug, Feature, Concept")]
+    pub r#type: Option<String>,
+    #[arg(long, short = 's', help = "Show nodes created after this date (YYYY-MM-DD)")]
+    pub since: Option<String>,
+    #[arg(long, short = 'l', help = "Limit number of results")]
+    pub limit: Option<usize>,
+    #[arg(long, help = "Output fields: id, name, type, created_at (comma-separated)")]
+    pub fields: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ClusterSkill {
     Gardener,
@@ -270,6 +286,10 @@ pub struct AccessLogArgs {
     pub limit: usize,
     #[arg(long)]
     pub show_empty: bool,
+    #[arg(long)]
+    pub paths: bool,
+    #[arg(long, default_value_t = 5)]
+    pub time_window: usize,
 }
 
 #[derive(Debug, Args)]
@@ -693,6 +713,10 @@ pub struct AddNodeArgs {
     pub alias: Vec<String>,
     #[arg(long = "source")]
     pub source: Vec<String>,
+    #[arg(long)]
+    pub valid_from: Option<String>,
+    #[arg(long)]
+    pub valid_to: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -720,6 +744,10 @@ pub struct ModifyNodeArgs {
     pub alias: Vec<String>,
     #[arg(long = "source")]
     pub source: Vec<String>,
+    #[arg(long)]
+    pub valid_from: Option<String>,
+    #[arg(long)]
+    pub valid_to: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -729,6 +757,10 @@ pub struct AddEdgeArgs {
     pub target_id: String,
     #[arg(long, default_value = "")]
     pub detail: String,
+    #[arg(long)]
+    pub valid_from: Option<String>,
+    #[arg(long)]
+    pub valid_to: Option<String>,
 }
 
 #[derive(Debug, Args)]

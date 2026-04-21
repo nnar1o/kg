@@ -18,6 +18,8 @@ This document describes all fields stored in graph nodes and edges.
 | `confidence` | number \| null | No | Confidence score for node correctness. | Numeric score; exact scale is policy-defined. | `0.92` |
 | `importance` | integer \| null | No | Relative importance or priority. | Integer range `0..255`. | `180` |
 | `created_at` | string \| null | No | Creation timestamp metadata. | Typically ISO-8601 format. | `2026-04-10T12:30:00Z` |
+| `valid_from` | string \| null | No | Start of validity period for facts. | Empty = valid from beginning. | `2026-01-01` |
+| `valid_to` | string \| null | No | End of validity period for facts. | Empty = still valid (current). | `2026-04-01` |
 
 ## Edge Fields
 
@@ -27,6 +29,8 @@ This document describes all fields stored in graph nodes and edges.
 | `target_id` | string | Yes | ID of the target node (edge end). | Must reference an existing node ID. | `datastore:graph_db` |
 | `relation` | enum(string) | Yes | Relationship type between source and target. | Must be one of the allowed relation values. | `READS_FROM` |
 | `detail` | string \| null | No | Additional context for the relationship. | Optional free-text clarification. | `Reads incremental updates every 5 minutes` |
+| `valid_from` | string \| null | No | Start of validity period for the relationship. | Empty = valid from beginning. | `2026-01-01` |
+| `valid_to` | string \| null | No | End of validity period for the relationship. | Empty = still valid (current). | `2026-04-01` |
 
 ## Allowed Edge Relation Values
 

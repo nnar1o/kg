@@ -51,6 +51,8 @@ pub fn modify_node(
     facts: Vec<String>,
     aliases: Vec<String>,
     sources: Vec<String>,
+    valid_from: Option<String>,
+    valid_to: Option<String>,
 ) -> Result<()> {
     let idx = graph
         .nodes
@@ -93,6 +95,12 @@ pub fn modify_node(
     }
     for source in sources {
         push_unique(&mut updated.source_files, source);
+    }
+    if let Some(v) = valid_from {
+        updated.properties.valid_from = v;
+    }
+    if let Some(v) = valid_to {
+        updated.properties.valid_to = v;
     }
 
     normalize_sources(&mut updated.source_files);

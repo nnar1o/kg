@@ -1295,6 +1295,10 @@ pub struct NodeProperties {
     #[serde(default)]
     pub alias: Vec<String>,
     #[serde(default)]
+    pub valid_from: String,
+    #[serde(default)]
+    pub valid_to: String,
+    #[serde(default)]
     pub feedback_score: f64,
     #[serde(default)]
     pub feedback_count: u64,
@@ -1317,6 +1321,8 @@ impl Default for NodeProperties {
             importance: default_importance(),
             key_facts: Vec::new(),
             alias: Vec::new(),
+            valid_from: String::new(),
+            valid_to: String::new(),
             feedback_score: 0.0,
             feedback_count: 0,
             feedback_last_ts_ms: None,

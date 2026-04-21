@@ -69,6 +69,8 @@ struct NodeFindArgs {
     #[serde(default)]
     skip_feedback: bool,
     #[serde(default)]
+    with_feedback: bool,
+    #[serde(default)]
     debug: bool,
 }
 
@@ -893,6 +895,11 @@ impl KgMcpServer {
                 let stderr = kg::format_error_chain(&err);
                 let duration_ms = started_at.elapsed().as_millis();
                 let (code, message, kind, exit_code) = classify_kg_error(&stderr);
+                let hint = if kind == "parse_error" {
+                    semantic_error_hint(&stderr)
+                } else {
+                    error_hint(kind).to_string()
+                };
                 let mut data = json!({
                     "tool": tool_name,
                     "operation": operation,
@@ -902,7 +909,7 @@ impl KgMcpServer {
                     "exit_code": exit_code,
                     "stdout_tail": "",
                     "stderr_tail": last_lines(&stderr, 30),
-                    "hint": error_hint(kind),
+                    "hint": hint,
                 });
                 if debug_enabled {
                     data["debug"] = json!({
@@ -1438,7 +1445,7 @@ impl KgMcpServer {
                     Some(json!({ "reason": "previous tool panicked" })),
                 )
             })?;
-            cleanup_old_finds(&mut state.finds, now_ms, 10 * 60 * 1000);
+            cleanup_old_finds(&mut state.finds, now_ms, get_feedback_ttl_ms());
 
             for (line, parsed) in entries {
                 let source = if line.contains("passive=1") {
@@ -1569,7 +1576,16 @@ impl KgMcpServer {
     fn handle_node_find(&self, args: NodeFindArgs) -> Result<CallToolResult, McpError> {
         let graph = args.graph.clone();
         let queries = args.queries.clone();
-        let skip_feedback = args.skip_feedback;
+
+        // Compute effective skip_feedback:
+        // - skip_feedback=true (explicit)
+        // - limit=1 (single result = lookup, not training)
+        // - NOT with_feedback (explicit request for feedback)
+        let explicit_skip = args.skip_feedback;
+        let limit_one = args.limit == Some(1);
+        let with_feedback_requested = args.with_feedback;
+        let effective_skip_feedback = explicit_skip || limit_one || !with_feedback_requested;
+
         let mut cmd = vec![args.graph, "node".to_owned(), "find".to_owned()];
         cmd.extend(args.queries);
         if let Some(limit) = args.limit {
@@ -1599,7 +1615,7 @@ impl KgMcpServer {
             candidate_ids.truncate(25);
         }
 
-        if skip_feedback {
+        if effective_skip_feedback {
             let mut output = rendered;
             if !output.ends_with('\n') {
                 output.push('\n');
@@ -1625,7 +1641,7 @@ impl KgMcpServer {
                     Some(json!({ "reason": "previous tool panicked" })),
                 )
             })?;
-            cleanup_old_finds(&mut state.finds, Self::now_ms(), 10 * 60 * 1000);
+            cleanup_old_finds(&mut state.finds, Self::now_ms(), get_feedback_ttl_ms());
             state.finds.insert(
                 uid.clone(),
                 FindContext {
@@ -1744,7 +1760,7 @@ impl KgMcpServer {
                     Some(json!({ "reason": "previous tool panicked" })),
                 )
             })?;
-            cleanup_old_finds(&mut state.finds, Self::now_ms(), 10 * 60 * 1000);
+            cleanup_old_finds(&mut state.finds, Self::now_ms(), get_feedback_ttl_ms());
             state.finds.insert(
                 uid.clone(),
                 FindContext {
@@ -3400,6 +3416,8 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
     let mut output_size = None;
     let mut mode = None;
     let mut full = false;
+    let mut skip_feedback = false;
+    let mut with_feedback = false;
 
     let mut i = 3;
     while i < args.len() {
@@ -3448,6 +3466,29 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
             i += 1;
             continue;
         }
+        if token == "--skip-feedback" {
+            skip_feedback = true;
+            i += 1;
+            continue;
+        }
+        if token.starts_with("--skip-feedback=") {
+            // Support --skip-feedback=true/false
+            let value = token.strip_prefix("--skip-feedback=").unwrap();
+            skip_feedback = value == "true" || value == "1" || value.is_empty();
+            i += 1;
+            continue;
+        }
+        if token == "--with-feedback" {
+            with_feedback = true;
+            i += 1;
+            continue;
+        }
+        if token.starts_with("--with-feedback=") {
+            let value = token.strip_prefix("--with-feedback=").unwrap();
+            with_feedback = value == "true" || value == "1" || value.is_empty();
+            i += 1;
+            continue;
+        }
         if token.starts_with("--") {
             return Some(Err(format!("unknown option: {token}")));
         }
@@ -3466,7 +3507,8 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
         output_size,
         mode,
         full,
-        skip_feedback: false,
+        skip_feedback,
+        with_feedback,
         debug: false,
     }))
 }
@@ -3577,6 +3619,235 @@ fn error_hint(kind: &str) -> &'static str {
         "permission_denied" => "Verify file permissions and graph path access.",
         _ => "Inspect stderr_tail for details.",
     }
+}
+
+// ============================================================
+// Command registry for semantic error hints
+// ============================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandScope {
+    Global,
+    PerGraph,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandInfo {
+    pub name: &'static str,
+    pub scope: CommandScope,
+    pub description: &'static str,
+    pub example: &'static str,
+    pub aliases: &'static [&'static str],
+}
+
+impl CommandInfo {
+    const fn global(name: &'static str, desc: &'static str, example: &'static str, aliases: &'static [&'static str]) -> Self {
+        Self { name, scope: CommandScope::Global, description: desc, example, aliases }
+    }
+    const fn per_graph(name: &'static str, desc: &'static str, example: &'static str, aliases: &'static [&'static str]) -> Self {
+        Self { name, scope: CommandScope::PerGraph, description: desc, example, aliases }
+    }
+}
+
+pub const COMMAND_REGISTRY: &[CommandInfo] = &[
+    // Global commands
+    CommandInfo::global("schema", "Show graph schema (node types, relations, ID prefixes)", "kg schema", &[]),
+    CommandInfo::global("list", "List available graphs", "kg list", &["ls"]),
+    CommandInfo::per_graph("list", "List nodes with filters (KQL-based)", "kg graph mygraph list --type Bug --limit 20", &["ls", "list-nodes"]),
+    CommandInfo::global("create", "Create a new graph", "kg create mygraph", &[]),
+    CommandInfo::global("check", "Validate graph integrity", "kg graph mygraph check", &[]),
+    CommandInfo::global("audit", "Deep audit with quality checks", "kg graph mygraph audit", &[]),
+    CommandInfo::global("stats", "Show graph statistics", "kg graph mygraph stats", &[]),
+    CommandInfo::global("help", "Show help for a command", "kg help <command>", &[]),
+
+    // Per-graph commands
+    CommandInfo::per_graph("node find", "Find nodes by query", "kg graph mygraph node find 'query'", &["find"]),
+    CommandInfo::per_graph("node get", "Get a specific node by ID", "kg graph mygraph node get concept:foo", &["get"]),
+    CommandInfo::per_graph("node add", "Add a new node", "kg graph mygraph node add feature:foo --name 'Foo Feature' --type Feature", &["add"]),
+    CommandInfo::per_graph("node modify", "Modify an existing node", "kg graph mygraph node modify concept:foo --description 'New desc'", &["modify", "update"]),
+    CommandInfo::per_graph("node remove", "Remove a node and its edges", "kg graph mygraph node remove concept:foo", &["remove", "delete"]),
+    CommandInfo::per_graph("edge add", "Add an edge between nodes", "kg graph mygraph edge add feature:foo DEPENDS_ON concept:bar", &[]),
+    CommandInfo::per_graph("edge remove", "Remove an edge", "kg graph mygraph edge remove feature:foo DEPENDS_ON concept:bar", &[]),
+    CommandInfo::per_graph("kql", "Query with KQL language", r#"kg graph mygraph kql "node type=Feature sort=-created_at""#, &["query"]),
+    CommandInfo::per_graph("quality", "Run quality checks", "kg graph mygraph quality duplicates", &[]),
+    CommandInfo::per_graph("note list", "List all notes", "kg graph mygraph note list", &[]),
+    CommandInfo::per_graph("note add", "Add a note to a node", "kg graph mygraph note add concept:foo --text 'Note text'", &[]),
+    CommandInfo::per_graph("export-html", "Export graph as interactive HTML", "kg graph mygraph export-html --output report.html", &[]),
+];
+
+/// Suggests a similar command name based on edit distance
+fn suggest_command(unknown: &str, stderr: &str) -> Option<String> {
+    let unknown_lower = unknown.to_ascii_lowercase();
+
+    // Check if this looks like a schema command in wrong scope
+    if unknown_lower == "schema" || unknown_lower == "graph schema" {
+        return Some("Did you mean 'kg schema' (global command, not per-graph)? Example: kg schema".to_string());
+    }
+
+    // Find best match in registry
+    let mut best: Option<(&CommandInfo, usize)> = None; // (command, distance)
+
+    for cmd in COMMAND_REGISTRY {
+        let name_lower = cmd.name.to_ascii_lowercase();
+
+        // Exact match on name or alias
+        if name_lower == unknown_lower {
+            return Some(format!("Did you mean '{cmd}'? Run 'kg help {cmd}' for examples."));
+        }
+
+        for alias in cmd.aliases {
+            if alias.to_ascii_lowercase() == unknown_lower {
+                return Some(format!("Did you mean '{cmd}'? Run 'kg help {cmd}' for examples."));
+            }
+        }
+
+        // Check if the unknown might be a partial match (first word matches)
+        if let Some(first_word) = unknown.split_whitespace().next() {
+            if cmd.name.to_ascii_lowercase().starts_with(&first_word.to_ascii_lowercase()) {
+                return Some(format!("Did you mean '{cmd}'?"));
+            }
+        }
+
+        // Levenshtein distance for fuzzy matching
+        let dist = edit_distance(&unknown_lower, &name_lower);
+        if dist <= 3 {
+            match &best {
+                None => best = Some((cmd, dist)),
+                Some((_, best_dist)) if dist < *best_dist => best = Some((cmd, dist)),
+                _ => {}
+            }
+        }
+    }
+
+    best.map(|(cmd, _)| {
+        if cmd.scope == CommandScope::Global {
+            format!("Did you mean '{cmd}' (global command)? Example: {cmd}", cmd.name, cmd.example)
+        } else {
+            format!("Did you mean '{cmd}'? Example: {cmd}", cmd.name, cmd.example)
+        }
+    })
+}
+
+/// Calculate Levenshtein edit distance between two strings
+fn edit_distance(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+
+    let m = a_chars.len();
+    let n = b_chars.len();
+
+    if m == 0 {
+        return n;
+    }
+    if n == 0 {
+        return m;
+    }
+
+    let mut matrix = vec![vec![0usize; n + 1]; m + 1];
+
+    for i in 0..=m {
+        matrix[i][0] = i;
+    }
+    for j in 0..=n {
+        matrix[0][j] = j;
+    }
+
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            matrix[i][j] = std::cmp::min(
+                std::cmp::min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1),
+                matrix[i - 1][j - 1] + cost,
+            );
+        }
+    }
+
+    matrix[m][n]
+}
+
+/// Extract the unknown command name from stderr
+fn extract_unknown_command(stderr: &str) -> Option<String> {
+    let lines: Vec<&str> = stderr.lines().collect();
+
+    // Look for "unrecognized subcommand 'X'" pattern
+    for line in &lines {
+        if line.contains("unrecognized subcommand") {
+            if let Some(pos) = line.find("unrecognized subcommand") {
+                let rest = &line[pos + "unrecognized subcommand".len()..];
+                // Extract the quoted or next word
+                let rest = rest.trim_start_matches('\'');
+                if let Some(end) = rest.find('\'') {
+                    return Some(rest[..end].to_string());
+                }
+                let rest = rest.trim_start_matches('"');
+                if let Some(end) = rest.find('"') {
+                    return Some(rest[..end].to_string());
+                }
+                let rest = rest.trim();
+                if !rest.is_empty() {
+                    return Some(rest.split_whitespace().next().unwrap().to_string());
+                }
+            }
+        }
+
+        // Look for "expected 'X' but found 'Y'" pattern
+        if line.contains("expected") && line.contains("but found") {
+            if let Some(pos) = line.find("expected") {
+                let rest = &line[pos + "expected".len()..];
+                let rest = rest.trim_start_matches('\'');
+                if let Some(end) = rest.find('\'') {
+                    let expected = &rest[..end];
+                    // Check if it looks like a command name (has space or subcommand keywords)
+                    if expected.contains(' ') || expected == "schema" || expected == "node" || expected == "kql" {
+                        return Some(expected.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Look for "unknown command" pattern
+    for line in &lines {
+        if line.contains("unknown command") || line.contains("invalid request") {
+            if let Some(pos) = std::cmp::max(
+                line.find("unknown command").unwrap_or(usize::MAX),
+                line.find("invalid request").unwrap_or(usize::MAX),
+            ) {
+                let rest = &line[pos..];
+                let rest = rest.split_whitespace().skip(2).collect::<Vec<_>>();
+                if let Some(first) = rest.first() {
+                    return Some(first.to_string());
+                }
+            }
+        }
+    }
+
+    // Try to extract command name from "Usage:" line
+    for line in &lines {
+        if line.contains("Usage:") || line.contains("Usage: kg") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if let Some(pos) = parts.iter().position(|&p| p == "kg") {
+                if let Some(cmd) = parts.get(pos + 1) {
+                    return Some(cmd.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Get semantic hint for an error, including command suggestions
+pub fn semantic_error_hint(stderr: &str) -> String {
+    // Try to extract the problematic command
+    if let Some(unknown) = extract_unknown_command(stderr) {
+        if let Some(suggestion) = suggest_command(&unknown, stderr) {
+            return suggestion;
+        }
+    }
+
+    // Fallback to basic hint
+    error_hint("parse_error").to_string()
 }
 
 fn last_lines(input: &str, max_lines: usize) -> String {
@@ -3868,8 +4139,23 @@ fn parse_feedback_line(line: &str) -> Option<ParsedFeedback> {
     }
 }
 
+/// Feedback TTL in milliseconds (default: 10 minutes)
+/// Can be configured via feedback.ttl_seconds in config
+const DEFAULT_FEEDBACK_TTL_MS: u128 = 10 * 60 * 1000;
+
 fn cleanup_old_finds(finds: &mut HashMap<String, FindContext>, now_ms: u128, ttl_ms: u128) {
     finds.retain(|_, ctx| now_ms.saturating_sub(ctx.created_at_ms) <= ttl_ms);
+}
+
+/// Get feedback TTL from config or default (60 seconds)
+fn get_feedback_ttl_ms() -> u128 {
+    // TODO: Load from config file
+    // For now, use 60 seconds (configurable via feedback.ttl_seconds)
+    std::env::var("KG_FEEDBACK_TTL_SECONDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(|s| (s as u128) * 1000)
+        .unwrap_or(DEFAULT_FEEDBACK_TTL_MS)
 }
 
 #[cfg(test)]
@@ -3988,6 +4274,48 @@ mod tests {
         ];
         let parsed = parse_node_find_args(&args).expect("match").expect("ok");
         assert_eq!(parsed.output_size, Some(900));
+    }
+
+    #[test]
+    fn parse_node_find_args_parses_skip_feedback() {
+        // Test --skip-feedback flag (no value)
+        let args = vec![
+            "fridge".to_owned(),
+            "node".to_owned(),
+            "find".to_owned(),
+            "lodowka".to_owned(),
+            "--skip-feedback".to_owned(),
+        ];
+        let parsed = parse_node_find_args(&args).expect("match").expect("ok");
+        assert!(parsed.skip_feedback);
+    }
+
+    #[test]
+    fn parse_node_find_args_parses_skip_feedback_true() {
+        // Test --skip-feedback=true
+        let args = vec![
+            "fridge".to_owned(),
+            "node".to_owned(),
+            "find".to_owned(),
+            "lodowka".to_owned(),
+            "--skip-feedback=true".to_owned(),
+        ];
+        let parsed = parse_node_find_args(&args).expect("match").expect("ok");
+        assert!(parsed.skip_feedback);
+    }
+
+    #[test]
+    fn parse_node_find_args_parses_skip_feedback_false() {
+        // Test --skip-feedback=false (should be false)
+        let args = vec![
+            "fridge".to_owned(),
+            "node".to_owned(),
+            "find".to_owned(),
+            "lodowka".to_owned(),
+            "--skip-feedback=false".to_owned(),
+        ];
+        let parsed = parse_node_find_args(&args).expect("match").expect("ok");
+        assert!(!parsed.skip_feedback);
     }
 
     #[test]
@@ -4599,6 +4927,122 @@ mod tests {
         assert!(content.contains("ERROR (created=0 skipped=0 failed=2)"));
         assert!(content.contains("- node concept:bad_conf failed:"));
         assert!(content.contains("- node concept:bad_source failed:"));
+    }
+
+    // ============================================================
+    // Semantic error hint tests
+    // ============================================================
+
+    #[test]
+    fn suggest_command_exact_match_schema() {
+        let suggestion = suggest_command("schema", "unknown").expect("suggestion");
+        assert!(suggestion.contains("kg schema") || suggestion.contains("schema"));
+    }
+
+    #[test]
+    fn suggest_command_finds_similar_by_prefix() {
+        let suggestion = suggest_command("nod", "unknown").expect("suggestion");
+        assert!(suggestion.contains("node") || suggestion.contains("Did you mean"));
+    }
+
+    #[test]
+    fn suggest_command_handles_empty() {
+        let suggestion = suggest_command("", "unknown");
+        assert!(suggestion.is_none());
+    }
+
+    #[test]
+    fn extract_unknown_command_unrecognized_subcommand() {
+        let stderr = "error: unrecognized subcommand 'foo'\n\nUsage: kg graph <name> <command>";
+        let result = extract_unknown_command(stderr);
+        assert_eq!(result, Some("foo".to_string()));
+    }
+
+    #[test]
+    fn extract_unknown_command_quoted() {
+        let stderr = "error: unrecognized subcommand 'schema' in 'graph' context";
+        let result = extract_unknown_command(stderr);
+        assert_eq!(result, Some("schema".to_string()));
+    }
+
+    #[test]
+    fn semantic_error_hint_schema_command_suggests_kg_schema() {
+        let stderr = "error: unrecognized subcommand 'schema'\nUsage: kg graph <name> <command>";
+        let hint = semantic_error_hint(stderr);
+        assert!(hint.contains("kg schema") || hint.contains("global"));
+    }
+
+    #[test]
+    fn semantic_error_hint_unknown_command_gives_suggestion() {
+        let stderr = "error: unrecognized subcommand 'kqlx'\nUsage: kg graph <name> <command>";
+        let hint = semantic_error_hint(stderr);
+        assert!(hint.contains("kql") || hint.contains("Did you mean"));
+    }
+
+    #[test]
+    fn semantic_error_hint_fallback_for_misc_errors() {
+        let stderr = "some unrelated error message";
+        let hint = semantic_error_hint(stderr);
+        assert!(!hint.is_empty());
+    }
+
+    #[test]
+    fn edit_distance_identical() {
+        assert_eq!(edit_distance("hello", "hello"), 0);
+    }
+
+    #[test]
+    fn edit_distance_single_insertion() {
+        assert_eq!(edit_distance("hello", "helo"), 1);
+    }
+
+    #[test]
+    fn edit_distance_single_deletion() {
+        assert_eq!(edit_distance("helo", "hello"), 1);
+    }
+
+    #[test]
+    fn edit_distance_single_substitution() {
+        assert_eq!(edit_distance("helo", "hero"), 1);
+    }
+
+    #[test]
+    fn edit_distance_empty_strings() {
+        assert_eq!(edit_distance("", ""), 0);
+        assert_eq!(edit_distance("hello", ""), 5);
+        assert_eq!(edit_distance("", "hello"), 5);
+    }
+
+    #[test]
+    fn command_registry_has_all_commands() {
+        // Verify registry contains expected commands
+        let names: Vec<_> = COMMAND_REGISTRY.iter().map(|c| c.name).collect();
+        assert!(names.contains(&"schema"));
+        assert!(names.contains(&"node find"));
+        assert!(names.contains(&"node get"));
+        assert!(names.contains(&"kql"));
+        assert!(names.contains(&"check"));
+    }
+
+    #[test]
+    fn command_registry_scope_classification() {
+        // Global commands should have Global scope
+        let global_cmds = COMMAND_REGISTRY
+            .iter()
+            .filter(|c| c.scope == CommandScope::Global)
+            .map(|c| c.name)
+            .collect::<Vec<_>>();
+        assert!(global_cmds.contains(&"schema"));
+        assert!(global_cmds.contains(&"list"));
+
+        // Per-graph commands should have PerGraph scope
+        let pergraph_cmds = COMMAND_REGISTRY
+            .iter()
+            .filter(|c| c.scope == CommandScope::PerGraph)
+            .map(|c| c.name)
+            .collect::<Vec<_>>();
+        assert!(pergraph_cmds.contains(&"node find"));
+        assert!(pergraph_cmds.contains(&"kql"));
     }
 }
 

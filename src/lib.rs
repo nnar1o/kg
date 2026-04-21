@@ -63,7 +63,7 @@ use app::graph_node_edge::{GraphCommandContext, execute_edge, execute_node};
 use app::graph_note::{GraphNoteContext, execute_note};
 use app::graph_query_quality::{
     execute_audit, execute_baseline, execute_check, execute_duplicates, execute_edge_gaps,
-    execute_feedback_log, execute_feedback_summary, execute_kql, execute_missing_descriptions,
+    execute_feedback_log, execute_feedback_summary, execute_kql, execute_list, execute_missing_descriptions,
     execute_missing_facts, execute_quality, execute_stats,
 };
 use app::graph_transfer_temporal::{
@@ -379,6 +379,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                 ),
 
                 GraphCommand::Stats(args) => Ok(execute_stats(&graph_file, &args)),
+                GraphCommand::List(args) => Ok(execute_list(&graph_file, &args)),
                 GraphCommand::Check(args) => Ok(execute_check(&graph_file, cwd, &args)),
                 GraphCommand::Audit(args) => Ok(execute_audit(&graph_file, cwd, &args)),
 
@@ -398,6 +399,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                 GraphCommand::AccessLog(args) => execute_access_log(&path, args),
 
                 GraphCommand::AccessStats(_) => execute_access_stats(&path),
+                GraphCommand::AccessPaths(args) => execute_access_paths(&path, args),
                 GraphCommand::ImportCsv(args) => execute_import_csv(
                     GraphTransferContext {
                         cwd,

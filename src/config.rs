@@ -20,6 +20,8 @@ pub struct KgConfig {
     pub user_short_uid: Option<String>,
     #[serde(default)]
     pub graphs: HashMap<String, PathBuf>,
+    #[serde(default)]
+    pub default_graph: Option<String>,
 }
 
 impl KgConfig {
@@ -67,6 +69,25 @@ impl KgConfig {
     pub fn nudge_percent(&self) -> u8 {
         self.nudge.unwrap_or(DEFAULT_NUDGE_PERCENT)
     }
+
+    /// Get default graph name from config or environment
+    /// Priority: KG_DEFAULT_GRAPH env > config.default_graph
+    pub fn default_graph(&self, cwd: &Path) -> Option<String> {
+        // Check env var first
+        let env_default = std::env::var("KG_DEFAULT_GRAPH").ok();
+        if let Some(graph) = env_default {
+            return Some(graph);
+        }
+        // Then config
+        self.default_graph.clone()
+    }
+}
+
+/// Get default graph name - checks env var and config
+pub fn resolve_default_graph(cwd: &Path) -> Option<String> {
+    KgConfig::discover(cwd)
+        .ok()
+        .flatten(|(_, cfg)| cfg.default_graph(cwd))
 }
 
 pub fn ensure_user_short_uid(cwd: &Path) -> String {

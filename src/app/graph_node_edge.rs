@@ -220,6 +220,8 @@ pub(crate) fn execute_node(
             fact,
             alias,
             source,
+            valid_from,
+            valid_to,
         }) => {
             let id = crate::validate::canonicalize_node_id_for_type(&id, &node_type)
                 .map_err(anyhow::Error::msg)?;
@@ -246,6 +248,8 @@ pub(crate) fn execute_node(
                     importance,
                     key_facts: fact,
                     alias,
+                    valid_from: valid_from.unwrap_or_default(),
+                    valid_to: valid_to.unwrap_or_default(),
                     ..NodeProperties::default()
                 },
                 source_files: source,
@@ -285,8 +289,14 @@ pub(crate) fn execute_node(
             fact,
             alias,
             source,
+            valid_from,
+            valid_to,
         }) => {
             let id = crate::validate::normalize_node_id(&id);
+
+            // Capture old state for diff
+            let old_node = context.graph_file.node_by_id(&id).cloned();
+
             modify_node(
                 context.graph_file,
                 &id,
@@ -301,6 +311,8 @@ pub(crate) fn execute_node(
                 fact.clone(),
                 alias.clone(),
                 source.clone(),
+                valid_from.clone(),
+                valid_to.clone(),
             )?;
             if let Some(schema) = context.schema {
                 if let Some(node) = context.graph_file.node_by_id(&id) {
@@ -315,7 +327,52 @@ pub(crate) fn execute_node(
                 Some(id.clone()),
                 context.graph_file,
             )?;
-            Ok(format!("~ node {id}\n"))
+
+            // Generate diff output
+            let mut diff_lines = vec![format!("~ node {id}")];
+
+            if let Some(old) = old_node {
+                if let Some(new) = context.graph_file.node_by_id(&id) {
+                    // Name diff
+                    if old.name != new.name {
+                        diff_lines.push(format!("- name: {}", old.name));
+                        diff_lines.push(format!("+ name: {}", new.name));
+                    }
+                    // Description diff
+                    if old.properties.description != new.properties.description {
+                        let old_desc = old.properties.description.lines().next().unwrap_or("");
+                        let new_desc = new.properties.description.lines().next().unwrap_or("");
+                        if old_desc != new_desc {
+                            diff_lines.push(format!("- description: {}", old_desc));
+                            diff_lines.push(format!("+ description: {}", new_desc));
+                        }
+                    }
+                    // Importance diff
+                    if (old.properties.importance - new.properties.importance).abs() > 0.001 {
+                        diff_lines.push(format!("- importance: {}", old.properties.importance));
+                        diff_lines.push(format!("+ importance: {}", new.properties.importance));
+                    }
+                    // Confidence diff
+                    let old_conf = old.properties.confidence.unwrap_or(-1.0);
+                    let new_conf = new.properties.confidence.unwrap_or(-1.0);
+                    if (old_conf - new_conf).abs() > 0.001 {
+                        diff_lines.push(format!("- confidence: {}", old.properties.confidence.map(|c| c.to_string()).unwrap_or_else(|| "none".to_string())));
+                        diff_lines.push(format!("+ confidence: {}", new.properties.confidence.map(|c| c.to_string()).unwrap_or_else(|| "none".to_string())));
+                    }
+                    // valid_from diff
+                    if old.properties.valid_from != new.properties.valid_from {
+                        diff_lines.push(format!("- valid_from: {}", old.properties.valid_from));
+                        diff_lines.push(format!("+ valid_from: {}", new.properties.valid_from));
+                    }
+                    // valid_to diff
+                    if old.properties.valid_to != new.properties.valid_to {
+                        diff_lines.push(format!("- valid_to: {}", old.properties.valid_to));
+                        diff_lines.push(format!("+ valid_to: {}", new.properties.valid_to));
+                    }
+                }
+            }
+
+            Ok(format!("{}\n", diff_lines.join("\n")))
         }
 
         NodeCommand::Rename { from, to } => {
@@ -430,6 +487,8 @@ pub(crate) fn execute_edge(
             relation,
             target_id,
             detail,
+            valid_from,
+            valid_to,
         }) => {
             let source_id = crate::validate::normalize_node_id(&source_id);
             let target_id = crate::validate::normalize_node_id(&target_id);
@@ -455,6 +514,8 @@ pub(crate) fn execute_edge(
                     target_id: target_id.clone(),
                     properties: EdgeProperties {
                         detail,
+                        valid_from: valid_from.unwrap_or_default(),
+                        valid_to: valid_to.unwrap_or_default(),
                         ..EdgeProperties::default()
                     },
                 },

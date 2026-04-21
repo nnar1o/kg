@@ -45,6 +45,10 @@ pub(crate) fn execute_access_stats(path: &Path) -> Result<String> {
     Ok(access_log::log_stats(path)?)
 }
 
+pub(crate) fn execute_access_paths(path: &Path, args: AccessLogArgs) -> Result<String> {
+    Ok(access_log::detect_paths(path, args.time_window)?)
+}
+
 pub(crate) fn execute_import_csv(
     context: GraphTransferContext<'_>,
     args: ImportCsvArgs,

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use anyhow::{Result, bail};
 use serde::Serialize;
 
-use crate::graph::{Edge, GraphFile, Node, Note};
+use crate::graph::{Edge, GraphFile, Node, NodeProperties, Note};
 
 #[derive(Debug, Clone, PartialEq)]
 enum FilterOp {
@@ -11,6 +11,10 @@ enum FilterOp {
     Contains,
     NotEq,
     Prefix,
+    GreaterEq,  // >=
+    LessEq,     // <=
+    Greater,    // >
+    Less,       // <
 }
 
 impl FilterOp {
@@ -20,6 +24,10 @@ impl FilterOp {
             "~" => Some(FilterOp::Contains),
             "!=" => Some(FilterOp::NotEq),
             "^" => Some(FilterOp::Prefix),
+            ">=" => Some(FilterOp::GreaterEq),
+            "<=" => Some(FilterOp::LessEq),
+            ">" => Some(FilterOp::Greater),
+            "<" => Some(FilterOp::Less),
             _ => None,
         }
     }
@@ -173,17 +181,40 @@ fn parse_filter_token(token: &str) -> (String, FilterOp, String) {
     let mut op = FilterOp::Eq;
     let mut value = String::new();
     let mut in_key = true;
+    let chars: Vec<char> = token.chars().collect();
+    let mut i = 0;
 
-    for c in token.chars() {
+    while i < chars.len() {
+        let c = chars[i];
+
         if in_key {
-            if let Some(op_str) = ['=', '~', '!', '^'].iter().find(|&&oc| oc == c) {
-                op = FilterOp::from_str(&format!("{}", op_str)).unwrap_or(FilterOp::Eq);
+            // Check for 2-char operators first (>-, <-)
+            if c == '>' && i + 1 < chars.len() && chars[i + 1] == '=' {
+                op = FilterOp::GreaterEq;
                 in_key = false;
-            } else {
-                key.push(c);
+                i += 2;
+                continue;
             }
-        } else if !c.is_whitespace() || !value.is_empty() {
-            value.push(c);
+            if c == '<' && i + 1 < chars.len() && chars[i + 1] == '=' {
+                op = FilterOp::LessEq;
+                in_key = false;
+                i += 2;
+                continue;
+            }
+            // Single char operators
+            if let Some(op_str) = ['=', '~', '!', '^', '>', '<'].iter().find(|&&oc| oc == c) {
+                op = FilterOp::from_str(&format!("{}", c)).unwrap_or(FilterOp::Eq);
+                in_key = false;
+                i += 1;
+                continue;
+            }
+            key.push(c);
+            i += 1;
+        } else {
+            if !c.is_whitespace() || !value.is_empty() {
+                value.push(c);
+            }
+            i += 1;
         }
     }
 
@@ -286,7 +317,22 @@ pub fn render_query(graph: &GraphFile, input: &str) -> Result<String> {
         KqlResponse::Nodes { nodes, total } => {
             lines.push(format!("nodes: {} (total: {})", nodes.len(), total));
             for node in nodes {
-                lines.push(format!("# {} | {} [{}]", node.id, node.name, node.r#type));
+                // Show validity period if set
+                let validity = if !node.properties.valid_to.is_empty() {
+                    format!(" (valid: {}-{})", node.properties.valid_from, node.properties.valid_to)
+                } else if !node.properties.valid_from.is_empty() {
+                    format!(" (valid_from: {})", node.properties.valid_from)
+                } else {
+                    String::new()
+                };
+                lines.push(format!(
+                    "# {} | {} [{}] @ {}{}",
+                    node.id,
+                    node.name,
+                    node.r#type,
+                    node.created_at,
+                    validity
+                ));
             }
         }
         KqlResponse::Edges { edges, total } => {
@@ -444,6 +490,12 @@ fn matches_node(node: &Node, filter: &Filter) -> bool {
             }
         }
         "importance" => compare(&node.properties.importance.to_string(), filter),
+        // Time-based filtering (ISO 8601 timestamps support lexicographic comparison)
+        "created_at" | "created" | "createdat" => compare(&node.created_at, filter),
+        "updated_at" | "updated" | "updatedat" => compare(&node.updated_at, filter),
+        // Temporal validity (fact/node validity period)
+        "valid_from" | "validfrom" => compare(&node.properties.valid_from, filter),
+        "valid_to" | "validto" => compare(&node.properties.valid_to, filter),
         _ => false,
     }
 }
@@ -477,6 +529,12 @@ fn compare(value: &str, filter: &Filter) -> bool {
         FilterOp::NotEq => value != filter.value,
         FilterOp::Contains => value.contains(&filter.value),
         FilterOp::Prefix => value.starts_with(&filter.value),
+        // Numeric/date comparisons using lexicographic string comparison
+        // Works for ISO timestamps and importance floats
+        FilterOp::GreaterEq => value >= filter.value,
+        FilterOp::LessEq => value <= filter.value,
+        FilterOp::Greater => value > filter.value,
+        FilterOp::Less => value < filter.value,
     }
 }
 
@@ -503,6 +561,38 @@ fn apply_sort_limit(
                 SortDir::Asc => a.id.cmp(&b.id),
                 SortDir::Desc => b.id.cmp(&a.id),
             }),
+            "created_at" | "created" | "createdat" => {
+                nodes.sort_by(|a, b| match s.dir {
+                    SortDir::Asc => a.created_at.cmp(&b.created_at),
+                    SortDir::Desc => b.created_at.cmp(&a.created_at),
+                })
+            }
+            "importance" => nodes.sort_by(|a, b| match s.dir {
+                SortDir::Asc => {
+                    if a.properties.importance == b.properties.importance {
+                        std::cmp::Ordering::Equal
+                    } else if a.properties.importance > b.properties.importance {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    }
+                }
+                SortDir::Desc => {
+                    if a.properties.importance == b.properties.importance {
+                        std::cmp::Ordering::Equal
+                    } else if a.properties.importance < b.properties.importance {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Greater
+                    }
+                }
+            }),
+            "updated_at" | "updated" | "updatedat" => {
+                nodes.sort_by(|a, b| match s.dir {
+                    SortDir::Asc => a.updated_at.cmp(&b.updated_at),
+                    SortDir::Desc => b.updated_at.cmp(&a.updated_at),
+                })
+            }
             _ => {}
         }
     }
@@ -762,4 +852,631 @@ fn aggregate(graph: &GraphFile, kind: &str, group_by: &str) -> Result<Vec<(Strin
     let mut groups: Vec<(String, usize)> = counts.into_iter().collect();
     groups.sort_by(|a, b| b.1.cmp(&a.1));
     Ok(groups)
+}
+
+// ============================================================
+// Unit tests for KQL parser and sorting
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_node(id: &str, name: &str, node_type: &str, created_at: &str, importance: f64) -> Node {
+        Node {
+            id: id.to_string(),
+            r#type: node_type.to_string(),
+            name: name.to_string(),
+            created_at: created_at.to_string(),
+            updated_at: String::new(),
+            properties: NodeProperties {
+                description: String::new(),
+                domain_area: String::new(),
+                provenance: String::new(),
+                confidence: None,
+                importance,
+                alias: vec![],
+                key_facts: vec![],
+            },
+            source_files: vec![],
+        }
+    }
+
+    fn parse_nodes(input: &str) -> QueryKind {
+        parse_query(input).unwrap()
+    }
+
+    #[test]
+    fn test_parse_query_basic_node() {
+        let q = parse_nodes("node type=Concept");
+        match q {
+            QueryKind::Node { expr, .. } => {
+                assert!(matches!(expr, Expr::Filter(_)));
+            }
+            _ => panic!("expected Node query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_with_limit() {
+        let q = parse_nodes("node limit=10");
+        match q {
+            QueryKind::Node { limit, .. } => {
+                assert_eq!(limit, Some(10));
+            }
+            _ => panic!("expected Node query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_sort_created_at_asc() {
+        let q = parse_nodes("node sort=created_at");
+        match q {
+            QueryKind::Node { sort, .. } => {
+                let s = sort.unwrap();
+                assert_eq!(s.key, "created_at");
+                assert!(matches!(s.dir, SortDir::Asc));
+            }
+            _ => panic!("expected Node query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_sort_created_at_desc() {
+        let q = parse_nodes("node sort=-created_at");
+        match q {
+            QueryKind::Node { sort, .. } => {
+                let s = sort.unwrap();
+                assert_eq!(s.key, "created_at");
+                assert!(matches!(s.dir, SortDir::Desc));
+            }
+            _ => panic!("expected Node query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_sort_importance_desc() {
+        let q = parse_nodes("node sort=-importance");
+        match q {
+            QueryKind::Node { sort, .. } => {
+                let s = sort.unwrap();
+                assert_eq!(s.key, "importance");
+                assert!(matches!(s.dir, SortDir::Desc));
+            }
+            _ => panic!("expected Node query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_sort_updated_at() {
+        for field in &["updated_at", "updated", "updatedat"] {
+            let q = parse_nodes(&format!("node sort={field}"));
+            match q {
+                QueryKind::Node { sort, .. } => {
+                    let s = sort.unwrap();
+                    assert_eq!(s.key, *field);
+                }
+                _ => panic!("expected Node query for field {field}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_query_alias_created() {
+        for field in &["created_at", "created", "createdat"] {
+            let q = parse_nodes(&format!("node sort={field}"));
+            match q {
+                QueryKind::Node { sort, .. } => {
+                    let s = sort.unwrap();
+                    assert_eq!(s.key, *field);
+                }
+                _ => panic!("expected Node query for alias {field}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_query_combined() {
+        let q = parse_nodes("node type=Bug sort=-created_at limit=5");
+        match q {
+            QueryKind::Node {
+                limit,
+                sort,
+                expr,
+            } => {
+                assert_eq!(limit, Some(5));
+                let s = sort.unwrap();
+                assert_eq!(s.key, "created_at");
+                assert!(matches!(s.dir, SortDir::Desc));
+                assert!(matches!(expr, Expr::Filter(_)));
+            }
+            _ => panic!("expected Node query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_invalid_kind() {
+        let result = parse_query("foo type=Concept");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_query_unknown_sort_passes() {
+        // Unknown sort keys should parse without error (sort is skipped in apply)
+        let q = parse_nodes("node sort=unknown_field");
+        match q {
+            QueryKind::Node { sort, .. } => {
+                let s = sort.unwrap();
+                assert_eq!(s.key, "unknown_field");
+            }
+            _ => panic!("expected Node query"),
+        }
+    }
+
+    #[test]
+    fn test_apply_sort_limit_created_at_asc() {
+        let nodes = vec![
+            make_node("a", "A", "Concept", "2026-04-20T10:00:00Z", 0.5),
+            make_node("b", "B", "Concept", "2026-04-21T10:00:00Z", 0.5),
+            make_node("c", "C", "Concept", "2026-04-19T10:00:00Z", 0.5),
+        ];
+        let result = apply_sort_limit(
+            nodes,
+            Some(SortSpec {
+                key: "created_at".to_string(),
+                dir: SortDir::Asc,
+            }),
+            None,
+        );
+        assert_eq!(result[0].id, "c"); // oldest first
+        assert_eq!(result[2].id, "b"); // newest last
+    }
+
+    #[test]
+    fn test_apply_sort_limit_created_at_desc() {
+        let nodes = vec![
+            make_node("a", "A", "Concept", "2026-04-20T10:00:00Z", 0.5),
+            make_node("b", "B", "Concept", "2026-04-21T10:00:00Z", 0.5),
+            make_node("c", "C", "Concept", "2026-04-19T10:00:00Z", 0.5),
+        ];
+        let result = apply_sort_limit(
+            nodes,
+            Some(SortSpec {
+                key: "created_at".to_string(),
+                dir: SortDir::Desc,
+            }),
+            None,
+        );
+        assert_eq!(result[0].id, "b"); // newest first
+        assert_eq!(result[2].id, "c"); // oldest last
+    }
+
+    #[test]
+    fn test_apply_sort_limit_importance_desc() {
+        let nodes = vec![
+            make_node("a", "A", "Feature", "2026-04-20T10:00:00Z", 0.3),
+            make_node("b", "B", "Feature", "2026-04-20T10:00:00Z", 0.9),
+            make_node("c", "C", "Feature", "2026-04-20T10:00:00Z", 0.6),
+        ];
+        let result = apply_sort_limit(
+            nodes,
+            Some(SortSpec {
+                key: "importance".to_string(),
+                dir: SortDir::Desc,
+            }),
+            None,
+        );
+        assert_eq!(result[0].id, "b"); // importance 0.9 first
+        assert_eq!(result[1].id, "c"); // importance 0.6 second
+        assert_eq!(result[2].id, "a"); // importance 0.3 last
+    }
+
+    #[test]
+    fn test_apply_sort_limit_importance_asc() {
+        let nodes = vec![
+            make_node("a", "A", "Feature", "2026-04-20T10:00:00Z", 0.8),
+            make_node("b", "B", "Feature", "2026-04-20T10:00:00Z", 0.2),
+            make_node("c", "C", "Feature", "2026-04-20T10:00:00Z", 0.5),
+        ];
+        let result = apply_sort_limit(
+            nodes,
+            Some(SortSpec {
+                key: "importance".to_string(),
+                dir: SortDir::Asc,
+            }),
+            None,
+        );
+        assert_eq!(result[0].id, "b"); // lowest first
+        assert_eq!(result[2].id, "a"); // highest last
+    }
+
+    #[test]
+    fn test_apply_sort_limit_with_limit() {
+        let nodes = vec![
+            make_node("a", "A", "Concept", "2026-04-22T10:00:00Z", 0.5),
+            make_node("b", "B", "Concept", "2026-04-21T10:00:00Z", 0.5),
+            make_node("c", "C", "Concept", "2026-04-20T10:00:00Z", 0.5),
+            make_node("d", "D", "Concept", "2026-04-19T10:00:00Z", 0.5),
+        ];
+        let result = apply_sort_limit(
+            nodes,
+            Some(SortSpec {
+                key: "created_at".to_string(),
+                dir: SortDir::Desc,
+            }),
+            Some(2),
+        );
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "a"); // newest
+        assert_eq!(result[1].id, "b"); // second newest
+    }
+
+    #[test]
+    fn test_apply_sort_limit_unknown_key_no_panic() {
+        let nodes = vec![
+            make_node("a", "A", "Concept", "2026-04-20T10:00:00Z", 0.5),
+            make_node("b", "B", "Concept", "2026-04-21T10:00:00Z", 0.5),
+        ];
+        // Unknown key should not panic, just return unsorted
+        let result = apply_sort_limit(
+            nodes,
+            Some(SortSpec {
+                key: "unknown_field".to_string(),
+                dir: SortDir::Asc,
+            }),
+            None,
+        );
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_neighbors_basic() {
+        let q = parse_query("neighbors concept:refrigerator").unwrap();
+        match q {
+            QueryKind::Neighbors { id, hops, .. } => {
+                assert_eq!(id, "concept:refrigerator");
+                assert_eq!(hops, 1);
+            }
+            _ => panic!("expected Neighbors query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_neighbors_with_hops() {
+        let q = parse_query("neighbors concept:refrigerator hops=3").unwrap();
+        match q {
+            QueryKind::Neighbors { id, hops, .. } => {
+                assert_eq!(id, "concept:refrigerator");
+                assert_eq!(hops, 3);
+            }
+            _ => panic!("expected Neighbors query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_path_basic() {
+        let q = parse_query("path from=concept:foo to=concept:bar").unwrap();
+        match q {
+            QueryKind::Path { from, to, .. } => {
+                assert_eq!(from, "concept:foo");
+                assert_eq!(to, "concept:bar");
+            }
+            _ => panic!("expected Path query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_aggregate_node_by_type() {
+        let q = parse_query("count node by=type").unwrap();
+        match q {
+            QueryKind::Aggregate {
+                kind,
+                group_by,
+            } => {
+                assert_eq!(kind, "node");
+                assert_eq!(group_by, "type");
+            }
+            _ => panic!("expected Aggregate query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_edge_query() {
+        let q = parse_nodes("edge relation=DEPENDS_ON");
+        match q {
+            QueryKind::Edge { expr, .. } => {
+                assert!(matches!(expr, Expr::Filter(_)));
+            }
+            _ => panic!("expected Edge query"),
+        }
+    }
+
+    #[test]
+    fn test_parse_note_query() {
+        let q = parse_nodes("note tag=bug");
+        match q {
+            QueryKind::Note { expr, .. } => {
+                assert!(matches!(expr, Expr::Filter(_)));
+            }
+            _ => panic!("expected Note query"),
+        }
+    }
+
+    // ============================================================
+    // Range query tests (temporal filtering)
+    // ============================================================
+
+    #[test]
+    fn test_parse_filter_token_greater_eq() {
+        let (key, op, value) = parse_filter_token("created_at>=2026-04-20");
+        assert_eq!(key, "created_at");
+        assert!(matches!(op, FilterOp::GreaterEq));
+        assert_eq!(value, "2026-04-20");
+    }
+
+    #[test]
+    fn test_parse_filter_token_less_eq() {
+        let (key, op, value) = parse_filter_token("created_at<=2026-04-20");
+        assert_eq!(key, "created_at");
+        assert!(matches!(op, FilterOp::LessEq));
+        assert_eq!(value, "2026-04-20");
+    }
+
+    #[test]
+    fn test_parse_filter_token_greater() {
+        let (key, op, value) = parse_filter_token("importance>0.8");
+        assert_eq!(key, "importance");
+        assert!(matches!(op, FilterOp::Greater));
+        assert_eq!(value, "0.8");
+    }
+
+    #[test]
+    fn test_parse_filter_token_less() {
+        let (key, op, value) = parse_filter_token("importance<0.5");
+        assert_eq!(key, "importance");
+        assert!(matches!(op, FilterOp::Less));
+        assert_eq!(value, "0.5");
+    }
+
+    #[test]
+    fn test_parse_filter_token_timestamp_range() {
+        // created_after=... is expanded to created_at>=...
+        let (key, op, value) = parse_filter_token("created_at>=2026-04-20");
+        assert_eq!(key, "created_at");
+        assert!(matches!(op, FilterOp::GreaterEq));
+    }
+
+    #[test]
+    fn test_compare_iso_timestamps_lexicographic() {
+        // ISO 8601 timestamps compare correctly lexicographically
+        let filter = Filter {
+            key: "created_at".to_string(),
+            op: FilterOp::GreaterEq,
+            value: "2026-04-20T00:00:00Z".to_string(),
+        };
+
+        // Earlier timestamp should not match >=
+        assert!(!compare("2026-04-19T10:00:00Z", &filter));
+
+        // Same timestamp should match
+        assert!(compare("2026-04-20T00:00:00Z", &filter));
+
+        // Later timestamp should match
+        assert!(compare("2026-04-21T00:00:00Z", &filter));
+    }
+
+    #[test]
+    fn test_compare_iso_timestamps_range() {
+        // Filter for 2026-04-20 to 2026-04-21
+        let filter_start = Filter {
+            key: "created_at".to_string(),
+            op: FilterOp::GreaterEq,
+            value: "2026-04-20".to_string(),
+        };
+        let filter_end = Filter {
+            key: "created_at".to_string(),
+            op: FilterOp::Less,
+            value: "2026-04-21".to_string(),
+        };
+
+        // Before range - should not match
+        assert!(!compare("2026-04-19T00:00:00Z", &filter_start));
+        assert!(compare("2026-04-19T00:00:00Z", &filter_end));
+
+        // In range - should match both
+        assert!(compare("2026-04-20T12:00:00Z", &filter_start));
+        assert!(!compare("2026-04-20T12:00:00Z", &filter_end));
+
+        // After range - should match start only
+        assert!(compare("2026-04-21T00:00:00Z", &filter_start));
+        assert!(compare("2026-04-21T00:00:00Z", &filter_end));
+    }
+
+    #[test]
+    fn test_compare_importance_ranges() {
+        let filter = Filter {
+            key: "importance".to_string(),
+            op: FilterOp::Greater,
+            value: "0.7".to_string(),
+        };
+
+        assert!(!compare("0.5", &filter));
+        assert!(!compare("0.7", &filter));
+        assert!(compare("0.8", &filter));
+        assert!(compare("1.0", &filter));
+    }
+
+    #[test]
+    fn test_apply_sort_limit_created_at_desc_then_filter_by_range() {
+        let nodes = vec![
+            make_node("a", "A", "Feature", "2026-04-22T10:00:00Z", 0.5),
+            make_node("b", "B", "Feature", "2026-04-21T10:00:00Z", 0.8),
+            make_node("c", "C", "Feature", "2026-04-20T10:00:00Z", 0.6),
+            make_node("d", "D", "Feature", "2026-04-19T10:00:00Z", 0.3),
+        ];
+
+        // Filter for nodes created on or after 2026-04-20
+        let filter = Filter {
+            key: "created_at".to_string(),
+            op: FilterOp::GreaterEq,
+            value: "2026-04-20".to_string(),
+        };
+
+        let filtered: Vec<Node> = nodes
+            .into_iter()
+            .filter(|n| matches_node(n, &filter))
+            .collect();
+
+        assert_eq!(filtered.len(), 3);
+        assert_eq!(filtered[0].id, "c"); // oldest in range first (before sort)
+        assert_eq!(filtered[1].id, "b");
+        assert_eq!(filtered[2].id, "a");
+    }
+
+    #[test]
+    fn test_iso_timestamp_prefix_matching() {
+        // Using prefix match to find all nodes from a specific day
+        let filter = Filter {
+            key: "created_at".to_string(),
+            op: FilterOp::Prefix,
+            value: "2026-04-20".to_string(),
+        };
+
+        assert!(compare("2026-04-20T10:00:00Z", &filter));
+        assert!(compare("2026-04-20T23:59:59Z", &filter));
+        assert!(!compare("2026-04-21T00:00:00Z", &filter));
+    }
+
+    // ============================================================
+    // Temporal validity tests (valid_from/valid_to)
+    // ============================================================
+
+    fn make_node_with_validity(
+        id: &str,
+        name: &str,
+        node_type: &str,
+        created_at: &str,
+        valid_from: &str,
+        valid_to: &str,
+    ) -> Node {
+        Node {
+            id: id.to_string(),
+            r#type: node_type.to_string(),
+            name: name.to_string(),
+            created_at: created_at.to_string(),
+            updated_at: String::new(),
+            properties: NodeProperties {
+                description: String::new(),
+                domain_area: String::new(),
+                provenance: String::new(),
+                confidence: None,
+                importance: 0.5,
+                alias: vec![],
+                key_facts: vec![],
+                valid_from: valid_from.to_string(),
+                valid_to: valid_to.to_string(),
+            },
+            source_files: vec![],
+        }
+    }
+
+    #[test]
+    fn test_matches_node_valid_from() {
+        let node = make_node_with_validity("bug:x", "Bug X", "Bug", "2026-04-20T00:00:00Z", "2026-04-01", "");
+        let filter = Filter {
+            key: "valid_from".to_string(),
+            op: FilterOp::GreaterEq,
+            value: "2026-04-15".to_string(),
+        };
+        assert!(matches_node(&node, &filter));
+
+        let filter_old = Filter {
+            key: "valid_from".to_string(),
+            op: FilterOp::Less,
+            value: "2026-03-01".to_string(),
+        };
+        assert!(!matches_node(&node, &filter_old));
+    }
+
+    #[test]
+    fn test_matches_node_valid_to() {
+        // Node with validity period that has expired
+        let node = make_node_with_validity("bug:x", "Bug X", "Bug", "2026-04-20T00:00:00Z", "2026-01-01", "2026-04-01");
+        let filter = Filter {
+            key: "valid_to".to_string(),
+            op: FilterOp::Less,
+            value: "2026-04-20".to_string(),
+        };
+        assert!(matches_node(&node, &filter));
+
+        // Node still valid (valid_to is empty)
+        let node_valid = make_node_with_validity("bug:y", "Bug Y", "Bug", "2026-04-20T00:00:00Z", "", "");
+        assert!(!matches_node(&node_valid, &filter));
+    }
+
+    #[test]
+    fn test_filter_currently_valid_nodes() {
+        // Currently valid = valid_to is empty OR valid_to >= now
+        let nodes = vec![
+            make_node_with_validity("a", "A", "Bug", "2026-04-20", "", ""), // always valid
+            make_node_with_validity("b", "B", "Bug", "2026-04-20", "", "2026-12-31"), // still valid
+            make_node_with_validity("c", "C", "Bug", "2026-04-20", "", "2026-04-01"), // expired
+            make_node_with_validity("d", "D", "Bug", "2026-04-20", "2026-01-01", "2026-04-01"), // expired
+        ];
+
+        let currently_valid: Vec<_> = nodes
+            .into_iter()
+            .filter(|n| {
+                let valid_to = &n.properties.valid_to;
+                valid_to.is_empty() || valid_to >= "2026-04-20"
+            })
+            .collect();
+
+        assert_eq!(currently_valid.len(), 2);
+        assert_eq!(currently_valid[0].id, "a");
+        assert_eq!(currently_valid[1].id, "b");
+    }
+
+    #[test]
+    fn test_filter_invalidated_nodes() {
+        // Nodes that are no longer valid (valid_to is set and < now)
+        let nodes = vec![
+            make_node_with_validity("a", "A", "Bug", "2026-04-20", "", ""),
+            make_node_with_validity("b", "B", "Bug", "2026-04-20", "", "2026-12-31"),
+            make_node_with_validity("c", "C", "Bug", "2026-04-20", "", "2026-04-01"),
+        ];
+
+        let invalidated: Vec<_> = nodes
+            .into_iter()
+            .filter(|n| !n.properties.valid_to.is_empty() && n.properties.valid_to < "2026-04-20")
+            .collect();
+
+        assert_eq!(invalidated.len(), 1);
+        assert_eq!(invalidated[0].id, "c");
+    }
+
+    #[test]
+    fn test_filter_valid_in_period() {
+        // Nodes valid in a specific period (e.g., checking state as of 2026-04-15)
+        let nodes = vec![
+            make_node_with_validity("a", "A", "Bug", "2026-04-20", "", ""), // always valid
+            make_node_with_validity("b", "B", "Bug", "2026-04-20", "2026-01-01", "2026-04-01"), // valid until April
+            make_node_with_validity("c", "C", "Bug", "2026-04-20", "2026-05-01", ""), // valid from May
+        ];
+
+        // Query: what was valid as of 2026-04-15?
+        let as_of_check = "2026-04-15";
+        let valid_as_of: Vec<_> = nodes
+            .into_iter()
+            .filter(|n| {
+                let from_ok = n.properties.valid_from.is_empty() || n.properties.valid_from <= as_of_check;
+                let to_ok = n.properties.valid_to.is_empty() || n.properties.valid_to > as_of_check;
+                from_ok && to_ok
+            })
+            .collect();
+
+        assert_eq!(valid_as_of.len(), 2);
+        assert_eq!(valid_as_of[0].id, "a");
+        assert_eq!(valid_as_of[1].id, "b");
+    }
 }

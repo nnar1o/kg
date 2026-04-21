@@ -288,6 +288,157 @@ pub fn log_stats(graph_path: &Path) -> Result<String> {
     Ok(output.join("\n"))
 }
 
+pub fn detect_paths(graph_path: &Path, time_window_minutes: usize) -> Result<String> {
+    let Some(log_path) = first_existing_access_log_path(graph_path) else {
+        return Ok(String::from("= access-paths\nno access log found\n"));
+    };
+
+    let content = fs::read_to_string(&log_path)?;
+    let lines: Vec<&str> = content.lines().collect();
+
+    if lines.is_empty() {
+        return Ok(String::from("= access-paths\nno entries\n"));
+    }
+
+    #[derive(Clone)]
+    struct LogEntry {
+        timestamp: String,
+        op: String,
+        query: String,
+        results: usize,
+        duration_ms: u128,
+    }
+
+    fn parse_timestamp(ts: &str) -> i64 {
+        let parts: Vec<&str> = ts.split(|c| c == ' ' || c == ':' || c == '.').collect();
+        if parts.len() >= 7 {
+            let year: i64 = parts[0].parse().unwrap_or(0);
+            let month: i64 = parts[1].parse().unwrap_or(0);
+            let day: i64 = parts[2].parse().unwrap_or(0);
+            let hour: i64 = parts[3].parse().unwrap_or(0);
+            let min: i64 = parts[4].parse().unwrap_or(0);
+            let sec: i64 = parts[5].parse().unwrap_or(0);
+            let ms: i64 = parts[6].parse().unwrap_or(0);
+            (((((year * 12 + month) * 31 + day) * 24 + hour) * 60 + min) * 60 + sec) * 1000 + ms
+        } else {
+            0
+        }
+    }
+
+    fn tokens(query: &str) -> Vec<String> {
+        let mut toks: Vec<String> = query
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+        toks.sort();
+        toks.dedup();
+        toks
+    }
+
+    fn similarity(a: &str, b: &str) -> f64 {
+        let ta = tokens(a);
+        let tb = tokens(b);
+        if ta.is_empty() || tb.is_empty() {
+            return 0.0;
+        }
+        let common: usize = ta.iter().filter(|t| tb.contains(t)).count();
+        let total = ta.len() + tb.len();
+        if total == 0 {
+            return 0.0;
+        }
+        2.0 * common as f64 / total as f64
+    }
+
+    let mut entries: Vec<LogEntry> = Vec::new();
+    for line in &lines {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 5 {
+            let results: usize = parts[3].parse().unwrap_or(0);
+            let duration: u128 = parts[4].trim_end_matches("ms").parse().unwrap_or(0);
+            entries.push(LogEntry {
+                timestamp: parts[0].to_string(),
+                op: parts[1].to_string(),
+                query: parts[2].to_string(),
+                results,
+                duration_ms: duration,
+            });
+        }
+    }
+
+    entries.reverse();
+
+    let time_window_ms = (time_window_minutes as i64) * 60 * 1000;
+    let mut paths: Vec<Vec<LogEntry>> = Vec::new();
+    let mut current_path: Vec<LogEntry> = Vec::new();
+    let mut last_ts: i64 = 0;
+
+    for entry in &entries {
+        let ts = parse_timestamp(&entry.timestamp);
+        if last_ts == 0 {
+            last_ts = ts;
+            current_path.push(entry.clone());
+        } else if ts - last_ts <= time_window_ms {
+            current_path.push(entry.clone());
+            last_ts = ts;
+        } else {
+            if current_path.len() > 1 {
+                paths.push(current_path.clone());
+            }
+            current_path.clear();
+            current_path.push(entry.clone());
+            last_ts = ts;
+        }
+    }
+    if current_path.len() > 1 {
+        paths.push(current_path);
+    }
+
+    let mut output = vec![String::from("= access-paths")];
+    output.push(format!("time_window: {} minutes", time_window_minutes));
+    output.push(format!("detected_paths: {}", paths.len()));
+
+    if paths.is_empty() {
+        output.push(String::from("(no sequential query paths found)"));
+        return Ok(output.join("\n"));
+    }
+
+    output.push(String::from("\npaths:").to_owned());
+
+    for (i, path) in paths.iter().enumerate() {
+        output.push(format!("\n--- path {} ({} queries) ---", i + 1, path.len()));
+
+        let mut simplified_path: Vec<String> = Vec::new();
+        for (j, entry) in path.iter().enumerate() {
+            if j == 0 {
+                output.push(format!(
+                    "1. {} [{} results, {}]",
+                    entry.query, entry.results, entry.duration_ms
+                ));
+                simplified_path.push(entry.query.clone());
+            } else {
+                let prev = &simplified_path[j - 1];
+                let sim = similarity(prev, &entry.query);
+                if sim > 0.3 {
+                    output.push(format!(
+                        "  → {} [{} results, {}] (sim: {:.0}%)",
+                        entry.query, entry.results, entry.duration_ms, sim * 100.0
+                    ));
+                } else {
+                    output.push(format!(
+                        "2. {} [{} results, {}]",
+                        entry.query, entry.results, entry.duration_ms
+                    ));
+                }
+                simplified_path.push(entry.query);
+            }
+        }
+    }
+
+    Ok(output.join("\n"))
+}
+
 pub struct Timer {
     start: Instant,
 }
