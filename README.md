@@ -35,6 +35,14 @@ Classic RAG is good for retrieving text chunks from documents.
 
 ## Installation
 
+### From crates.io
+
+```sh
+cargo install kg-cli
+```
+
+### From script
+
 Recommended install:
 
 ```sh
