@@ -67,7 +67,7 @@ use app::graph_query_quality::{
     execute_missing_facts, execute_quality, execute_stats,
 };
 use app::graph_transfer_temporal::{
-    GraphTransferContext, execute_access_log, execute_access_stats, execute_as_of,
+    GraphTransferContext, execute_access_log, execute_access_paths, execute_access_stats, execute_as_of,
     execute_diff_as_of, execute_export_dot, execute_export_graphml, execute_export_html,
     execute_export_json, execute_export_md, execute_export_mermaid, execute_history,
     execute_import_csv, execute_import_json, execute_import_markdown, execute_split,
@@ -379,7 +379,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                 ),
 
                 GraphCommand::Stats(args) => Ok(execute_stats(&graph_file, &args)),
-                GraphCommand::List(args) => Ok(execute_list(&graph_file, &args)),
+                GraphCommand::List(args) => execute_list(&graph_file, &args),
                 GraphCommand::Check(args) => Ok(execute_check(&graph_file, cwd, &args)),
                 GraphCommand::Audit(args) => Ok(execute_audit(&graph_file, cwd, &args)),
 
@@ -510,6 +510,8 @@ fn graph_command_mutates(command: &GraphCommand) -> bool {
         | GraphCommand::ExportHtml(_)
         | GraphCommand::AccessLog(_)
         | GraphCommand::AccessStats(_)
+        | GraphCommand::List(_)
+        | GraphCommand::AccessPaths(_)
         | GraphCommand::Kql(_)
         | GraphCommand::ExportJson(_)
         | GraphCommand::ExportDot(_)

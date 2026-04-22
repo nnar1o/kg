@@ -85,9 +85,10 @@ impl KgConfig {
 
 /// Get default graph name - checks env var and config
 pub fn resolve_default_graph(cwd: &Path) -> Option<String> {
-    KgConfig::discover(cwd)
-        .ok()
-        .flatten(|(_, cfg)| cfg.default_graph(cwd))
+    match KgConfig::discover(cwd) {
+        Ok(Some((_, cfg))) => cfg.default_graph(cwd),
+        _ => None,
+    }
 }
 
 pub fn ensure_user_short_uid(cwd: &Path) -> String {

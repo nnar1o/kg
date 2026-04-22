@@ -431,7 +431,7 @@ pub fn detect_paths(graph_path: &Path, time_window_minutes: usize) -> Result<Str
                         entry.query, entry.results, entry.duration_ms
                     ));
                 }
-                simplified_path.push(entry.query);
+                simplified_path.push(entry.query.clone());
             }
         }
     }

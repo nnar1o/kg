@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use anyhow::{Result, bail};
 use serde::Serialize;
 
-use crate::graph::{Edge, GraphFile, Node, NodeProperties, Note};
+use crate::graph::{Edge, GraphFile, Node, Note};
 
 #[derive(Debug, Clone, PartialEq)]
 enum FilterOp {
@@ -330,7 +330,7 @@ pub fn render_query(graph: &GraphFile, input: &str) -> Result<String> {
                     node.id,
                     node.name,
                     node.r#type,
-                    node.created_at,
+node.properties.created_at,
                     validity
                 ));
             }
@@ -491,8 +491,8 @@ fn matches_node(node: &Node, filter: &Filter) -> bool {
         }
         "importance" => compare(&node.properties.importance.to_string(), filter),
         // Time-based filtering (ISO 8601 timestamps support lexicographic comparison)
-        "created_at" | "created" | "createdat" => compare(&node.created_at, filter),
-        "updated_at" | "updated" | "updatedat" => compare(&node.updated_at, filter),
+        "created_at" | "created" | "createdat" => compare(&node.properties.created_at, filter),
+        // updated_at removed - does not exist in NodeProperties
         // Temporal validity (fact/node validity period)
         "valid_from" | "validfrom" => compare(&node.properties.valid_from, filter),
         "valid_to" | "validto" => compare(&node.properties.valid_to, filter),
@@ -524,17 +524,18 @@ fn matches_note(note: &Note, filter: &Filter) -> bool {
 }
 
 fn compare(value: &str, filter: &Filter) -> bool {
+    let filter_val = filter.value.as_str();
     match filter.op {
-        FilterOp::Eq => value == filter.value,
-        FilterOp::NotEq => value != filter.value,
-        FilterOp::Contains => value.contains(&filter.value),
-        FilterOp::Prefix => value.starts_with(&filter.value),
+        FilterOp::Eq => value == filter_val,
+        FilterOp::NotEq => value != filter_val,
+        FilterOp::Contains => value.contains(filter_val),
+        FilterOp::Prefix => value.starts_with(filter_val),
         // Numeric/date comparisons using lexicographic string comparison
         // Works for ISO timestamps and importance floats
-        FilterOp::GreaterEq => value >= filter.value,
-        FilterOp::LessEq => value <= filter.value,
-        FilterOp::Greater => value > filter.value,
-        FilterOp::Less => value < filter.value,
+        FilterOp::GreaterEq => value >= filter_val,
+        FilterOp::LessEq => value <= filter_val,
+        FilterOp::Greater => value > filter_val,
+        FilterOp::Less => value < filter_val,
     }
 }
 
@@ -563,8 +564,8 @@ fn apply_sort_limit(
             }),
             "created_at" | "created" | "createdat" => {
                 nodes.sort_by(|a, b| match s.dir {
-                    SortDir::Asc => a.created_at.cmp(&b.created_at),
-                    SortDir::Desc => b.created_at.cmp(&a.created_at),
+                    SortDir::Asc => a.properties.created_at.cmp(&b.properties.created_at),
+                    SortDir::Desc => b.properties.created_at.cmp(&a.properties.created_at),
                 })
             }
             "importance" => nodes.sort_by(|a, b| match s.dir {
@@ -587,12 +588,7 @@ fn apply_sort_limit(
                     }
                 }
             }),
-            "updated_at" | "updated" | "updatedat" => {
-                nodes.sort_by(|a, b| match s.dir {
-                    SortDir::Asc => a.updated_at.cmp(&b.updated_at),
-                    SortDir::Desc => b.updated_at.cmp(&a.updated_at),
-                })
-            }
+            // updated_at removed - does not exist in NodeProperties
             _ => {}
         }
     }
