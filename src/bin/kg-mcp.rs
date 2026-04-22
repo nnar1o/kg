@@ -118,6 +118,9 @@ struct NodeAddArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct NodeRemoveArgs {
+    graph: String,
+    id: String,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct NodeModifyArgs {
