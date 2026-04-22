@@ -52,71 +52,6 @@ struct CreateGraphArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct EmptyArgs {}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct NodeFindArgs {
-    graph: String,
-    queries: Vec<String>,
-    #[serde(default)]
-    limit: Option<usize>,
-    #[serde(default)]
-    output_size: Option<usize>,
-    #[serde(default)]
-    mode: Option<String>,
-    #[serde(default)]
-    full: bool,
-    #[serde(default)]
-    skip_feedback: bool,
-    #[serde(default)]
-    with_feedback: bool,
-    #[serde(default)]
-    debug: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct NodeGetArgs {
-    graph: String,
-    id: String,
-    #[serde(default)]
-    output_size: Option<usize>,
-    #[serde(default)]
-    full: bool,
-    #[serde(default)]
-    debug: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct NodeAddArgs {
-    graph: String,
-    id: String,
-    node_type: String,
-    name: String,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    domain_area: Option<String>,
-    #[serde(default)]
-    provenance: Option<String>,
-    #[serde(default)]
-    confidence: Option<f64>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    importance: Option<f64>,
-#[serde(default)]
-    facts: Vec<String>,
-    #[serde(default)]
-    aliases: Vec<String>,
-    #[serde(default)]
-    sources: Vec<String>,
-    #[serde(default)]
-    valid_from: Option<String>,
-    #[serde(default)]
-    valid_to: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct NodeRemoveArgs {
     graph: String,
     id: String,
@@ -164,10 +99,6 @@ struct EdgeAddArgs {
     target_id: String,
     #[serde(default)]
     detail: Option<String>,
-    #[serde(default)]
-    valid_from: Option<String>,
-    #[serde(default)]
-    valid_to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -177,10 +108,6 @@ struct EdgeAddBatchItem {
     target_id: String,
     #[serde(default)]
     detail: Option<String>,
-    #[serde(default)]
-    valid_from: Option<String>,
-    #[serde(default)]
-    valid_to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -325,10 +252,6 @@ struct NodeAddBatchItem {
     aliases: Vec<String>,
     #[serde(default)]
     sources: Vec<String>,
-    #[serde(default)]
-    valid_from: Option<String>,
-    #[serde(default)]
-    valid_to: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -522,8 +445,6 @@ struct PreparedNodeBatchItem {
     facts: Vec<String>,
     aliases: Vec<String>,
     sources: Vec<String>,
-    valid_from: String,
-    valid_to: String,
 }
 
 fn prevalidate_node_batch_items(
@@ -547,8 +468,6 @@ fn prevalidate_node_batch_items(
             facts,
             aliases,
             sources,
-            valid_from,
-            valid_to,
         } = item;
 
         let id = match kg::canonicalize_node_id_for_type(&raw_id, &node_type) {
@@ -660,8 +579,6 @@ fn prevalidate_node_batch_items(
             facts,
             aliases,
             sources,
-            valid_from: valid_from.unwrap_or_default(),
-            valid_to: valid_to.unwrap_or_default(),
         });
     }
 
@@ -675,8 +592,6 @@ struct PreparedEdgeBatchItem {
     relation: String,
     target_id: String,
     detail: Option<String>,
-    valid_from: String,
-    valid_to: String,
 }
 
 fn prevalidate_edge_batch_items(
@@ -746,8 +661,6 @@ fn prevalidate_edge_batch_items(
             relation,
             target_id,
             detail: edge.detail,
-            valid_from: edge.valid_from.unwrap_or_default(),
-            valid_to: edge.valid_to.unwrap_or_default(),
         });
     }
 
@@ -1109,8 +1022,6 @@ impl KgMcpServer {
             target_id: edge.target_id.clone(),
             properties: kg::EdgeProperties {
                 detail: edge.detail.clone().unwrap_or_default(),
-                valid_from: edge.valid_from.clone(),
-                valid_to: edge.valid_to.clone(),
                 ..kg::EdgeProperties::default()
             },
         });
@@ -2435,7 +2346,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_node_add",
-        description = "Add a new node to a graph. Valid node_type: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug. Supports valid_from/valid_to for temporal validity. Prefer `kg` when combining multiple actions."
+        description = "Add a new node to a graph. Valid node_type: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug. ID must match <type_code>:snake_case (legacy <prefix>:snake_case also accepted). Prefer `kg` when combining multiple actions."
     )]
     fn kg_node_add(
         &self,
@@ -2497,20 +2408,12 @@ impl KgMcpServer {
             cmd.push("--source".to_owned());
             cmd.push(source);
         }
-        if let Some(valid_from) = args.valid_from {
-            cmd.push("--valid-from".to_owned());
-            cmd.push(valid_from);
-        }
-        if let Some(valid_to) = args.valid_to {
-            cmd.push("--valid-to".to_owned());
-            cmd.push(valid_to);
-        }
         self.execute_kg(cmd)
     }
 
     #[tool(
         name = "kg_node_modify",
-        description = "Modify an existing node. Supports valid_from/valid_to for temporal validity. Prefer `kg` when combining multiple actions."
+        description = "Modify an existing node. Prefer `kg` when combining multiple actions."
     )]
     fn kg_node_modify(
         &self,
@@ -2561,14 +2464,6 @@ impl KgMcpServer {
             cmd.push("--source".to_owned());
             cmd.push(source);
         }
-        if let Some(valid_from) = args.valid_from {
-            cmd.push("--valid-from".to_owned());
-            cmd.push(valid_from);
-        }
-        if let Some(valid_to) = args.valid_to {
-            cmd.push("--valid-to".to_owned());
-            cmd.push(valid_to);
-        }
         self.execute_kg(cmd)
     }
 
@@ -2590,7 +2485,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_edge_add",
-        description = "Add an edge between two nodes. Valid relations: HAS, STORED_IN, TRIGGERS, CREATED_BY, AFFECTED_BY, AVAILABLE_IN, DOCUMENTED_IN, DEPENDS_ON, TRANSITIONS, DECIDED_BY, GOVERNED_BY, USES, READS_FROM. Supports valid_from/valid_to for temporal validity. Prefer `kg` when combining multiple actions."
+        description = "Add an edge between two nodes. Valid relations: HAS, STORED_IN, TRIGGERS, CREATED_BY, AFFECTED_BY, AVAILABLE_IN, DOCUMENTED_IN, DEPENDS_ON, TRANSITIONS, DECIDED_BY, GOVERNED_BY, USES, READS_FROM. Prefer `kg` when combining multiple actions."
     )]
     fn kg_edge_add(
         &self,
@@ -2617,14 +2512,6 @@ impl KgMcpServer {
         if let Some(detail) = args.detail {
             cmd.push("--detail".to_owned());
             cmd.push(detail);
-        }
-        if let Some(valid_from) = args.valid_from {
-            cmd.push("--valid-from".to_owned());
-            cmd.push(valid_from);
-        }
-        if let Some(valid_to) = args.valid_to {
-            cmd.push("--valid-to".to_owned());
-            cmd.push(valid_to);
         }
         self.execute_kg(cmd)
     }
@@ -3724,20 +3611,12 @@ pub const COMMAND_REGISTRY: &[CommandInfo] = &[
     CommandInfo::per_graph("node add", "Add a new node", "kg graph mygraph node add feature:foo --name 'Foo Feature' --type Feature", &["add"]),
     CommandInfo::per_graph("node modify", "Modify an existing node", "kg graph mygraph node modify concept:foo --description 'New desc'", &["modify", "update"]),
     CommandInfo::per_graph("node remove", "Remove a node and its edges", "kg graph mygraph node remove concept:foo", &["remove", "delete"]),
-    CommandInfo::per_graph("node rename", "Rename a node ID", "kg graph mygraph node rename concept:foo concept:bar", &["rename"]),
     CommandInfo::per_graph("edge add", "Add an edge between nodes", "kg graph mygraph edge add feature:foo DEPENDS_ON concept:bar", &[]),
     CommandInfo::per_graph("edge remove", "Remove an edge", "kg graph mygraph edge remove feature:foo DEPENDS_ON concept:bar", &[]),
-    CommandInfo::per_graph("edge list", "List all edges", "kg graph mygraph edge list", &["edges"]),
     CommandInfo::per_graph("kql", "Query with KQL language", r#"kg graph mygraph kql "node type=Feature sort=-created_at""#, &["query"]),
     CommandInfo::per_graph("quality", "Run quality checks", "kg graph mygraph quality duplicates", &[]),
     CommandInfo::per_graph("note list", "List all notes", "kg graph mygraph note list", &[]),
     CommandInfo::per_graph("note add", "Add a note to a node", "kg graph mygraph note add concept:foo --text 'Note text'", &[]),
-    CommandInfo::per_graph("note remove", "Remove a note", "kg graph mygraph note remove note:123", &[]),
-    CommandInfo::per_graph("note modify", "Modify a note", "kg graph mygraph note modify note:123 --text 'New text'", &[]),
-    CommandInfo::per_graph("history", "Show graph history", "kg graph mygraph history", &["hist"]),
-    CommandInfo::per_graph("timeline", "Show graph timeline", "kg graph mygraph timeline", &[]),
-    CommandInfo::per_graph("as-of", "Query graph state at point in time", "kg graph mygraph as-of 2026-01-01", &[]),
-    CommandInfo::per_graph("diff-as-of", "Show diff between two points in time", "kg graph mygraph diff-as-of 2026-01-01 2026-04-01", &[]),
     CommandInfo::per_graph("export-html", "Export graph as interactive HTML", "kg graph mygraph export-html --output report.html", &[]),
 ];
 
