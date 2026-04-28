@@ -970,6 +970,13 @@ impl KgMcpServer {
         })
     }
 
+    fn resolve_existing_node_id_mcp(graph: &kg::GraphFile, raw_id: &str) -> String {
+        if graph.node_by_id(raw_id).is_some() {
+            return raw_id.to_owned();
+        }
+        kg::normalize_node_id(raw_id)
+    }
+
     fn preflight_edge(
         &self,
         graph: &kg::GraphFile,
@@ -990,8 +997,10 @@ impl KgMcpServer {
             });
         }
 
-        let source_node = graph.node_by_id(source_id);
-        let target_node = graph.node_by_id(target_id);
+        let source_id = Self::resolve_existing_node_id_mcp(graph, source_id);
+        let target_id = Self::resolve_existing_node_id_mcp(graph, target_id);
+        let source_node = graph.node_by_id(&source_id);
+        let target_node = graph.node_by_id(&target_id);
 
         if source_node.is_none() || target_node.is_none() {
             return Err(EdgePreflightFailure {
@@ -1046,7 +1055,7 @@ impl KgMcpServer {
             }
         }
 
-        if graph.has_edge(source_id, relation, target_id) {
+        if graph.has_edge(&source_id, relation, &target_id) {
             return Err(EdgePreflightFailure {
                 message: format!(
                     "edge already exists: {} {} {}",
@@ -1064,10 +1073,12 @@ impl KgMcpServer {
     }
 
     fn apply_edge_to_graph(graph: &mut kg::GraphFile, edge: &PreparedEdgeBatchItem) {
+        let source_id = Self::resolve_existing_node_id_mcp(graph, &edge.source_id);
+        let target_id = Self::resolve_existing_node_id_mcp(graph, &edge.target_id);
         graph.edges.push(kg::Edge {
-            source_id: edge.source_id.clone(),
+            source_id,
             relation: edge.relation.clone(),
-            target_id: edge.target_id.clone(),
+            target_id,
             properties: kg::EdgeProperties {
                 detail: edge.detail.clone().unwrap_or_default(),
                 ..kg::EdgeProperties::default()
@@ -3545,6 +3556,14 @@ fn classify_kg_error(message: &str) -> (ErrorCode, &'static str, &'static str, i
             1,
         );
     }
+    if looks_like_validation_error(message) {
+        return (
+            ErrorCode(-32011),
+            "kg command validation error",
+            "validation_error",
+            2,
+        );
+    }
     if looks_like_parse_error(message) {
         return (
             ErrorCode(-32011),
@@ -3566,6 +3585,15 @@ fn looks_like_parse_error(message: &str) -> bool {
         || lower.contains("a value is required")
 }
 
+fn looks_like_validation_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("importance must be in range")
+        || lower.contains("at least one --source is required")
+        || lower.contains("is required")
+        || lower.contains("invalid")
+        || lower.contains("must be in range")
+}
+
 fn looks_like_permission_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("permission denied") || lower.contains("os error 13")
@@ -3574,6 +3602,7 @@ fn looks_like_permission_error(message: &str) -> bool {
 fn error_hint(kind: &str) -> &'static str {
     match kind {
         "parse_error" => "Check command syntax and required arguments.",
+        "validation_error" => "Check importance (0-1 or 1-6), --source requirement, and other field constraints.",
         "permission_denied" => "Verify file permissions and graph path access.",
         _ => "Inspect stderr_tail for details.",
     }

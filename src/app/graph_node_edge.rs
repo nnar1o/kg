@@ -175,7 +175,7 @@ pub(crate) fn execute_node(
             output_size,
             json,
         } => {
-            let id = crate::validate::normalize_node_id(&id);
+            let id = resolve_existing_node_id(context.graph_file, &id);
             let timer = access_log::Timer::new();
             let index_hint = crate::kg_sidecar::lookup_node_line(context.path, &id);
             let node = if index_hint.is_some() {
@@ -292,7 +292,7 @@ pub(crate) fn execute_node(
             valid_from,
             valid_to,
         }) => {
-            let id = crate::validate::normalize_node_id(&id);
+            let id = resolve_existing_node_id(context.graph_file, &id);
 
             // Capture old state for diff
             let old_node = context.graph_file.node_by_id(&id).cloned();
@@ -376,7 +376,7 @@ pub(crate) fn execute_node(
         }
 
         NodeCommand::Rename { from, to } => {
-            let from = crate::validate::normalize_node_id(&from);
+            let from = resolve_existing_node_id(context.graph_file, &from);
             let to = crate::validate::normalize_node_id(&to);
             if context.graph_file.node_by_id(&to).is_some() {
                 bail!("node already exists: {to}");
@@ -409,7 +409,7 @@ pub(crate) fn execute_node(
         }
 
         NodeCommand::Remove { id } => {
-            let id = crate::validate::normalize_node_id(&id);
+            let id = resolve_existing_node_id(context.graph_file, &id);
             let removed_edges = remove_node(context.graph_file, &id)?;
             context.store.save_graph(context.path, context.graph_file)?;
             crate::append_event_snapshot(
@@ -490,8 +490,8 @@ pub(crate) fn execute_edge(
             valid_from,
             valid_to,
         }) => {
-            let source_id = crate::validate::normalize_node_id(&source_id);
-            let target_id = crate::validate::normalize_node_id(&target_id);
+            let source_id = resolve_existing_node_id(context.graph_file, &source_id);
+            let target_id = resolve_existing_node_id(context.graph_file, &target_id);
             if let Some(schema) = context.schema {
                 let source_node = context.graph_file.node_by_id(&source_id);
                 let target_node = context.graph_file.node_by_id(&target_id);
@@ -559,9 +559,9 @@ pub(crate) fn execute_edge(
                         add_edge(
                             context.graph_file,
                             Edge {
-                                source_id: crate::validate::normalize_node_id(source_id),
+                                source_id: resolve_existing_node_id(context.graph_file, source_id),
                                 relation: relation.to_string(),
-                                target_id: crate::validate::normalize_node_id(target_id),
+                                target_id: resolve_existing_node_id(context.graph_file, target_id),
                                 properties: EdgeProperties {
                                     detail: detail.to_string(),
                                     ..EdgeProperties::default()
@@ -602,8 +602,8 @@ pub(crate) fn execute_edge(
             relation,
             target_id,
         }) => {
-            let source_id = crate::validate::normalize_node_id(&source_id);
-            let target_id = crate::validate::normalize_node_id(&target_id);
+            let source_id = resolve_existing_node_id(context.graph_file, &source_id);
+            let target_id = resolve_existing_node_id(context.graph_file, &target_id);
             remove_edge(context.graph_file, &source_id, &relation, &target_id)?;
             context.store.save_graph(context.path, context.graph_file)?;
             crate::append_event_snapshot(
@@ -615,4 +615,11 @@ pub(crate) fn execute_edge(
             Ok(format!("- edge {source_id} {relation} {target_id}\n"))
         }
     }
+}
+
+fn resolve_existing_node_id(graph: &GraphFile, raw_id: &str) -> String {
+    if graph.node_by_id(raw_id).is_some() {
+        return raw_id.to_owned();
+    }
+    crate::validate::normalize_node_id(raw_id)
 }

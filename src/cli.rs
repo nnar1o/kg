@@ -235,6 +235,11 @@ pub enum GraphCommand {
         about = "Compute all-vs-all similarity scores into cache graph"
     )]
     ScoreAll(ScoreAllArgs),
+    #[command(
+        name = "update",
+        about = "Auto-update graph nodes from filesystem"
+    )]
+    Update(UpdateArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -251,6 +256,11 @@ pub struct ScoreAllArgs {
     pub cluster_resolution: f64,
     #[arg(long, default_value_t = 5)]
     pub membership_top_k: usize,
+}
+
+#[derive(Debug, Args, Clone)]
+pub struct UpdateArgs {
+    // Intentionally empty: update scans all root D nodes already present in graph.
 }
 
 #[derive(Debug, Args, Clone)]

@@ -997,12 +997,13 @@ fn render_node_lines_with_edges(
 
 fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
     let mut lines = Vec::new();
+    let display_name = node_display_name(node);
     match detail {
         DetailLevel::Rich => {
             lines.push(format!(
                 "# {} | {} [{}]",
                 node.id,
-                escape_cli_text(&node.name),
+                escape_cli_text(&display_name),
                 node.r#type
             ));
             if !node.properties.alias.is_empty() {
@@ -1030,7 +1031,7 @@ fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
             lines.push(format!(
                 "# {} | {} [{}]",
                 node.id,
-                escape_cli_text(&node.name),
+                escape_cli_text(&display_name),
                 node.r#type
             ));
             push_description_line(&mut lines, &node.properties.description, Some(140));
@@ -1042,12 +1043,46 @@ fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
             lines.push(format!(
                 "# {} | {} [{}]",
                 node.id,
-                escape_cli_text(&node.name),
+                escape_cli_text(&display_name),
                 node.r#type
             ));
         }
     }
     lines
+}
+
+fn node_display_name(node: &Node) -> String {
+    if !node.name.trim().is_empty() {
+        return node.name.clone();
+    }
+    let raw = node
+        .id
+        .split_once(':')
+        .map(|(_, suffix)| suffix.rsplit_once(':').map(|(name, _)| name).unwrap_or(suffix))
+        .unwrap_or(node.id.as_str())
+        .to_owned();
+    unescape_generated_name(&raw)
+}
+
+fn unescape_generated_name(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '~' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('~') => out.push('~'),
+            Some('c') => out.push(':'),
+            Some(other) => {
+                out.push('~');
+                out.push(other);
+            }
+            None => out.push('~'),
+        }
+    }
+    out
 }
 
 fn render_node_link_lines(
@@ -1220,10 +1255,11 @@ fn render_node_block_with_query(
     query: Option<&str>,
 ) -> String {
     let mut lines = Vec::new();
+    let display_name = node_display_name(node);
     lines.push(format!(
         "# {} | {} [{}]",
         node.id,
-        escape_cli_text(&node.name),
+        escape_cli_text(&display_name),
         node.r#type
     ));
 

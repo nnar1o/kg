@@ -23,6 +23,8 @@ pub const VALID_TYPES: &[&str] = &[
     "Convention",
     "Note",
     "Bug",
+    "D",
+    "F",
 ];
 
 pub const VALID_RELATIONS: &[&str] = &[
@@ -41,7 +43,7 @@ pub const VALID_RELATIONS: &[&str] = &[
     "READS_FROM",
 ];
 
-pub const VALID_PROVENANCE_CODES: &[&str] = &["U", "D", "A"];
+pub const VALID_PROVENANCE_CODES: &[&str] = &["U", "D", "A", "G"];
 
 pub const VALID_SOURCE_TYPES: &[&str] = &[
     "URL",
@@ -94,8 +96,8 @@ pub const TYPE_TO_CODE: &[(&str, &str)] = &[
 pub const EDGE_TYPE_RULES: &[(&str, &[&str], &[&str])] = &[
     (
         "HAS",
-        &["Concept", "Process", "Interface"],
-        &["Concept", "Feature", "DataStore", "Rule", "Interface"],
+        &["Concept", "Process", "Interface", "D", "F"],
+        &["Concept", "Feature", "DataStore", "Rule", "Interface", "D", "F"],
     ),
     ("STORED_IN", &["Concept", "Process", "Rule"], &["DataStore"]),
     (
@@ -203,6 +205,21 @@ fn valid_id_suffix(suffix: &str) -> bool {
         && suffix
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+fn valid_generated_node_suffix(suffix: &str) -> bool {
+    if suffix.is_empty() || suffix.contains(['\n', '\r']) {
+        return false;
+    }
+
+    let name_part = match suffix.rsplit_once(':') {
+        Some((head, tail)) if !tail.is_empty() && tail.chars().all(|ch| ch.is_ascii_digit()) => {
+            head
+        }
+        _ => suffix,
+    };
+
+    !name_part.is_empty() && !name_part.contains(':')
 }
 
 fn is_valid_custom_token(token: &str, max_len: usize) -> bool {
@@ -434,10 +451,15 @@ pub fn canonicalize_node_id_for_type(id: &str, node_type: &str) -> Result<String
             id
         ));
     };
-    if !valid_id_suffix(suffix) {
+    let suffix_valid = if matches!(node_type, "D" | "F") {
+        valid_generated_node_suffix(suffix)
+    } else {
+        valid_id_suffix(suffix)
+    };
+    if !suffix_valid {
         return Err(format!(
-            "node id '{}' must use snake_case suffix (lowercase, digits, underscore only)",
-            id
+            "node id '{}' has invalid suffix for type '{}'",
+            id, node_type
         ));
     }
 
@@ -537,7 +559,7 @@ pub fn validate_graph(
         if !is_valid_node_type(&node.r#type) {
             errors.push(format!("node {} has invalid type {}", node.id, node.r#type));
         }
-        if node.name.trim().is_empty() {
+        if node.name.trim().is_empty() && node.properties.provenance != "G" {
             errors.push(format!("node {} missing name", node.id));
         }
         if node.source_files.is_empty() {
@@ -578,7 +600,7 @@ pub fn validate_graph(
         }
 
         // quality warnings (skip Feature nodes)
-        if node.r#type != "Feature" {
+        if node.r#type != "Feature" && node.properties.provenance != "G" {
             if node.properties.description.trim().is_empty() {
                 warnings.push(format!("node {} missing description", node.id));
             }

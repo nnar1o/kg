@@ -306,3 +306,64 @@ fn file_name(path: &Path) -> &str {
         .and_then(|value| value.to_str())
         .unwrap_or("unknown")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn extract_scan_path_no_spaces() {
+        let sources = vec!["SOURCECODE /simple/path".to_string()];
+        let result = extract_scan_path(&sources);
+        assert_eq!(result, Some(PathBuf::from("/simple/path")));
+    }
+
+    #[test]
+    fn extract_scan_path_with_spaces() {
+        let sources = vec!["SOURCECODE /path/with spaces".to_string()];
+        let result = extract_scan_path(&sources);
+        assert_eq!(result, Some(PathBuf::from("/path/with spaces")));
+    }
+
+    #[test]
+    fn extract_scan_path_no_type_prefix() {
+        let sources = vec!["/simple/path".to_string()];
+        let result = extract_scan_path(&sources);
+        assert_eq!(result, Some(PathBuf::from("/simple/path")));
+    }
+
+    #[test]
+    fn extract_scan_path_multiple_sources() {
+        let sources = vec![
+            "DOC /other/doc".to_string(),
+            "SOURCECODE /target/path".to_string(),
+        ];
+        let result = extract_scan_path(&sources);
+        assert_eq!(result, Some(PathBuf::from("/other/doc")));
+    }
+
+    #[test]
+    fn extract_scan_path_empty_source() {
+        let sources: Vec<String> = vec![];
+        let result = extract_scan_path(&sources);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn extract_scan_path_first_valid() {
+        let sources = vec![
+            "".to_string(),
+            "SOURCECODE /valid/path".to_string(),
+        ];
+        let result = extract_scan_path(&sources);
+        assert_eq!(result, Some(PathBuf::from("/valid/path")));
+    }
+
+    #[test]
+    fn extract_scan_path_filesystem_root() {
+        let sources = vec!["SOURCECODE /".to_string()];
+        let result = extract_scan_path(&sources);
+        assert_eq!(result, Some(PathBuf::from("/")));
+    }
+}

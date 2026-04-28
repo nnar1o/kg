@@ -146,6 +146,17 @@ fn node_type_to_code(node_type: &str) -> &str {
     }
 }
 
+fn encode_node_type_token(node_type: &str) -> String {
+    let code = node_type_to_code(node_type);
+    if code != node_type {
+        return code.to_owned();
+    }
+    if code_to_node_type(node_type) != node_type {
+        return format!("={node_type}");
+    }
+    node_type.to_owned()
+}
+
 fn code_to_node_type(code: &str) -> &str {
     match code {
         "F" => "Feature",
@@ -169,6 +180,13 @@ fn code_to_node_type(code: &str) -> &str {
         "L" => "Doubt",
         _ => code,
     }
+}
+
+fn decode_node_type_token(token: &str) -> String {
+    token
+        .strip_prefix('=')
+        .map(str::to_owned)
+        .unwrap_or_else(|| code_to_node_type(token).to_owned())
 }
 
 fn relation_to_code(relation: &str) -> &str {
@@ -482,19 +500,22 @@ fn parse_kg_with_warnings(
                 current_edge_index = None;
                 continue;
             };
+            let decoded_type = decode_node_type_token(type_code.trim());
             let parsed_id = {
                 let raw_id = node_id.trim();
-                if raw_id.contains(':') {
+                if type_code.trim().starts_with('=') && raw_id.contains(':') {
+                    raw_id.to_owned()
+                } else if raw_id.contains(':') {
                     crate::validate::normalize_node_id(raw_id)
                 } else if code_to_node_type(type_code.trim()) != type_code.trim() {
                     crate::validate::normalize_node_id(&format!("{}:{raw_id}", type_code.trim()))
                 } else {
-                    format!("{}:{raw_id}", type_code.trim())
+                    format!("{}:{raw_id}", decoded_type)
                 }
             };
             current_node = Some(Node {
                 id: parsed_id,
-                r#type: code_to_node_type(type_code.trim()).to_owned(),
+                r#type: decoded_type,
                 name: String::new(),
                 properties: NodeProperties::default(),
                 source_files: Vec::new(),
@@ -810,7 +831,7 @@ fn parse_kg_with_warnings(
             graph.edges.push(Edge {
                 source_id: node.id.clone(),
                 relation: code_to_relation(relation).to_owned(),
-                target_id: crate::validate::normalize_node_id(target_id),
+                target_id: target_id.to_owned(),
                 properties: EdgeProperties::default(),
             });
             current_edge_index = Some(graph.edges.len() - 1);
@@ -852,7 +873,7 @@ fn parse_kg_with_warnings(
                 continue;
             }
 
-            let target_id = crate::validate::normalize_node_id(target_id);
+            let target_id = target_id.to_owned();
             let (source_id, target_id) = canonicalize_bidirectional_pair(&node.id, &target_id);
             graph.edges.push(Edge {
                 source_id,
@@ -1108,11 +1129,15 @@ fn serialize_kg(graph: &GraphFile) -> String {
     for node in nodes {
         out.push_str(&format!(
             "@ {}:{}\n",
-            node_type_to_code(&node.r#type),
+            encode_node_type_token(&node.r#type),
             node.id
         ));
-        push_text_line(&mut out, "N", &node.name);
-        push_text_line(&mut out, "D", &node.properties.description);
+        if !node.name.is_empty() {
+            push_text_line(&mut out, "N", &node.name);
+        }
+        if !node.properties.description.is_empty() {
+            push_text_line(&mut out, "D", &node.properties.description);
+        }
 
         for alias in sort_case_insensitive(&node.properties.alias) {
             push_text_line(&mut out, "A", &alias);
@@ -1489,22 +1514,38 @@ impl GraphFile {
 fn normalize_graph_ids(graph: &mut GraphFile) {
     let mut remap: HashMap<String, String> = HashMap::new();
     for node in &mut graph.nodes {
-        let normalized = crate::validate::normalize_node_id(&node.id);
+        let normalized = crate::validate::canonicalize_node_id_for_type(&node.id, &node.r#type)
+            .unwrap_or_else(|_| crate::validate::normalize_node_id(&node.id));
         if normalized != node.id {
             remap.insert(node.id.clone(), normalized.clone());
             node.id = normalized;
         }
     }
 
+    let known_ids: std::collections::HashSet<&str> =
+        graph.nodes.iter().map(|node| node.id.as_str()).collect();
+
     for edge in &mut graph.edges {
         edge.source_id = remap
             .get(&edge.source_id)
             .cloned()
-            .unwrap_or_else(|| crate::validate::normalize_node_id(&edge.source_id));
+            .unwrap_or_else(|| {
+                if known_ids.contains(edge.source_id.as_str()) {
+                    edge.source_id.clone()
+                } else {
+                    crate::validate::normalize_node_id(&edge.source_id)
+                }
+            });
         edge.target_id = remap
             .get(&edge.target_id)
             .cloned()
-            .unwrap_or_else(|| crate::validate::normalize_node_id(&edge.target_id));
+            .unwrap_or_else(|| {
+                if known_ids.contains(edge.target_id.as_str()) {
+                    edge.target_id.clone()
+                } else {
+                    crate::validate::normalize_node_id(&edge.target_id)
+                }
+            });
         if edge.properties.bidirectional {
             let (source_id, target_id) =
                 canonicalize_bidirectional_pair(&edge.source_id, &edge.target_id);
@@ -1517,7 +1558,13 @@ fn normalize_graph_ids(graph: &mut GraphFile) {
         note.node_id = remap
             .get(&note.node_id)
             .cloned()
-            .unwrap_or_else(|| crate::validate::normalize_node_id(&note.node_id));
+            .unwrap_or_else(|| {
+                if known_ids.contains(note.node_id.as_str()) {
+                    note.node_id.clone()
+                } else {
+                    crate::validate::normalize_node_id(&note.node_id)
+                }
+            });
     }
 }
 
