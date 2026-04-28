@@ -1,6 +1,7 @@
 mod access_log;
 mod analysis;
 mod app;
+mod auto_update;
 mod cache_paths;
 mod cli;
 mod config;
@@ -52,7 +53,7 @@ use cli::{
     DiffAsOfArgs, EdgeCommand, ExportDotArgs, ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs,
     FeedbackLogArgs, FeedbackSummaryArgs, FindMode as CliFindMode, GraphCommand, HistoryArgs,
     ImportCsvArgs, ImportMarkdownArgs, MergeStrategy, NodeCommand, NoteAddArgs, NoteCommand,
-    NoteListArgs, ScoreAllArgs, SplitArgs, TemporalSource, TimelineArgs, VectorCommand,
+    NoteListArgs, ScoreAllArgs, SplitArgs, TemporalSource, TimelineArgs, UpdateArgs, VectorCommand,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -468,6 +469,17 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                     Ok(execute_baseline(cwd, &graph, &graph_file, &args)?)
                 }
                 GraphCommand::ScoreAll(args) => execute_score_all(&graph_file, &path, &args),
+                GraphCommand::Update(args) => execute_update(
+                    GraphCommandContext {
+                        graph_name: &graph,
+                        path: &path,
+                        user_short_uid: &user_short_uid,
+                        graph_file: &mut graph_file,
+                        schema: schema.as_ref(),
+                        store: store.as_ref(),
+                    },
+                    args,
+                ),
             }
         }
     }
@@ -529,6 +541,7 @@ fn graph_command_mutates(command: &GraphCommand) -> bool {
         | GraphCommand::FeedbackSummary(_)
         | GraphCommand::Baseline(_)
         | GraphCommand::ScoreAll(_) => false,
+        GraphCommand::Update(_) => true,
     }
 }
 
@@ -552,6 +565,32 @@ fn execute_score_all(graph: &GraphFile, path: &Path, args: &ScoreAllArgs) -> Res
         outcome.edges,
         outcome.clusters,
         outcome.path.display()
+    ))
+}
+
+fn execute_update(
+    ctx: GraphCommandContext<'_>,
+    _args: UpdateArgs,
+) -> Result<String> {
+    let summary = auto_update::auto_update_graph(ctx.graph_file)?;
+
+    if let Some(schema) = ctx.schema {
+        let violations = validate_graph_with_schema(ctx.graph_file, schema);
+        bail_on_schema_violations(&violations)?;
+    }
+
+    ctx.store.save_graph(&ctx.path, ctx.graph_file)?;
+    append_event_snapshot(&ctx.path, "graph.update", Some(ctx.graph_name.to_string()), &ctx.graph_file)?;
+
+    Ok(format!(
+        "= update\n- roots_updated: {}\n- nodes_added: {}\n- nodes_updated: {}\n- nodes_removed: {}\n- edges_added: {}\n- edges_removed: {}\n- notes_removed: {}\n",
+        summary.roots_updated,
+        summary.nodes_added,
+        summary.nodes_updated,
+        summary.nodes_removed,
+        summary.edges_added,
+        summary.edges_removed,
+        summary.notes_removed
     ))
 }
 

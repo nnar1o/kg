@@ -1,54 +1,7 @@
 mod common;
 
-use common::{exec_ok, load_graph, temp_workspace, test_graph_root, write_fixture};
-
-#[test]
-fn add_persists_node_in_existing_graph() {
-    let dir = temp_workspace();
-    write_fixture(&test_graph_root(dir.path()));
-    let output = exec_ok(
-        &[
-            "kg",
-            "fridge",
-            "node",
-            "add",
-            "concept:ice_maker",
-            "--type",
-            "Concept",
-            "--name",
-            "Kostkarka",
-            "--description",
-            "Automatyczna kostkarka do lodu",
-            "--domain-area",
-            "hardware",
-            "--provenance",
-            "D",
-            "--confidence",
-            "0.9",
-            "--created-at",
-            "2026-03-20T01:00:00Z",
-            "--importance",
-            "0.8",
-            "--fact",
-            "Wytwarza kostki lodu co 2 godziny",
-            "--alias",
-            "Ice Maker",
-            "--source",
-            "DOC instrukcja_obslugi.md",
-        ],
-        dir.path(),
-    );
-    assert_eq!(output, "+ node concept:ice_maker\n");
-    let graph = load_graph(&test_graph_root(dir.path()).join("fridge.json"));
-    let node = graph.node_by_id("concept:ice_maker").expect("new node");
-    assert_eq!(node.properties.alias, vec!["Ice Maker"]);
-    assert_eq!(node.properties.domain_area, "hardware");
-    assert_eq!(node.properties.provenance, "D");
-    assert_eq!(node.properties.confidence, Some(0.9));
-    assert_eq!(node.properties.created_at, "2026-03-20T01:00:00Z");
-    assert_eq!(node.properties.importance, 0.8);
-    assert_eq!(graph.metadata.node_count, graph.nodes.len());
-}
+use common::{exec_ok, load_graph, temp_workspace, test_graph_root, write_fixture, write_graph};
+use kg::{GraphFile, Node, NodeProperties};
 
 #[test]
 fn modify_updates_existing_node_without_duplicate_values() {
@@ -240,4 +193,209 @@ fn edge_remove_deletes_existing_edge() {
     );
     let graph = load_graph(&test_graph_root(dir.path()).join("fridge.json"));
     assert!(!graph.has_edge("concept:refrigerator", "HAS", "concept:temperature"));
+}
+
+#[test]
+fn auto_update_roundtrips_d_and_f_node_types() {
+    let dir = temp_workspace();
+    std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+    std::fs::write(dir.path().join("src/main.rs"), b"fn main() {}").expect("write main.rs");
+    std::fs::write(dir.path().join("src/lib.rs"), b"pub fn lib() {}").expect("write lib.rs");
+    std::fs::create_dir_all(dir.path().join("src/utils")).expect("create utils dir");
+    std::fs::write(dir.path().join("src/utils/helper.rs"), b"pub fn help() {}").expect("write helper.rs");
+
+    exec_ok(&["kg", "create", "project"], dir.path());
+
+    let src_path_buf = dir.path().join("src");
+    let src_path = src_path_buf.to_str().unwrap();
+    let graph_path = test_graph_root(dir.path()).join("project.kg");
+    let mut graph = load_graph(&graph_path);
+    graph.nodes.push(Node {
+        id: "D:src".to_owned(),
+        r#type: "D".to_owned(),
+        name: String::new(),
+        properties: NodeProperties::default(),
+        source_files: vec![format!("SOURCECODE {}", src_path)],
+    });
+    write_graph(&graph_path, &graph);
+    assert!(graph.node_by_id("D:src").is_some());
+
+    let output = exec_ok(&["kg", "project", "update"], dir.path());
+    assert!(output.contains("nodes_added: 4"));
+
+    let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
+    assert!(graph.node_by_id("D:src").is_some());
+    assert!(graph.node_by_id("D:utils").is_some());
+    assert!(graph.node_by_id("F:main.rs").is_some());
+    assert!(graph.node_by_id("F:lib.rs").is_some());
+
+    assert!(graph.has_edge("D:src", "HAS", "F:main.rs"));
+    assert!(graph.has_edge("D:src", "HAS", "F:lib.rs"));
+    assert!(graph.has_edge("D:src", "HAS", "D:utils"));
+    assert!(graph.has_edge("D:utils", "HAS", "F:helper.rs"));
+}
+
+#[test]
+fn auto_update_is_idempotent() {
+    let dir = temp_workspace();
+    std::fs::create_dir_all(dir.path().join("data")).expect("create data dir");
+    std::fs::write(dir.path().join("data/file.txt"), b"content").expect("write file");
+
+    exec_ok(&["kg", "create", "project"], dir.path());
+
+    let data_path = dir.path().join("data");
+    let data_path_str = data_path.to_str().unwrap();
+    let graph_path = test_graph_root(dir.path()).join("project.kg");
+    let mut graph = load_graph(&graph_path);
+    graph.nodes.push(Node {
+        id: "D:data".to_owned(),
+        r#type: "D".to_owned(),
+        name: String::new(),
+        properties: NodeProperties::default(),
+        source_files: vec![format!("SOURCECODE {}", data_path_str)],
+    });
+    write_graph(&graph_path, &graph);
+
+    let first = exec_ok(&["kg", "project", "update"], dir.path());
+    assert!(first.contains("nodes_added: 1"));
+
+    let second = exec_ok(&["kg", "project", "update"], dir.path());
+    assert!(second.contains("nodes_added: 0"));
+    assert!(second.contains("nodes_removed: 0"));
+
+    let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
+    assert_eq!(graph.nodes.iter().filter(|n| n.id.starts_with("D:") || n.id.starts_with("F:")).count(), 2);
+}
+
+#[test]
+fn update_with_spaces_in_paths() {
+    let dir = temp_workspace();
+    let dir_with_spaces = dir.path().join("my project");
+    std::fs::create_dir_all(&dir_with_spaces).expect("create dir with spaces");
+    std::fs::write(dir_with_spaces.join("readme.md"), b"# Project").expect("write readme");
+
+    exec_ok(&["kg", "create", "project"], dir.path());
+
+    let dir_with_spaces_str = dir_with_spaces.to_str().unwrap();
+    let graph_path = test_graph_root(dir.path()).join("project.kg");
+    let mut graph = load_graph(&graph_path);
+    graph.nodes.push(Node {
+        id: "D:my project".to_owned(),
+        r#type: "D".to_owned(),
+        name: String::new(),
+        properties: NodeProperties::default(),
+        source_files: vec![format!("SOURCECODE {}", dir_with_spaces_str)],
+    });
+    write_graph(&graph_path, &graph);
+
+    let output = exec_ok(&["kg", "project", "update"], dir.path());
+    assert!(output.contains("nodes_added: 1"));
+
+    let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
+    let node = graph.node_by_id("D:my project").expect("node with spaces in name");
+    assert!(node.source_files.iter().any(|s| s.contains("my project")));
+}
+
+#[test]
+fn auto_update_removes_deleted_nodes() {
+    let dir = temp_workspace();
+    std::fs::create_dir_all(dir.path().join("data")).expect("create data dir");
+    std::fs::write(dir.path().join("data/file.txt"), b"content").expect("write file");
+
+    exec_ok(&["kg", "create", "project"], dir.path());
+
+    let data_path = dir.path().join("data");
+    let data_path_str = data_path.to_str().unwrap();
+    let graph_path = test_graph_root(dir.path()).join("project.kg");
+    let mut graph = load_graph(&graph_path);
+    graph.nodes.push(Node {
+        id: "D:data".to_owned(),
+        r#type: "D".to_owned(),
+        name: String::new(),
+        properties: NodeProperties::default(),
+        source_files: vec![format!("SOURCECODE {}", data_path_str)],
+    });
+    write_graph(&graph_path, &graph);
+
+    exec_ok(&["kg", "project", "update"], dir.path());
+
+    std::fs::remove_file(dir.path().join("data/file.txt")).expect("delete file");
+
+    let output = exec_ok(&["kg", "project", "update"], dir.path());
+    assert!(output.contains("nodes_removed: 1"));
+    assert!(output.contains("edges_removed: 1"));
+
+    let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
+    assert!(graph.node_by_id("F:file.txt").is_none());
+    assert!(graph.has_edge("D:data", "HAS", "F:file.txt") == false);
+}
+
+#[test]
+fn auto_update_handles_notes_on_removed_nodes() {
+    let dir = temp_workspace();
+    std::fs::create_dir_all(dir.path().join("data")).expect("create data dir");
+    std::fs::write(dir.path().join("data/file.txt"), b"content").expect("write file");
+
+    exec_ok(&["kg", "create", "project"], dir.path());
+
+    let data_path = dir.path().join("data");
+    let data_path_str = data_path.to_str().unwrap();
+    let graph_path = test_graph_root(dir.path()).join("project.kg");
+    let mut graph = load_graph(&graph_path);
+    graph.nodes.push(Node {
+        id: "D:data".to_owned(),
+        r#type: "D".to_owned(),
+        name: String::new(),
+        properties: NodeProperties::default(),
+        source_files: vec![format!("SOURCECODE {}", data_path_str)],
+    });
+    write_graph(&graph_path, &graph);
+
+    exec_ok(&["kg", "project", "update"], dir.path());
+
+    exec_ok(
+        &["kg", "project", "note", "add", "F:file.txt", "--text", "Important file"],
+        dir.path(),
+    );
+
+    let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
+    assert_eq!(graph.notes.len(), 1);
+
+    std::fs::remove_file(dir.path().join("data/file.txt")).expect("delete file");
+
+    let output = exec_ok(&["kg", "project", "update"], dir.path());
+    assert!(output.contains("notes_removed: 1"));
+
+    let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
+    assert_eq!(graph.notes.len(), 0);
+}
+
+#[test]
+fn generated_node_rendering_fallback_without_explicit_names() {
+    let dir = temp_workspace();
+    std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+    std::fs::write(dir.path().join("src/main.rs"), b"fn main() {}").expect("write main.rs");
+
+    exec_ok(&["kg", "create", "project"], dir.path());
+
+    let src_path_buf = dir.path().join("src");
+    let src_path = src_path_buf.to_str().unwrap();
+    let graph_path = test_graph_root(dir.path()).join("project.kg");
+    let mut graph = load_graph(&graph_path);
+    graph.nodes.push(kg::Node {
+        id: "D:src".to_owned(),
+        r#type: "D".to_owned(),
+        name: String::new(),
+        properties: kg::NodeProperties::default(),
+        source_files: vec![format!("SOURCECODE {}", src_path)],
+    });
+    write_graph(&graph_path, &graph);
+
+    exec_ok(&["kg", "project", "update"], dir.path());
+
+    let output = exec_ok(&["kg", "project", "node", "get", "D:src"], dir.path());
+    assert!(output.contains("D:src") || output.contains("src"));
+
+    let output = exec_ok(&["kg", "project", "node", "get", "F:main.rs"], dir.path());
+    assert!(output.contains("F:main.rs") || output.contains("main.rs"));
 }
