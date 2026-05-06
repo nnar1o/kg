@@ -1,7 +1,7 @@
 mod common;
 
 use common::{exec_ok, load_graph, temp_workspace, test_graph_root, write_fixture, write_graph};
-use kg::{GraphFile, Node, NodeProperties};
+use kg::{Node, NodeProperties};
 
 #[test]
 fn modify_updates_existing_node_without_duplicate_values() {
@@ -196,7 +196,7 @@ fn edge_remove_deletes_existing_edge() {
 }
 
 #[test]
-fn auto_update_roundtrips_d_and_f_node_types() {
+fn auto_update_roundtrips_generated_node_types() {
     let dir = temp_workspace();
     std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
     std::fs::write(dir.path().join("src/main.rs"), b"fn main() {}").expect("write main.rs");
@@ -225,14 +225,14 @@ fn auto_update_roundtrips_d_and_f_node_types() {
 
     let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
     assert!(graph.node_by_id("D:src").is_some());
-    assert!(graph.node_by_id("D:utils").is_some());
-    assert!(graph.node_by_id("F:main.rs").is_some());
-    assert!(graph.node_by_id("F:lib.rs").is_some());
+    assert!(graph.node_by_id("GDIR:utils").is_some());
+    assert!(graph.node_by_id("GFIL:main.rs").is_some());
+    assert!(graph.node_by_id("GFIL:lib.rs").is_some());
 
-    assert!(graph.has_edge("D:src", "HAS", "F:main.rs"));
-    assert!(graph.has_edge("D:src", "HAS", "F:lib.rs"));
-    assert!(graph.has_edge("D:src", "HAS", "D:utils"));
-    assert!(graph.has_edge("D:utils", "HAS", "F:helper.rs"));
+    assert!(graph.has_edge("D:src", "GHAS", "GFIL:main.rs"));
+    assert!(graph.has_edge("D:src", "GHAS", "GFIL:lib.rs"));
+    assert!(graph.has_edge("D:src", "GHAS", "GDIR:utils"));
+    assert!(graph.has_edge("GDIR:utils", "GHAS", "GFIL:helper.rs"));
 }
 
 #[test]
@@ -264,7 +264,14 @@ fn auto_update_is_idempotent() {
     assert!(second.contains("nodes_removed: 0"));
 
     let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
-    assert_eq!(graph.nodes.iter().filter(|n| n.id.starts_with("D:") || n.id.starts_with("F:")).count(), 2);
+    assert_eq!(
+        graph
+            .nodes
+            .iter()
+            .filter(|n| n.id.starts_with("D:") || n.id.starts_with('G'))
+            .count(),
+        2
+    );
 }
 
 #[test]
@@ -326,8 +333,8 @@ fn auto_update_removes_deleted_nodes() {
     assert!(output.contains("edges_removed: 1"));
 
     let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
-    assert!(graph.node_by_id("F:file.txt").is_none());
-    assert!(graph.has_edge("D:data", "HAS", "F:file.txt") == false);
+    assert!(graph.node_by_id("GFIL:file.txt").is_none());
+    assert!(graph.has_edge("D:data", "GHAS", "GFIL:file.txt") == false);
 }
 
 #[test]
@@ -354,7 +361,7 @@ fn auto_update_handles_notes_on_removed_nodes() {
     exec_ok(&["kg", "project", "update"], dir.path());
 
     exec_ok(
-        &["kg", "project", "note", "add", "F:file.txt", "--text", "Important file"],
+        &["kg", "project", "note", "add", "GFIL:file.txt", "--text", "Important file"],
         dir.path(),
     );
 
@@ -396,6 +403,6 @@ fn generated_node_rendering_fallback_without_explicit_names() {
     let output = exec_ok(&["kg", "project", "node", "get", "D:src"], dir.path());
     assert!(output.contains("D:src") || output.contains("src"));
 
-    let output = exec_ok(&["kg", "project", "node", "get", "F:main.rs"], dir.path());
-    assert!(output.contains("F:main.rs") || output.contains("main.rs"));
+    let output = exec_ok(&["kg", "project", "node", "get", "GFIL:main.rs"], dir.path());
+    assert!(output.contains("GFIL:main.rs") || output.contains("main.rs"));
 }

@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow, bail};
 use crate::graph::{Edge, GraphFile, Node};
 use crate::validate::{
     edge_type_rule, format_edge_source_type_error, format_edge_target_type_error,
-    is_valid_node_type, is_valid_relation,
+    is_generated_node_type, is_generated_relation, is_valid_node_type, is_valid_relation,
 };
 
 // ---------------------------------------------------------------------------
@@ -11,6 +11,9 @@ use crate::validate::{
 // ---------------------------------------------------------------------------
 
 pub fn validate_node(node: &Node) -> Result<()> {
+    if is_generated_node_type(&node.r#type) {
+        bail!("generated nodes are managed by kg-index: {}", node.id);
+    }
     if !is_valid_node_type(&node.r#type) {
         bail!(
             "invalid node_type '{}'. Valid types: {:?}",
@@ -59,6 +62,10 @@ pub fn modify_node(
         .iter()
         .position(|node| node.id == id)
         .ok_or_else(|| anyhow!("node not found: {id}"))?;
+
+    if is_generated_node_type(&graph.nodes[idx].r#type) {
+        bail!("generated nodes are managed by kg-index: {id}");
+    }
 
     let mut updated = graph.nodes[idx].clone();
 
@@ -165,6 +172,12 @@ fn validate_required_metadata(node: &Node) -> Result<()> {
 }
 
 pub fn remove_node(graph: &mut GraphFile, id: &str) -> Result<usize> {
+    if graph
+        .node_by_id(id)
+        .is_some_and(|node| is_generated_node_type(&node.r#type))
+    {
+        bail!("generated nodes are managed by kg-index: {id}");
+    }
     let before_nodes = graph.nodes.len();
     graph.nodes.retain(|node| node.id != id);
     if before_nodes == graph.nodes.len() {
@@ -184,6 +197,9 @@ pub fn remove_node(graph: &mut GraphFile, id: &str) -> Result<usize> {
 // ---------------------------------------------------------------------------
 
 pub fn validate_edge(graph: &GraphFile, edge: &Edge) -> Result<()> {
+    if is_generated_relation(&edge.relation) {
+        bail!("generated edges are managed by kg-index: {} {} {}", edge.source_id, edge.relation, edge.target_id);
+    }
     if !is_valid_relation(&edge.relation) {
         bail!(
             "invalid relation '{}'. Valid: {:?}",
@@ -263,6 +279,9 @@ pub fn remove_edge(
     relation: &str,
     target_id: &str,
 ) -> Result<()> {
+    if is_generated_relation(relation) {
+        bail!("generated edges are managed by kg-index: {source_id} {relation} {target_id}");
+    }
     let before = graph.edges.len();
     graph.edges.retain(|edge| {
         !(edge.source_id == source_id && edge.relation == relation && edge.target_id == target_id)
@@ -397,6 +416,27 @@ mod tests {
     }
 
     #[test]
+    fn add_node_rejects_generated_type() {
+        use crate::graph::GraphFile;
+        let mut graph = GraphFile::new("test");
+        let node = valid_node("GDIR:root", "Root", "GDIR");
+
+        let err = add_node(&mut graph, node).expect_err("generated type should be rejected");
+        assert!(err.to_string().contains("managed by kg-index"));
+    }
+
+    #[test]
+    fn remove_node_rejects_generated_node() {
+        use crate::graph::GraphFile;
+        let mut graph = GraphFile::new("test");
+        let node = valid_node("GDIR:root", "Root", "GDIR");
+        graph.nodes.push(node);
+
+        let err = remove_node(&mut graph, "GDIR:root").expect_err("generated node should be blocked");
+        assert!(err.to_string().contains("managed by kg-index"));
+    }
+
+    #[test]
     fn add_edge_accepts_custom_relation() {
         use crate::graph::{Edge, EdgeProperties, GraphFile};
         let mut graph = GraphFile::new("test");
@@ -417,6 +457,29 @@ mod tests {
         .expect("custom relation should be accepted");
 
         assert!(graph.has_edge("concept:source", "~", "concept:target"));
+    }
+
+    #[test]
+    fn add_edge_rejects_generated_relation() {
+        use crate::graph::{Edge, EdgeProperties, GraphFile};
+        let mut graph = GraphFile::new("test");
+        let source = valid_node("concept:source", "Source", "Concept");
+        let target = valid_node("concept:target", "Target", "Concept");
+        add_node(&mut graph, source).expect("source node");
+        add_node(&mut graph, target).expect("target node");
+
+        let err = add_edge(
+            &mut graph,
+            Edge {
+                source_id: "concept:source".to_owned(),
+                relation: "GCONTAINS".to_owned(),
+                target_id: "concept:target".to_owned(),
+                properties: EdgeProperties::default(),
+            },
+        )
+        .expect_err("generated relation should be rejected");
+
+        assert!(err.to_string().contains("managed by kg-index"));
     }
 
     #[test]

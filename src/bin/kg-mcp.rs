@@ -2396,7 +2396,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_node_add",
-        description = "Add a new node to a graph. Valid node_type: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug. ID must match <type_code>:snake_case (legacy <prefix>:snake_case also accepted). Prefer `kg` when combining multiple actions."
+        description = "Add a new node to a graph. Generated nodes use G-prefixed types like GDIR, GFIL, GDOC, GSYM; manual nodes use non-generated types. ID must match <type_code>:snake_case (legacy <prefix>:snake_case also accepted). Prefer `kg` when combining multiple actions."
     )]
     fn kg_node_add(
         &self,
@@ -2535,7 +2535,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_edge_add",
-        description = "Add an edge between two nodes. Valid relations: HAS, STORED_IN, TRIGGERS, CREATED_BY, AFFECTED_BY, AVAILABLE_IN, DOCUMENTED_IN, DEPENDS_ON, TRANSITIONS, DECIDED_BY, GOVERNED_BY, USES, READS_FROM. Prefer `kg` when combining multiple actions."
+        description = "Add an edge between two nodes. Generated edges use G-prefixed relations like GCONTAINS, GHAS_DOC, GHAS_SYMBOL, GDEFINES, GIMPORTS, GREFERENCES; manual edges keep normal relations. Prefer `kg` when combining multiple actions."
     )]
     fn kg_edge_add(
         &self,

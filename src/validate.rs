@@ -222,6 +222,14 @@ fn valid_generated_node_suffix(suffix: &str) -> bool {
     !name_part.is_empty() && !name_part.contains(':')
 }
 
+pub fn is_generated_node_type(node_type: &str) -> bool {
+    node_type.starts_with('G') && node_type.len() > 1
+}
+
+pub fn is_generated_relation(value: &str) -> bool {
+    value.starts_with('G') && value.len() > 1
+}
+
 fn is_valid_custom_token(token: &str, max_len: usize) -> bool {
     if token.is_empty() || token.len() > max_len {
         return false;
@@ -451,7 +459,7 @@ pub fn canonicalize_node_id_for_type(id: &str, node_type: &str) -> Result<String
             id
         ));
     };
-    let suffix_valid = if matches!(node_type, "D" | "F") {
+    let suffix_valid = if matches!(node_type, "D" | "F") || is_generated_node_type(node_type) {
         valid_generated_node_suffix(suffix)
     } else {
         valid_id_suffix(suffix)
@@ -794,6 +802,12 @@ mod tests {
     fn canonicalize_node_id_allows_custom_type_marker() {
         let canonical = canonicalize_node_id_for_type("~:dedupe_anchor", "~").expect("custom id");
         assert_eq!(canonical, "~:dedupe_anchor");
+    }
+
+    #[test]
+    fn canonicalize_node_id_allows_generated_type_marker() {
+        let canonical = canonicalize_node_id_for_type("GDIR:App", "GDIR").expect("generated id");
+        assert_eq!(canonical, "GDIR:App");
     }
 
     #[test]

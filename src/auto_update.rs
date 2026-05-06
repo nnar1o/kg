@@ -6,10 +6,11 @@ use anyhow::{Context, Result, bail};
 
 use crate::graph::{Edge, EdgeProperties, GraphFile, Node, NodeProperties};
 
-const FILE_PREFIX: &str = "F";
-const DIR_PREFIX: &str = "D";
+const FILE_PREFIX: &str = "GFIL";
+const DIR_PREFIX: &str = "GDIR";
 const PROVENANCE_AUTO: &str = "G";
-const RELATION_HAS: &str = "HAS";
+const RELATION_HAS: &str = "GHAS";
+const LEGACY_RELATION_HAS: &str = "HAS";
 
 #[derive(Debug, Default)]
 pub struct AutoUpdateSummary {
@@ -44,7 +45,7 @@ pub fn auto_update_graph(graph: &mut GraphFile) -> Result<AutoUpdateSummary> {
     let roots = collect_root_specs(graph)?;
     if roots.is_empty() {
         bail!(
-            "no root D nodes with a filesystem source found; add one with `kg graph <name> node add D:<name> --type D --name <name> --source \"SOURCECODE /abs/path\"`"
+            "no root D/DIR nodes with a filesystem source found; add one with `kg graph <name> node add DIR:<name> --type DIR --name <name> --source \"SOURCECODE /abs/path\"`"
         );
     }
 
@@ -122,7 +123,8 @@ fn update_root(graph: &mut GraphFile, root: &RootSpec, summary: &mut AutoUpdateS
 fn collect_root_specs(graph: &GraphFile) -> Result<Vec<RootSpec>> {
     let mut roots = Vec::new();
     for node in &graph.nodes {
-        if node.properties.provenance == PROVENANCE_AUTO || !node.id.starts_with("D:") {
+        let is_root_type = matches!(node.r#type.as_str(), "D" | "DIR");
+        if node.properties.provenance == PROVENANCE_AUTO || !is_root_type {
             continue;
         }
         let Some(path) = extract_scan_path(&node.source_files) else {
@@ -148,7 +150,10 @@ fn generated_subtree(graph: &GraphFile, root_id: &str) -> HashSet<String> {
     let mut queue = VecDeque::from([root_id.to_owned()]);
 
     while let Some(source_id) = queue.pop_front() {
-        for edge in graph.edges.iter().filter(|edge| edge.source_id == source_id && edge.relation == RELATION_HAS) {
+        for edge in graph.edges.iter().filter(|edge| {
+            edge.source_id == source_id
+                && (edge.relation == RELATION_HAS || edge.relation == LEGACY_RELATION_HAS)
+        }) {
             let Some(target) = node_map.get(edge.target_id.as_str()) else {
                 continue;
             };
@@ -252,10 +257,15 @@ fn upsert_generated_node(
 }
 
 fn ensure_has_edge(graph: &mut GraphFile, source_id: &str, target_id: &str, summary: &mut AutoUpdateSummary) {
-    let exists = graph.edges.iter().any(|edge| {
-        edge.source_id == source_id && edge.relation == RELATION_HAS && edge.target_id == target_id
-    });
-    if exists {
+    if let Some(edge) = graph.edges.iter_mut().find(|edge| {
+        edge.source_id == source_id
+            && edge.target_id == target_id
+            && (edge.relation == RELATION_HAS || edge.relation == LEGACY_RELATION_HAS)
+    }) {
+        if edge.relation != RELATION_HAS {
+            edge.relation = RELATION_HAS.to_owned();
+            summary.edges_added += 1;
+        }
         return;
     }
     graph.edges.push(Edge {
