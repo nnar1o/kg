@@ -64,15 +64,15 @@ use app::graph_node_edge::{GraphCommandContext, execute_edge, execute_node};
 use app::graph_note::{GraphNoteContext, execute_note};
 use app::graph_query_quality::{
     execute_audit, execute_baseline, execute_check, execute_duplicates, execute_edge_gaps,
-    execute_feedback_log, execute_feedback_summary, execute_kql, execute_list, execute_missing_descriptions,
-    execute_missing_facts, execute_quality, execute_stats,
+    execute_feedback_log, execute_feedback_summary, execute_kql, execute_list,
+    execute_missing_descriptions, execute_missing_facts, execute_quality, execute_stats,
 };
 use app::graph_transfer_temporal::{
-    GraphTransferContext, execute_access_log, execute_access_paths, execute_access_stats, execute_as_of,
-    execute_diff_as_of, execute_export_dot, execute_export_graphml, execute_export_html,
-    execute_export_json, execute_export_md, execute_export_mermaid, execute_history,
-    execute_import_csv, execute_import_json, execute_import_markdown, execute_split,
-    execute_timeline, execute_vector,
+    GraphTransferContext, execute_access_log, execute_access_paths, execute_access_stats,
+    execute_as_of, execute_diff_as_of, execute_export_dot, execute_export_graphml,
+    execute_export_html, execute_export_json, execute_export_md, execute_export_mermaid,
+    execute_history, execute_import_csv, execute_import_json, execute_import_markdown,
+    execute_split, execute_timeline, execute_vector,
 };
 
 use schema::{GraphSchema, SchemaViolation};
@@ -568,10 +568,7 @@ fn execute_score_all(graph: &GraphFile, path: &Path, args: &ScoreAllArgs) -> Res
     ))
 }
 
-fn execute_update(
-    ctx: GraphCommandContext<'_>,
-    _args: UpdateArgs,
-) -> Result<String> {
+fn execute_update(ctx: GraphCommandContext<'_>, _args: UpdateArgs) -> Result<String> {
     let summary = auto_update::auto_update_graph(ctx.graph_file)?;
 
     if let Some(schema) = ctx.schema {
@@ -580,7 +577,12 @@ fn execute_update(
     }
 
     ctx.store.save_graph(&ctx.path, ctx.graph_file)?;
-    append_event_snapshot(&ctx.path, "graph.update", Some(ctx.graph_name.to_string()), &ctx.graph_file)?;
+    append_event_snapshot(
+        &ctx.path,
+        "graph.update",
+        Some(ctx.graph_name.to_string()),
+        &ctx.graph_file,
+    )?;
 
     Ok(format!(
         "= update\n- roots_updated: {}\n- nodes_added: {}\n- nodes_updated: {}\n- nodes_removed: {}\n- edges_added: {}\n- edges_removed: {}\n- notes_removed: {}\n",

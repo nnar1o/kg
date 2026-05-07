@@ -423,7 +423,10 @@ pub fn detect_paths(graph_path: &Path, time_window_minutes: usize) -> Result<Str
                 if sim > 0.3 {
                     output.push(format!(
                         "  → {} [{} results, {}] (sim: {:.0}%)",
-                        entry.query, entry.results, entry.duration_ms, sim * 100.0
+                        entry.query,
+                        entry.results,
+                        entry.duration_ms,
+                        sim * 100.0
                     ));
                 } else {
                     output.push(format!(

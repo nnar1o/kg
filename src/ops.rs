@@ -56,6 +56,8 @@ pub fn modify_node(
     sources: Vec<String>,
     valid_from: Option<String>,
     valid_to: Option<String>,
+    scan: Option<bool>,
+    scan_ignore_unknown: Option<bool>,
 ) -> Result<()> {
     let idx = graph
         .nodes
@@ -108,6 +110,12 @@ pub fn modify_node(
     }
     if let Some(v) = valid_to {
         updated.properties.valid_to = v;
+    }
+    if let Some(v) = scan {
+        updated.properties.scan = Some(v);
+    }
+    if let Some(v) = scan_ignore_unknown {
+        updated.properties.scan_ignore_unknown = Some(v);
     }
 
     normalize_sources(&mut updated.source_files);
@@ -198,7 +206,12 @@ pub fn remove_node(graph: &mut GraphFile, id: &str) -> Result<usize> {
 
 pub fn validate_edge(graph: &GraphFile, edge: &Edge) -> Result<()> {
     if is_generated_relation(&edge.relation) {
-        bail!("generated edges are managed by kg-index: {} {} {}", edge.source_id, edge.relation, edge.target_id);
+        bail!(
+            "generated edges are managed by kg-index: {} {} {}",
+            edge.source_id,
+            edge.relation,
+            edge.target_id
+        );
     }
     if !is_valid_relation(&edge.relation) {
         bail!(
@@ -432,7 +445,8 @@ mod tests {
         let node = valid_node("GDIR:root", "Root", "GDIR");
         graph.nodes.push(node);
 
-        let err = remove_node(&mut graph, "GDIR:root").expect_err("generated node should be blocked");
+        let err =
+            remove_node(&mut graph, "GDIR:root").expect_err("generated node should be blocked");
         assert!(err.to_string().contains("managed by kg-index"));
     }
 

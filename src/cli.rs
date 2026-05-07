@@ -158,7 +158,10 @@ pub enum GraphCommand {
     },
     #[command(about = "Show graph statistics")]
     Stats(StatsArgs),
-    #[command(name = "list", about = "List all nodes with optional filters (KQL-based)")]
+    #[command(
+        name = "list",
+        about = "List all nodes with optional filters (KQL-based)"
+    )]
     List(ListArgs),
     #[command(about = "Run integrity validation checks")]
     Check(CheckArgs),
@@ -235,10 +238,7 @@ pub enum GraphCommand {
         about = "Compute all-vs-all similarity scores into cache graph"
     )]
     ScoreAll(ScoreAllArgs),
-    #[command(
-        name = "update",
-        about = "Auto-update graph nodes from filesystem"
-    )]
+    #[command(name = "update", about = "Auto-update graph nodes from filesystem")]
     Update(UpdateArgs),
 }
 
@@ -260,18 +260,25 @@ pub struct ScoreAllArgs {
 
 #[derive(Debug, Args, Clone)]
 pub struct UpdateArgs {
-    // Intentionally empty: update scans all root D nodes already present in graph.
+    // Intentionally empty: update scans all root D/DIR nodes already present in graph.
 }
 
 #[derive(Debug, Args, Clone)]
 pub struct ListArgs {
     #[arg(long, help = "Filter by node type, e.g. Bug, Feature, Concept")]
     pub r#type: Option<String>,
-    #[arg(long, short = 's', help = "Show nodes created after this date (YYYY-MM-DD)")]
+    #[arg(
+        long,
+        short = 's',
+        help = "Show nodes created after this date (YYYY-MM-DD)"
+    )]
     pub since: Option<String>,
     #[arg(long, short = 'l', help = "Limit number of results")]
     pub limit: Option<usize>,
-    #[arg(long, help = "Output fields: id, name, type, created_at (comma-separated)")]
+    #[arg(
+        long,
+        help = "Output fields: id, name, type, created_at (comma-separated)"
+    )]
     pub fields: Option<String>,
 }
 
@@ -727,6 +734,10 @@ pub struct AddNodeArgs {
     pub valid_from: Option<String>,
     #[arg(long)]
     pub valid_to: Option<String>,
+    #[arg(long, default_value_t = true)]
+    pub scan: bool,
+    #[arg(long, default_value_t = true)]
+    pub scan_ignore_unknown: bool,
 }
 
 #[derive(Debug, Args)]
@@ -758,6 +769,10 @@ pub struct ModifyNodeArgs {
     pub valid_from: Option<String>,
     #[arg(long)]
     pub valid_to: Option<String>,
+    #[arg(long)]
+    pub scan: Option<bool>,
+    #[arg(long)]
+    pub scan_ignore_unknown: Option<bool>,
 }
 
 #[derive(Debug, Args)]

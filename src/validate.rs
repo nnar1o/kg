@@ -97,7 +97,15 @@ pub const EDGE_TYPE_RULES: &[(&str, &[&str], &[&str])] = &[
     (
         "HAS",
         &["Concept", "Process", "Interface", "D", "F"],
-        &["Concept", "Feature", "DataStore", "Rule", "Interface", "D", "F"],
+        &[
+            "Concept",
+            "Feature",
+            "DataStore",
+            "Rule",
+            "Interface",
+            "D",
+            "F",
+        ],
     ),
     ("STORED_IN", &["Concept", "Process", "Rule"], &["DataStore"]),
     (
@@ -453,13 +461,33 @@ pub fn normalize_node_id(id: &str) -> String {
 ///
 /// Returns canonical legacy `prefix:snake_case` on success.
 pub fn canonicalize_node_id_for_type(id: &str, node_type: &str) -> Result<String, String> {
+    if is_generated_node_type(node_type) {
+        let suffix = match id.split_once(':') {
+            Some((head, suffix)) if head == node_type => suffix,
+            Some((head, _)) => {
+                return Err(format!(
+                    "node id '{}' has type marker '{}'; expected '{}' or a path-only id",
+                    id, head, node_type
+                ));
+            }
+            None => id,
+        };
+        if !valid_generated_node_suffix(suffix) {
+            return Err(format!(
+                "node id '{}' has invalid suffix for type '{}'",
+                id, node_type
+            ));
+        }
+        return Ok(suffix.to_owned());
+    }
+
     let Some((head, suffix)) = id.split_once(':') else {
         return Err(format!(
             "node id '{}' must be in format <type_code>:snake_case",
             id
         ));
     };
-    let suffix_valid = if matches!(node_type, "D" | "F") || is_generated_node_type(node_type) {
+    let suffix_valid = if matches!(node_type, "D" | "F") {
         valid_generated_node_suffix(suffix)
     } else {
         valid_id_suffix(suffix)
@@ -563,14 +591,15 @@ pub fn validate_graph(
     let mut id_counts = HashMap::<&str, usize>::new();
     for node in &graph.nodes {
         *id_counts.entry(node.id.as_str()).or_insert(0) += 1;
+        let generated = is_generated_node_type(&node.r#type);
 
         if !is_valid_node_type(&node.r#type) {
             errors.push(format!("node {} has invalid type {}", node.id, node.r#type));
         }
-        if node.name.trim().is_empty() && node.properties.provenance != "G" {
+        if node.name.trim().is_empty() && !generated && node.properties.provenance != "G" {
             errors.push(format!("node {} missing name", node.id));
         }
-        if node.source_files.is_empty() {
+        if !generated && node.source_files.is_empty() {
             errors.push(format!("node {} missing source_files", node.id));
         }
 
@@ -608,7 +637,7 @@ pub fn validate_graph(
         }
 
         // quality warnings (skip Feature nodes)
-        if node.r#type != "Feature" && node.properties.provenance != "G" {
+        if !generated && node.r#type != "Feature" && node.properties.provenance != "G" {
             if node.properties.description.trim().is_empty() {
                 warnings.push(format!("node {} missing description", node.id));
             }
@@ -627,19 +656,20 @@ pub fn validate_graph(
                 ));
             }
         }
-        if is_legacy_importance(node.properties.importance) {
+        if !generated && is_legacy_importance(node.properties.importance) {
             warnings.push(format!(
                 "node {} uses legacy importance scale (1..6): {}",
                 node.id, node.properties.importance
             ));
-        } else if !is_valid_importance(node.properties.importance) {
+        } else if !generated && !is_valid_importance(node.properties.importance) {
             errors.push(format!(
                 "node {} importance out of range: {}",
                 node.id, node.properties.importance
             ));
         }
 
-        if !node.properties.provenance.trim().is_empty()
+        if !generated
+            && !node.properties.provenance.trim().is_empty()
             && !VALID_PROVENANCE_CODES.contains(&node.properties.provenance.as_str())
         {
             warnings.push(format!(
@@ -650,12 +680,14 @@ pub fn validate_graph(
             ));
         }
 
-        for source in &node.source_files {
-            if let Err(err) = validate_source_reference(source) {
-                warnings.push(format!(
-                    "node {} has non-standard source '{}': {}",
-                    node.id, source, err
-                ));
+        if !generated {
+            for source in &node.source_files {
+                if let Err(err) = validate_source_reference(source) {
+                    warnings.push(format!(
+                        "node {} has non-standard source '{}': {}",
+                        node.id, source, err
+                    ));
+                }
             }
         }
     }
@@ -807,7 +839,7 @@ mod tests {
     #[test]
     fn canonicalize_node_id_allows_generated_type_marker() {
         let canonical = canonicalize_node_id_for_type("GDIR:App", "GDIR").expect("generated id");
-        assert_eq!(canonical, "GDIR:App");
+        assert_eq!(canonical, "App");
     }
 
     #[test]

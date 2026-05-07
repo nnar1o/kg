@@ -89,15 +89,16 @@ What is missing for indexing:
 
 1. Scan a base directory recursively.
 2. Allow optional include filter, e.g. regex or glob.
-3. Ignore common junk by default:
+3. Allow optional `scan_ignore_unknown` so unknown file types stay out of the graph by default.
+4. Ignore common junk by default:
    - `.git`
    - `node_modules`
    - `target`
    - build artifacts
    - binary files
-4. Parse many file types, with best-effort fallbacks.
-5. Build a deterministic graph.
-6. Support incremental reindexing.
+5. Parse many file types, with best-effort fallbacks.
+6. Build a deterministic graph.
+7. Support incremental reindexing.
 
 ### Output
 
@@ -260,8 +261,9 @@ Why:
 2. Store scan state per root.
 3. Rebuild only changed subtrees when possible.
 4. Keep parser failures as first-class warnings, not silent drops.
-5. Track indexer-owned edges with `G...` relation types so reindexing can replace generated structure without deleting user-authored links.
-6. Preserve manual edges pointing at `G...` nodes across reindexing; if the target disappears, mark the edge dangling or redirect it instead of silently dropping it.
+5. Skip unknown file types when `scan_ignore_unknown` is enabled; treat them as `GFIL` only when explicitly allowed or when a parser recognizes them.
+6. Track indexer-owned edges with `G...` relation types so reindexing can replace generated structure without deleting user-authored links.
+7. Preserve manual edges pointing at `G...` nodes across reindexing; if the target disappears, mark the edge dangling or redirect it instead of silently dropping it.
 
 ## Schema Extensions Needed
 

@@ -222,6 +222,8 @@ pub(crate) fn execute_node(
             source,
             valid_from,
             valid_to,
+            scan,
+            scan_ignore_unknown,
         }) => {
             let id = crate::validate::canonicalize_node_id_for_type(&id, &node_type)
                 .map_err(anyhow::Error::msg)?;
@@ -250,6 +252,8 @@ pub(crate) fn execute_node(
                     alias,
                     valid_from: valid_from.unwrap_or_default(),
                     valid_to: valid_to.unwrap_or_default(),
+                    scan: Some(scan),
+                    scan_ignore_unknown: Some(scan_ignore_unknown),
                     ..NodeProperties::default()
                 },
                 source_files: source,
@@ -291,6 +295,8 @@ pub(crate) fn execute_node(
             source,
             valid_from,
             valid_to,
+            scan,
+            scan_ignore_unknown,
         }) => {
             let id = resolve_existing_node_id(context.graph_file, &id);
 
@@ -313,6 +319,8 @@ pub(crate) fn execute_node(
                 source.clone(),
                 valid_from.clone(),
                 valid_to.clone(),
+                scan,
+                scan_ignore_unknown,
             )?;
             if let Some(schema) = context.schema {
                 if let Some(node) = context.graph_file.node_by_id(&id) {
@@ -352,12 +360,38 @@ pub(crate) fn execute_node(
                         diff_lines.push(format!("- importance: {}", old.properties.importance));
                         diff_lines.push(format!("+ importance: {}", new.properties.importance));
                     }
+                    if old.properties.scan != new.properties.scan {
+                        diff_lines.push(format!("- scan: {:?}", old.properties.scan));
+                        diff_lines.push(format!("+ scan: {:?}", new.properties.scan));
+                    }
+                    if old.properties.scan_ignore_unknown != new.properties.scan_ignore_unknown {
+                        diff_lines.push(format!(
+                            "- scan_ignore_unknown: {:?}",
+                            old.properties.scan_ignore_unknown
+                        ));
+                        diff_lines.push(format!(
+                            "+ scan_ignore_unknown: {:?}",
+                            new.properties.scan_ignore_unknown
+                        ));
+                    }
                     // Confidence diff
                     let old_conf = old.properties.confidence.unwrap_or(-1.0);
                     let new_conf = new.properties.confidence.unwrap_or(-1.0);
                     if (old_conf - new_conf).abs() > 0.001 {
-                        diff_lines.push(format!("- confidence: {}", old.properties.confidence.map(|c| c.to_string()).unwrap_or_else(|| "none".to_string())));
-                        diff_lines.push(format!("+ confidence: {}", new.properties.confidence.map(|c| c.to_string()).unwrap_or_else(|| "none".to_string())));
+                        diff_lines.push(format!(
+                            "- confidence: {}",
+                            old.properties
+                                .confidence
+                                .map(|c| c.to_string())
+                                .unwrap_or_else(|| "none".to_string())
+                        ));
+                        diff_lines.push(format!(
+                            "+ confidence: {}",
+                            new.properties
+                                .confidence
+                                .map(|c| c.to_string())
+                                .unwrap_or_else(|| "none".to_string())
+                        ));
                     }
                     // valid_from diff
                     if old.properties.valid_from != new.properties.valid_from {

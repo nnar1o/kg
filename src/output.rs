@@ -1058,7 +1058,12 @@ fn node_display_name(node: &Node) -> String {
     let raw = node
         .id
         .split_once(':')
-        .map(|(_, suffix)| suffix.rsplit_once(':').map(|(name, _)| name).unwrap_or(suffix))
+        .map(|(_, suffix)| {
+            suffix
+                .rsplit_once(':')
+                .map(|(name, _)| name)
+                .unwrap_or(suffix)
+        })
         .unwrap_or(node.id.as_str())
         .to_owned();
     unescape_generated_name(&raw)
@@ -1256,6 +1261,7 @@ fn render_node_block_with_query(
 ) -> String {
     let mut lines = Vec::new();
     let display_name = node_display_name(node);
+    let generated = crate::validate::is_generated_node_type(&node.r#type);
     lines.push(format!(
         "# {} | {} [{}]",
         node.id,
@@ -1279,12 +1285,18 @@ fn render_node_block_with_query(
         &node.properties.description,
         if full { None } else { Some(200) },
     );
-    if full {
+    if full && !generated {
         if !node.properties.domain_area.is_empty() {
             lines.push(format!(
                 "domain_area: {}",
                 escape_cli_text(&node.properties.domain_area)
             ));
+        }
+        if let Some(scan) = node.properties.scan {
+            lines.push(format!("scan: {scan}"));
+        }
+        if let Some(scan_ignore_unknown) = node.properties.scan_ignore_unknown {
+            lines.push(format!("scan_ignore_unknown: {scan_ignore_unknown}"));
         }
         if !node.properties.provenance.is_empty() {
             lines.push(format!(
@@ -1318,7 +1330,7 @@ fn render_node_block_with_query(
         lines.push(format!("... {omitted} more facts omitted"));
     }
 
-    if full {
+    if full && !generated {
         if !node.source_files.is_empty() {
             lines.push(format!(
                 "sources: {}",

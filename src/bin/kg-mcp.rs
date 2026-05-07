@@ -25,6 +25,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 struct KgCommandArgs {
     #[schemars(description = "Arguments passed to `kg` (without the binary name)")]
@@ -108,6 +112,10 @@ struct NodeAddArgs {
     aliases: Vec<String>,
     #[serde(default)]
     sources: Vec<String>,
+    #[serde(default = "default_true")]
+    scan: bool,
+    #[serde(default = "default_true")]
+    scan_ignore_unknown: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -136,6 +144,10 @@ struct NodeModifyArgs {
     aliases: Vec<String>,
     #[serde(default)]
     sources: Vec<String>,
+    #[serde(default)]
+    scan: Option<bool>,
+    #[serde(default)]
+    scan_ignore_unknown: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2458,6 +2470,10 @@ impl KgMcpServer {
             cmd.push("--source".to_owned());
             cmd.push(source);
         }
+        cmd.push("--scan".to_owned());
+        cmd.push(args.scan.to_string());
+        cmd.push("--scan-ignore-unknown".to_owned());
+        cmd.push(args.scan_ignore_unknown.to_string());
         self.execute_kg(cmd)
     }
 
@@ -2513,6 +2529,14 @@ impl KgMcpServer {
         for source in args.sources {
             cmd.push("--source".to_owned());
             cmd.push(source);
+        }
+        if let Some(scan) = args.scan {
+            cmd.push("--scan".to_owned());
+            cmd.push(scan.to_string());
+        }
+        if let Some(scan_ignore_unknown) = args.scan_ignore_unknown {
+            cmd.push("--scan-ignore-unknown".to_owned());
+            cmd.push(scan_ignore_unknown.to_string());
         }
         self.execute_kg(cmd)
     }
@@ -3602,7 +3626,9 @@ fn looks_like_permission_error(message: &str) -> bool {
 fn error_hint(kind: &str) -> &'static str {
     match kind {
         "parse_error" => "Check command syntax and required arguments.",
-        "validation_error" => "Check importance (0-1 or 1-6), --source requirement, and other field constraints.",
+        "validation_error" => {
+            "Check importance (0-1 or 1-6), --source requirement, and other field constraints."
+        }
         "permission_denied" => "Verify file permissions and graph path access.",
         _ => "Inspect stderr_tail for details.",
     }

@@ -352,6 +352,14 @@ fn parse_utc_timestamp(value: &str) -> bool {
         && matches!(second, Some(0..=59))
 }
 
+fn parse_boolish(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 fn strict_kg_mode() -> bool {
     let Ok(value) = std::env::var("KG_STRICT_FORMAT") else {
         return false;
@@ -503,7 +511,17 @@ fn parse_kg_with_warnings(
             let decoded_type = decode_node_type_token(type_code.trim());
             let parsed_id = {
                 let raw_id = node_id.trim();
-                if type_code.trim().starts_with('=') && raw_id.contains(':') {
+                if crate::validate::is_generated_node_type(&decoded_type) {
+                    if let Some((head, suffix)) = raw_id.split_once(':') {
+                        if head == decoded_type {
+                            suffix.to_owned()
+                        } else {
+                            raw_id.to_owned()
+                        }
+                    } else {
+                        raw_id.to_owned()
+                    }
+                } else if type_code.trim().starts_with('=') && raw_id.contains(':') {
                     raw_id.to_owned()
                 } else if raw_id.contains(':') {
                     crate::validate::normalize_node_id(raw_id)
@@ -1042,6 +1060,12 @@ fn parse_kg_with_warnings(
             }
             match key {
                 "domain_area" => node.properties.domain_area = parse_text_field(value),
+                "scan" => {
+                    node.properties.scan = parse_boolish(value);
+                }
+                "scan_ignore_unknown" => {
+                    node.properties.scan_ignore_unknown = parse_boolish(value);
+                }
                 "feedback_score" => {
                     node.properties.feedback_score = value.trim().parse::<f64>().unwrap_or(0.0)
                 }
@@ -1127,6 +1151,7 @@ fn serialize_kg(graph: &GraphFile) -> String {
     nodes.sort_by(|a, b| a.id.cmp(&b.id));
 
     for node in nodes {
+        let generated = crate::validate::is_generated_node_type(&node.r#type);
         out.push_str(&format!(
             "@ {}:{}\n",
             encode_node_type_token(&node.r#type),
@@ -1146,39 +1171,47 @@ fn serialize_kg(graph: &GraphFile) -> String {
             push_text_line(&mut out, "F", &fact);
         }
 
-        if !node.properties.created_at.is_empty() {
-            out.push_str(&format!("E {}\n", node.properties.created_at));
-        }
-        if let Some(confidence) = node.properties.confidence {
-            out.push_str(&format!("C {}\n", confidence));
-        }
-        out.push_str(&format!("V {}\n", node.properties.importance));
-        if !node.properties.provenance.is_empty() {
-            push_text_line(&mut out, "P", &node.properties.provenance);
-        }
-        if !node.properties.domain_area.is_empty() {
-            out.push_str("- domain_area ");
-            out.push_str(&escape_kg_text(&node.properties.domain_area));
-            out.push('\n');
-        }
-        if node.properties.feedback_score != 0.0 {
-            out.push_str(&format!(
-                "- feedback_score {}\n",
-                node.properties.feedback_score
-            ));
-        }
-        if node.properties.feedback_count != 0 {
-            out.push_str(&format!(
-                "- feedback_count {}\n",
-                node.properties.feedback_count
-            ));
-        }
-        if let Some(ts) = node.properties.feedback_last_ts_ms {
-            out.push_str(&format!("- feedback_last_ts_ms {}\n", ts));
-        }
+        if !generated {
+            if !node.properties.created_at.is_empty() {
+                out.push_str(&format!("E {}\n", node.properties.created_at));
+            }
+            if let Some(confidence) = node.properties.confidence {
+                out.push_str(&format!("C {}\n", confidence));
+            }
+            out.push_str(&format!("V {}\n", node.properties.importance));
+            if !node.properties.provenance.is_empty() {
+                push_text_line(&mut out, "P", &node.properties.provenance);
+            }
+            if !node.properties.domain_area.is_empty() {
+                out.push_str("- domain_area ");
+                out.push_str(&escape_kg_text(&node.properties.domain_area));
+                out.push('\n');
+            }
+            if let Some(scan) = node.properties.scan {
+                out.push_str(&format!("- scan {}\n", scan));
+            }
+            if let Some(scan_ignore_unknown) = node.properties.scan_ignore_unknown {
+                out.push_str(&format!("- scan_ignore_unknown {}\n", scan_ignore_unknown));
+            }
+            if node.properties.feedback_score != 0.0 {
+                out.push_str(&format!(
+                    "- feedback_score {}\n",
+                    node.properties.feedback_score
+                ));
+            }
+            if node.properties.feedback_count != 0 {
+                out.push_str(&format!(
+                    "- feedback_count {}\n",
+                    node.properties.feedback_count
+                ));
+            }
+            if let Some(ts) = node.properties.feedback_last_ts_ms {
+                out.push_str(&format!("- feedback_last_ts_ms {}\n", ts));
+            }
 
-        for source in sort_case_insensitive(&node.source_files) {
-            push_text_line(&mut out, "S", &source);
+            for source in sort_case_insensitive(&node.source_files) {
+                push_text_line(&mut out, "S", &source);
+            }
         }
 
         let mut edges: Vec<Edge> = graph
@@ -1324,6 +1357,10 @@ pub struct NodeProperties {
     #[serde(default)]
     pub valid_to: String,
     #[serde(default)]
+    pub scan: Option<bool>,
+    #[serde(default)]
+    pub scan_ignore_unknown: Option<bool>,
+    #[serde(default)]
     pub feedback_score: f64,
     #[serde(default)]
     pub feedback_count: u64,
@@ -1348,6 +1385,8 @@ impl Default for NodeProperties {
             alias: Vec::new(),
             valid_from: String::new(),
             valid_to: String::new(),
+            scan: None,
+            scan_ignore_unknown: None,
             feedback_score: 0.0,
             feedback_count: 0,
             feedback_last_ts_ms: None,
@@ -1526,26 +1565,20 @@ fn normalize_graph_ids(graph: &mut GraphFile) {
         graph.nodes.iter().map(|node| node.id.as_str()).collect();
 
     for edge in &mut graph.edges {
-        edge.source_id = remap
-            .get(&edge.source_id)
-            .cloned()
-            .unwrap_or_else(|| {
-                if known_ids.contains(edge.source_id.as_str()) {
-                    edge.source_id.clone()
-                } else {
-                    crate::validate::normalize_node_id(&edge.source_id)
-                }
-            });
-        edge.target_id = remap
-            .get(&edge.target_id)
-            .cloned()
-            .unwrap_or_else(|| {
-                if known_ids.contains(edge.target_id.as_str()) {
-                    edge.target_id.clone()
-                } else {
-                    crate::validate::normalize_node_id(&edge.target_id)
-                }
-            });
+        edge.source_id = remap.get(&edge.source_id).cloned().unwrap_or_else(|| {
+            if known_ids.contains(edge.source_id.as_str()) {
+                edge.source_id.clone()
+            } else {
+                crate::validate::normalize_node_id(&edge.source_id)
+            }
+        });
+        edge.target_id = remap.get(&edge.target_id).cloned().unwrap_or_else(|| {
+            if known_ids.contains(edge.target_id.as_str()) {
+                edge.target_id.clone()
+            } else {
+                crate::validate::normalize_node_id(&edge.target_id)
+            }
+        });
         if edge.properties.bidirectional {
             let (source_id, target_id) =
                 canonicalize_bidirectional_pair(&edge.source_id, &edge.target_id);
@@ -1555,16 +1588,13 @@ fn normalize_graph_ids(graph: &mut GraphFile) {
     }
 
     for note in &mut graph.notes {
-        note.node_id = remap
-            .get(&note.node_id)
-            .cloned()
-            .unwrap_or_else(|| {
-                if known_ids.contains(note.node_id.as_str()) {
-                    note.node_id.clone()
-                } else {
-                    crate::validate::normalize_node_id(&note.node_id)
-                }
-            });
+        note.node_id = remap.get(&note.node_id).cloned().unwrap_or_else(|| {
+            if known_ids.contains(note.node_id.as_str()) {
+                note.node_id.clone()
+            } else {
+                crate::validate::normalize_node_id(&note.node_id)
+            }
+        });
     }
 }
 
@@ -1662,6 +1692,8 @@ mod tests {
                 importance: 5.0,
                 key_facts: vec!["A".to_owned(), "b".to_owned()],
                 alias: vec!["Fridge".to_owned()],
+                scan: Some(true),
+                scan_ignore_unknown: Some(true),
                 ..Default::default()
             },
             source_files: vec!["docs/fridge.md".to_owned()],
@@ -1691,6 +1723,8 @@ mod tests {
             .expect("domain node");
         assert_eq!(node.properties.importance, 5.0);
         assert_eq!(node.properties.provenance, "U");
+        assert_eq!(node.properties.scan, Some(true));
+        assert_eq!(node.properties.scan_ignore_unknown, Some(true));
         assert_eq!(node.name, "Lodowka");
         assert_eq!(loaded.edges[0].relation, "READS_FROM");
         assert_eq!(loaded.edges[0].properties.detail, "runtime read");

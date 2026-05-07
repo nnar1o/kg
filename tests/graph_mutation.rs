@@ -39,7 +39,7 @@ fn modify_updates_existing_node_without_duplicate_values() {
         ],
         dir.path(),
     );
-// Output should show the changes (actual behavior)
+    // Output should show the changes (actual behavior)
     assert!(output.contains("~ node concept:temperature"));
     assert!(output.contains("name: Temperatura Komory"));
     let graph = load_graph(&test_graph_root(dir.path()).join("fridge.json"));
@@ -202,7 +202,8 @@ fn auto_update_roundtrips_generated_node_types() {
     std::fs::write(dir.path().join("src/main.rs"), b"fn main() {}").expect("write main.rs");
     std::fs::write(dir.path().join("src/lib.rs"), b"pub fn lib() {}").expect("write lib.rs");
     std::fs::create_dir_all(dir.path().join("src/utils")).expect("create utils dir");
-    std::fs::write(dir.path().join("src/utils/helper.rs"), b"pub fn help() {}").expect("write helper.rs");
+    std::fs::write(dir.path().join("src/utils/helper.rs"), b"pub fn help() {}")
+        .expect("write helper.rs");
 
     exec_ok(&["kg", "create", "project"], dir.path());
 
@@ -225,14 +226,14 @@ fn auto_update_roundtrips_generated_node_types() {
 
     let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
     assert!(graph.node_by_id("D:src").is_some());
-    assert!(graph.node_by_id("GDIR:utils").is_some());
-    assert!(graph.node_by_id("GFIL:main.rs").is_some());
-    assert!(graph.node_by_id("GFIL:lib.rs").is_some());
+    assert!(graph.node_by_id("utils").is_some());
+    assert!(graph.node_by_id("main.rs").is_some());
+    assert!(graph.node_by_id("lib.rs").is_some());
 
-    assert!(graph.has_edge("D:src", "GHAS", "GFIL:main.rs"));
-    assert!(graph.has_edge("D:src", "GHAS", "GFIL:lib.rs"));
-    assert!(graph.has_edge("D:src", "GHAS", "GDIR:utils"));
-    assert!(graph.has_edge("GDIR:utils", "GHAS", "GFIL:helper.rs"));
+    assert!(graph.has_edge("D:src", "GHAS", "main.rs"));
+    assert!(graph.has_edge("D:src", "GHAS", "lib.rs"));
+    assert!(graph.has_edge("D:src", "GHAS", "utils"));
+    assert!(graph.has_edge("utils", "GHAS", "utils/helper.rs"));
 }
 
 #[test]
@@ -268,9 +269,9 @@ fn auto_update_is_idempotent() {
         graph
             .nodes
             .iter()
-            .filter(|n| n.id.starts_with("D:") || n.id.starts_with('G'))
+            .filter(|n| n.id.starts_with("D:") || n.id.contains('/'))
             .count(),
-        2
+        1
     );
 }
 
@@ -299,8 +300,8 @@ fn update_with_spaces_in_paths() {
     assert!(output.contains("nodes_added: 1"));
 
     let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
-    let node = graph.node_by_id("D:my project").expect("node with spaces in name");
-    assert!(node.source_files.iter().any(|s| s.contains("my project")));
+    let node = graph.node_by_id("readme.md").expect("generated file node");
+    assert_eq!(node.source_files.len(), 0);
 }
 
 #[test]
@@ -333,8 +334,8 @@ fn auto_update_removes_deleted_nodes() {
     assert!(output.contains("edges_removed: 1"));
 
     let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
-    assert!(graph.node_by_id("GFIL:file.txt").is_none());
-    assert!(graph.has_edge("D:data", "GHAS", "GFIL:file.txt") == false);
+    assert!(graph.node_by_id("file.txt").is_none());
+    assert!(!graph.has_edge("D:data", "GHAS", "file.txt"));
 }
 
 #[test]
@@ -361,7 +362,15 @@ fn auto_update_handles_notes_on_removed_nodes() {
     exec_ok(&["kg", "project", "update"], dir.path());
 
     exec_ok(
-        &["kg", "project", "note", "add", "GFIL:file.txt", "--text", "Important file"],
+        &[
+            "kg",
+            "project",
+            "note",
+            "add",
+            "file.txt",
+            "--text",
+            "Important file",
+        ],
         dir.path(),
     );
 
@@ -403,6 +412,6 @@ fn generated_node_rendering_fallback_without_explicit_names() {
     let output = exec_ok(&["kg", "project", "node", "get", "D:src"], dir.path());
     assert!(output.contains("D:src") || output.contains("src"));
 
-    let output = exec_ok(&["kg", "project", "node", "get", "GFIL:main.rs"], dir.path());
-    assert!(output.contains("GFIL:main.rs") || output.contains("main.rs"));
+    let output = exec_ok(&["kg", "project", "node", "get", "main.rs"], dir.path());
+    assert!(output.contains("main.rs"));
 }
