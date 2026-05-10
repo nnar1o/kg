@@ -111,6 +111,24 @@ When you finish, summarize what was added, what remains unclear, and what docume
 
 Longer prompt for this workflow: [`docs/ai-prompt-graph-from-docs.md`](docs/ai-prompt-graph-from-docs.md)
 
+For a ready-made repository example, run `cargo run --bin repo-example` to generate `repo-example.kg` from this repo.
+
+### Automatic graph for a directory
+
+`kg` can turn an existing folder into a graph automatically. It scans the directory tree, recognizes many common file types, extracts symbols for Rust, Java, JavaScript/TypeScript, Python, and C/C++, and keeps the generated structure separate from the manual graph.
+
+For markdown-like documents, it also creates document (`GDOC`) and chapter (`GSEC`) nodes with section content.
+
+It is a fast way to get a useful map of a codebase or workspace without modeling everything by hand. The generated index is local, refreshable, and safe to ignore in git.
+
+Example:
+
+```sh
+cargo run --bin repo-example
+```
+
+This generates `repo-example.kg` from this repository as a local demo.
+
 ## Ask the Assistant About Facts in the Graph
 
 Once the graph exists, the normal workflow is to ask the assistant to inspect it and answer questions from it.
@@ -214,6 +232,7 @@ Recommended approach:
 Suggested `.gitignore`:
 
 ```gitignore
+*.kglog
 *.kgindex
 *.event.log
 *.migration.log
@@ -224,6 +243,7 @@ Suggested `.gitignore`:
 In practice:
 
 - `*.kg` is the main graph file you usually want to review and commit,
+- `*.kglog` is a local access/feedback log,
 - `*.kgindex` is a generated local index,
 - `*.event.log` is a local append-only change timeline,
 - `*.bak` is the previous on-disk version from the last write,

@@ -459,7 +459,7 @@ pub fn normalize_node_id(id: &str) -> String {
 
 /// Validate and canonicalize a node id for a concrete node type.
 ///
-/// Returns canonical legacy `prefix:snake_case` on success.
+/// Returns canonical `TYPE:snake_case` on success.
 pub fn canonicalize_node_id_for_type(id: &str, node_type: &str) -> Result<String, String> {
     if is_generated_node_type(node_type) {
         let suffix = match id.split_once(':') {
@@ -478,7 +478,7 @@ pub fn canonicalize_node_id_for_type(id: &str, node_type: &str) -> Result<String
                 id, node_type
             ));
         }
-        return Ok(suffix.to_owned());
+        return Ok(format!("{node_type}:{suffix}"));
     }
 
     let Some((head, suffix)) = id.split_once(':') else {
@@ -839,7 +839,7 @@ mod tests {
     #[test]
     fn canonicalize_node_id_allows_generated_type_marker() {
         let canonical = canonicalize_node_id_for_type("GDIR:App", "GDIR").expect("generated id");
-        assert_eq!(canonical, "App");
+        assert_eq!(canonical, "GDIR:App");
     }
 
     #[test]

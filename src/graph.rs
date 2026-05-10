@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 const GRAPH_INFO_NODE_ID: &str = "^:graph_info";
 const GRAPH_INFO_NODE_TYPE: &str = "^";
 const GRAPH_UUID_FACT_PREFIX: &str = "graph_uuid=";
+const GRAPH_SCHEMA_VERSION: u32 = 2;
+const GRAPH_SCHEMA_VERSION_FACT_PREFIX: &str = "schema_version=";
+const KG_TEXT_COMPRESSION_MIN_LEN: usize = 7;
 
 /// Write `data` to `dest` atomically:
 /// 1. Write to `dest.tmp`
@@ -296,6 +299,373 @@ fn push_text_line(out: &mut String, key: &str, value: &str) {
     out.push(' ');
     out.push_str(&escape_kg_text(value));
     out.push('\n');
+}
+
+#[derive(Debug, Clone)]
+struct KgCompressionCandidate {
+    token: usize,
+    value: String,
+    first_line: usize,
+    first_col: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct KgCompressionStats {
+    original_bytes: usize,
+    compressed_bytes: usize,
+    dictionary_entries: usize,
+}
+
+#[derive(Debug, Clone)]
+struct LineOccurrence {
+    line_idx: usize,
+    col_idx: usize,
+}
+
+fn decode_kg_token_reference_line(line: &str) -> Option<(String, String)> {
+    let rest = line.strip_prefix('`')?;
+    let (token, value) = rest.split_once(' ')?;
+    if token.is_empty() || !token.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some((token.to_owned(), value.to_owned()))
+}
+
+fn expand_kg_tokens_in_line(line: &str, dictionary: &std::collections::HashMap<String, String>) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = line.chars().collect();
+    let mut idx = 0;
+
+    while idx < chars.len() {
+        if chars[idx] != '`' {
+            out.push(chars[idx]);
+            idx += 1;
+            continue;
+        }
+
+        let start = idx;
+        idx += 1;
+        let mut token = String::new();
+        while idx < chars.len() && chars[idx].is_ascii_digit() {
+            token.push(chars[idx]);
+            idx += 1;
+        }
+
+        if !token.is_empty() && idx < chars.len() && chars[idx] == '`' {
+            idx += 1;
+            if let Some(value) = dictionary.get(&token) {
+                out.push_str(value);
+            } else {
+                out.push('`');
+                out.push_str(&token);
+                out.push('`');
+            }
+            continue;
+        }
+
+        out.push('`');
+        out.push_str(&token);
+        if idx < chars.len() {
+            out.push(chars[idx]);
+            idx += 1;
+        } else if start + 1 < chars.len() {
+            // Keep the literal backtick when it does not form a token.
+        }
+    }
+
+    out
+}
+
+fn expand_kg_tokens(raw: &str) -> String {
+    let mut dictionary = std::collections::HashMap::new();
+    let mut out = String::new();
+
+    for line in raw.lines() {
+        if let Some((token, value)) = decode_kg_token_reference_line(line) {
+            dictionary.insert(token, value);
+            continue;
+        }
+        out.push_str(&expand_kg_tokens_in_line(line, &dictionary));
+        out.push('\n');
+    }
+
+    out
+}
+
+fn node_header_type_token(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("@ ")?;
+    let (type_token, _) = rest.split_once(':')?;
+    Some(type_token.trim())
+}
+
+fn is_generated_node_block_header(line: &str) -> bool {
+    node_header_type_token(line)
+        .is_some_and(|token| token.starts_with('G'))
+}
+
+fn collect_generated_text_lines(raw: &str) -> Vec<(usize, String)> {
+    let mut lines = Vec::new();
+    let mut in_block = false;
+    let mut generated_block = false;
+
+    for (idx, line) in raw.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            in_block = false;
+            generated_block = false;
+            continue;
+        }
+
+        if trimmed.starts_with("@ ") {
+            in_block = true;
+            generated_block = is_generated_node_block_header(trimmed);
+            continue;
+        }
+
+        if in_block && generated_block {
+            lines.push((idx, line.to_owned()));
+        }
+    }
+
+    lines
+}
+
+fn extend_repeated_seed(
+    seed: &str,
+    occurrences: &[LineOccurrence],
+    source_lines: &[(usize, String)],
+) -> Option<String> {
+    let seed_chars: Vec<char> = seed.chars().collect();
+    let mut candidate = seed_chars.clone();
+
+    loop {
+        let mut next_char: Option<char> = None;
+
+        for occurrence in occurrences {
+            let (_, line) = source_lines
+                .iter()
+                .find(|(line_idx, _)| *line_idx == occurrence.line_idx)?;
+            let chars: Vec<char> = line.chars().collect();
+            let next_index = occurrence.col_idx + candidate.len();
+            let Some(&ch) = chars.get(next_index) else {
+                return Some(candidate.into_iter().collect());
+            };
+            if ch == '`' {
+                return Some(candidate.into_iter().collect());
+            }
+            match next_char {
+                Some(prev) if prev != ch => return Some(candidate.into_iter().collect()),
+                None => next_char = Some(ch),
+                _ => {}
+            }
+        }
+
+        let Some(ch) = next_char else {
+            return Some(candidate.into_iter().collect());
+        };
+        candidate.push(ch);
+        if candidate.len() > seed_chars.len() + 256 {
+            return Some(candidate.into_iter().collect());
+        }
+    }
+}
+
+fn discover_kg_compression_candidates(
+    source_lines: &[(usize, String)],
+    min_len: usize,
+) -> Vec<KgCompressionCandidate> {
+    let mut seeds: std::collections::HashMap<String, Vec<LineOccurrence>> =
+        std::collections::HashMap::new();
+
+    for (line_idx, line) in source_lines {
+        let chars: Vec<char> = line.chars().collect();
+        if chars.len() < min_len {
+            continue;
+        }
+
+        for start in 0..=chars.len() - min_len {
+            if chars[start..start + min_len].iter().any(|ch| *ch == '`') {
+                continue;
+            }
+            let seed: String = chars[start..start + min_len].iter().collect();
+            seeds.entry(seed).or_default().push(LineOccurrence {
+                line_idx: *line_idx,
+                col_idx: start,
+            });
+        }
+    }
+
+    let mut discovered: std::collections::HashMap<String, KgCompressionCandidate> =
+        std::collections::HashMap::new();
+
+    for (seed, occurrences) in seeds {
+        if occurrences.len() < 2 {
+            continue;
+        }
+
+        let Some(value) = extend_repeated_seed(&seed, &occurrences, source_lines) else {
+            continue;
+        };
+        if value.chars().count() < min_len || value.contains('`') {
+            continue;
+        }
+
+        let first = occurrences
+            .iter()
+            .min_by_key(|occ| (occ.line_idx, occ.col_idx))
+            .expect("at least one occurrence");
+
+        discovered
+            .entry(value.clone())
+            .and_modify(|candidate| {
+                let first_pos = (first.line_idx, first.col_idx);
+                let current_pos = (candidate.first_line, candidate.first_col);
+                if first_pos < current_pos {
+                    candidate.first_line = first.line_idx;
+                    candidate.first_col = first.col_idx;
+                }
+            })
+            .or_insert(KgCompressionCandidate {
+                token: 0,
+                value,
+                first_line: first.line_idx,
+                first_col: first.col_idx,
+            });
+    }
+
+    let mut candidates: Vec<KgCompressionCandidate> = discovered.into_values().collect();
+    candidates.sort_by(|a, b| {
+        b.value
+            .chars()
+            .count()
+            .cmp(&a.value.chars().count())
+            .then_with(|| a.first_line.cmp(&b.first_line))
+            .then_with(|| a.first_col.cmp(&b.first_col))
+            .then_with(|| a.value.cmp(&b.value))
+    });
+
+    let mut filtered: Vec<KgCompressionCandidate> = Vec::new();
+    'candidate: for candidate in candidates {
+        for kept in &filtered {
+            if kept.value.contains(&candidate.value) {
+                continue 'candidate;
+            }
+        }
+        filtered.push(candidate);
+    }
+
+    filtered.sort_by(|a, b| {
+        a.first_line
+            .cmp(&b.first_line)
+            .then_with(|| b.value.chars().count().cmp(&a.value.chars().count()))
+            .then_with(|| a.first_col.cmp(&b.first_col))
+            .then_with(|| a.value.cmp(&b.value))
+    });
+
+    for (idx, candidate) in filtered.iter_mut().enumerate() {
+        candidate.token = idx + 1;
+    }
+
+    filtered
+}
+
+fn replace_kg_text_with_tokens(line: &str, candidates: &[KgCompressionCandidate]) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::new();
+    let mut idx = 0;
+
+    while idx < chars.len() {
+        let mut best: Option<&KgCompressionCandidate> = None;
+
+        for candidate in candidates {
+            let candidate_chars: Vec<char> = candidate.value.chars().collect();
+            if idx + candidate_chars.len() > chars.len() {
+                continue;
+            }
+            if chars[idx..idx + candidate_chars.len()] != candidate_chars[..] {
+                continue;
+            }
+            match best {
+                Some(current)
+                    if current.value.chars().count() >= candidate_chars.len() => {}
+                _ => best = Some(candidate),
+            }
+        }
+
+        if let Some(candidate) = best {
+            out.push('`');
+            out.push_str(&candidate.token.to_string());
+            out.push('`');
+            idx += candidate.value.chars().count();
+            continue;
+        }
+
+        out.push(chars[idx]);
+        idx += 1;
+    }
+
+    out
+}
+
+fn compress_kg_text(raw: &str, min_len: usize) -> (String, KgCompressionStats) {
+    let source_lines = collect_generated_text_lines(raw);
+    let candidates = discover_kg_compression_candidates(&source_lines, min_len);
+
+    let mut defs_by_line: std::collections::HashMap<usize, Vec<&KgCompressionCandidate>> =
+        std::collections::HashMap::new();
+    for candidate in &candidates {
+        defs_by_line.entry(candidate.first_line).or_default().push(candidate);
+    }
+    for defs in defs_by_line.values_mut() {
+        defs.sort_by(|a, b| {
+            b.value
+                .chars()
+                .count()
+                .cmp(&a.value.chars().count())
+                .then_with(|| a.token.cmp(&b.token))
+        });
+    }
+
+    let compressed_source_lines: std::collections::HashSet<usize> =
+        source_lines.iter().map(|(idx, _)| *idx).collect();
+    let mut compressed = String::new();
+
+    for (idx, line) in raw.lines().enumerate() {
+        if let Some(defs) = defs_by_line.get(&idx) {
+            for def in defs {
+                compressed.push('`');
+                compressed.push_str(&def.token.to_string());
+                compressed.push(' ');
+                compressed.push_str(&def.value);
+                compressed.push('\n');
+            }
+        }
+
+        let rendered = if compressed_source_lines.contains(&idx) {
+            replace_kg_text_with_tokens(line, &candidates)
+        } else {
+            line.to_owned()
+        };
+        compressed.push_str(&rendered);
+        compressed.push('\n');
+    }
+
+    let original_bytes = raw.len();
+    let compressed_bytes = compressed.len();
+    let dictionary_entries = candidates.len();
+
+    (
+        if compressed_bytes < original_bytes {
+            compressed
+        } else {
+            raw.to_owned()
+        },
+        KgCompressionStats {
+            original_bytes,
+            compressed_bytes,
+            dictionary_entries,
+        },
+    )
 }
 
 fn dedupe_case_insensitive(values: Vec<String>) -> Vec<String> {
@@ -1155,7 +1525,7 @@ fn serialize_kg(graph: &GraphFile) -> String {
         out.push_str(&format!(
             "@ {}:{}\n",
             encode_node_type_token(&node.r#type),
-            node.id
+            display_node_id(&node.id, &node.r#type)
         ));
         if !node.name.is_empty() {
             push_text_line(&mut out, "N", &node.name);
@@ -1238,7 +1608,7 @@ fn serialize_kg(graph: &GraphFile) -> String {
                 "{} {} {}\n",
                 op,
                 relation_to_code(&edge.relation),
-                edge.target_id
+                canonical_node_id_for_storage(&edge.target_id)
             ));
             for (label, score) in &edge.properties.score_components {
                 out.push_str(&format!("d {} {:.6}\n", label, score));
@@ -1279,7 +1649,11 @@ fn serialize_kg(graph: &GraphFile) -> String {
             .then_with(|| a.created_at.cmp(&b.created_at))
     });
     for note in notes {
-        out.push_str(&format!("! {} {}\n", note.id, note.node_id));
+        out.push_str(&format!(
+            "! {} {}\n",
+            note.id,
+            canonical_node_id_for_storage(&note.node_id)
+        ));
         push_text_line(&mut out, "b", &note.body);
         for tag in sort_case_insensitive(&note.tags) {
             push_text_line(&mut out, "t", &tag);
@@ -1316,6 +1690,8 @@ pub struct GraphFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
     pub name: String,
+    #[serde(default = "default_graph_schema_version")]
+    pub schema_version: u32,
     pub version: String,
     pub description: String,
     pub node_count: usize,
@@ -1370,6 +1746,10 @@ pub struct NodeProperties {
 
 fn default_importance() -> f64 {
     0.5
+}
+
+fn default_graph_schema_version() -> u32 {
+    1
 }
 
 impl Default for NodeProperties {
@@ -1446,6 +1826,7 @@ impl GraphFile {
         Self {
             metadata: Metadata {
                 name: name.to_owned(),
+                schema_version: default_graph_schema_version(),
                 version: "1.0".to_owned(),
                 description: format!("Knowledge graph: {name}"),
                 node_count: 0,
@@ -1479,7 +1860,12 @@ impl GraphFile {
                     .file_stem()
                     .and_then(|stem| stem.to_str())
                     .unwrap_or("graph");
-                let (graph, warnings) = parse_kg_with_warnings(&raw, graph_name, strict_kg_mode())
+                let decompressed = expand_kg_tokens(&raw);
+                let (graph, warnings) = parse_kg_with_warnings(
+                    &decompressed,
+                    graph_name,
+                    strict_kg_mode(),
+                )
                     .with_context(|| format!("failed to parse .kg graph: {}", path.display()))?;
                 for warning in warnings {
                     let _ = crate::kg_sidecar::append_warning(
@@ -1497,10 +1883,12 @@ impl GraphFile {
                 anyhow::anyhow!(json_error_detail("invalid JSON", path, &raw, &error))
             })?
         };
+        let schema_version_before = graph_schema_version(&graph);
         normalize_graph_ids(&mut graph);
         let created_graph_info = ensure_graph_info_node(&mut graph);
+        graph.metadata.schema_version = GRAPH_SCHEMA_VERSION;
         graph.refresh_counts();
-        if created_graph_info {
+        if created_graph_info || schema_version_before < GRAPH_SCHEMA_VERSION {
             graph.save(path)?;
         }
         Ok(graph)
@@ -1509,13 +1897,31 @@ impl GraphFile {
     pub fn save(&self, path: &Path) -> Result<()> {
         let mut graph = self.clone();
         ensure_graph_info_node(&mut graph);
+        graph.metadata.schema_version = GRAPH_SCHEMA_VERSION;
         graph.refresh_counts();
         let ext = path
             .extension()
             .and_then(|ext| ext.to_str())
             .unwrap_or("json");
         let raw = if ext == "kg" {
-            serialize_kg(&graph)
+            let serialized = serialize_kg(&graph);
+            let (compressed, stats) = compress_kg_text(&serialized, KG_TEXT_COMPRESSION_MIN_LEN);
+            let saved_bytes = serialized.len().saturating_sub(compressed.len());
+            let saved_percent = if serialized.is_empty() {
+                0.0
+            } else {
+                (saved_bytes as f64 * 100.0) / serialized.len() as f64
+            };
+            if saved_bytes > 0 {
+                eprintln!(
+                    "kg compression: {:.1}% saved ({} -> {} bytes, {} dictionary entries)",
+                    saved_percent,
+                    stats.original_bytes,
+                    stats.compressed_bytes.min(stats.original_bytes),
+                    stats.dictionary_entries
+                );
+            }
+            compressed
         } else {
             serde_json::to_string_pretty(&graph).context("failed to serialize graph")?
         };
@@ -1625,6 +2031,29 @@ fn ensure_graph_info_node(graph: &mut GraphFile) -> bool {
                 .push(format!("{GRAPH_UUID_FACT_PREFIX}{}", generate_graph_uuid()));
             changed = true;
         }
+        let schema_fact = format!("{GRAPH_SCHEMA_VERSION_FACT_PREFIX}{GRAPH_SCHEMA_VERSION}");
+        let had_schema_fact = node
+            .properties
+            .key_facts
+            .iter()
+            .any(|fact| fact.starts_with(GRAPH_SCHEMA_VERSION_FACT_PREFIX));
+        if !had_schema_fact {
+            node.properties.key_facts.push(schema_fact);
+            changed = true;
+        } else {
+            let mut replaced = false;
+            for fact in &mut node.properties.key_facts {
+                if fact.starts_with(GRAPH_SCHEMA_VERSION_FACT_PREFIX) {
+                    if *fact != schema_fact {
+                        *fact = schema_fact.clone();
+                        replaced = true;
+                    }
+                }
+            }
+            if replaced {
+                changed = true;
+            }
+        }
         return changed;
     }
 
@@ -1637,12 +2066,61 @@ fn ensure_graph_info_node(graph: &mut GraphFile) -> bool {
             domain_area: "internal_metadata".to_owned(),
             provenance: "A".to_owned(),
             importance: 1.0,
-            key_facts: vec![format!("{GRAPH_UUID_FACT_PREFIX}{}", generate_graph_uuid())],
+            key_facts: vec![
+                format!("{GRAPH_UUID_FACT_PREFIX}{}", generate_graph_uuid()),
+                format!("{GRAPH_SCHEMA_VERSION_FACT_PREFIX}{GRAPH_SCHEMA_VERSION}"),
+            ],
             ..NodeProperties::default()
         },
         source_files: vec!["DOC .kg/internal/graph_info".to_owned()],
     });
     true
+}
+
+fn graph_schema_version(graph: &GraphFile) -> u32 {
+    graph
+        .node_by_id(GRAPH_INFO_NODE_ID)
+        .and_then(|node| {
+            node.properties.key_facts.iter().find_map(|fact| {
+                fact.strip_prefix(GRAPH_SCHEMA_VERSION_FACT_PREFIX)
+                    .and_then(|value| value.parse::<u32>().ok())
+            })
+        })
+        .unwrap_or(graph.metadata.schema_version)
+}
+
+fn display_node_id(id: &str, node_type: &str) -> String {
+    let Some((head, suffix)) = id.split_once(':') else {
+        return id.to_owned();
+    };
+    if head == node_type
+        || crate::validate::canonical_type_code_for(node_type).is_some_and(|code| code == head)
+        || crate::validate::TYPE_TO_PREFIX
+            .iter()
+            .any(|(typ, prefix)| *typ == node_type && *prefix == head)
+    {
+        return suffix.to_owned();
+    }
+    id.to_owned()
+}
+
+fn canonical_node_id_for_storage(id: &str) -> String {
+    let Some((head, suffix)) = id.split_once(':') else {
+        return id.to_owned();
+    };
+    let Some(node_type) = crate::validate::TYPE_TO_PREFIX
+        .iter()
+        .find(|(typ, prefix)| {
+            crate::validate::canonical_type_code_for(typ).is_some_and(|code| code == head)
+                || *prefix == head
+        })
+        .map(|(typ, _)| *typ)
+    else {
+        return id.to_owned();
+    };
+    crate::validate::canonical_type_code_for(node_type)
+        .map(|code| format!("{code}:{suffix}"))
+        .unwrap_or_else(|| id.to_owned())
 }
 
 fn generate_graph_uuid() -> String {
@@ -1672,7 +2150,9 @@ fn generate_graph_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        GRAPH_INFO_NODE_ID, GRAPH_INFO_NODE_TYPE, GRAPH_UUID_FACT_PREFIX, GraphFile, parse_kg,
+        compress_kg_text, expand_kg_tokens, GRAPH_INFO_NODE_ID, GRAPH_INFO_NODE_TYPE,
+        GRAPH_SCHEMA_VERSION, GRAPH_UUID_FACT_PREFIX, GraphFile, KG_TEXT_COMPRESSION_MIN_LEN,
+        parse_kg,
     };
 
     #[test]
@@ -1712,8 +2192,8 @@ mod tests {
 
         graph.save(&path).expect("save kg");
         let raw = std::fs::read_to_string(&path).expect("read kg");
-        assert!(raw.contains("@ K:concept:refrigerator"));
-        assert!(raw.contains("> R datastore:settings"));
+        assert!(raw.contains("@ K:refrigerator"));
+        assert!(raw.contains("> R D:settings"));
 
         let loaded = GraphFile::load(&path).expect("load kg");
         assert_eq!(loaded.nodes.len(), 2);
@@ -1733,6 +2213,7 @@ mod tests {
             "2026-04-04T12:00:00Z"
         );
         assert_eq!(loaded.edges[0].properties.valid_to, "2026-04-05T12:00:00Z");
+        assert_eq!(loaded.metadata.schema_version, GRAPH_SCHEMA_VERSION);
     }
 
     #[test]
@@ -1752,8 +2233,29 @@ mod tests {
 
         let loaded = GraphFile::load(&path).expect("load legacy kg");
         assert_eq!(loaded.metadata.name, "legacy");
+        assert_eq!(loaded.metadata.schema_version, GRAPH_SCHEMA_VERSION);
         assert_eq!(loaded.nodes.len(), 1);
         assert!(loaded.node_by_id(GRAPH_INFO_NODE_ID).is_some());
+    }
+
+    #[test]
+    fn load_kg_auto_migrates_legacy_id_prefixes() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("legacy-ids.kg");
+        std::fs::write(
+            &path,
+            "@ K:concept:x\nN X\nD Desc\nV 0.5\nP U\nS docs/a.md\n> R datastore:y\n",
+        )
+        .expect("write kg");
+
+        let loaded = GraphFile::load(&path).expect("load kg");
+        assert_eq!(loaded.metadata.schema_version, GRAPH_SCHEMA_VERSION);
+        assert!(loaded.node_by_id("concept:x").is_some());
+
+        let persisted = std::fs::read_to_string(&path).expect("read migrated kg");
+        assert!(persisted.contains("@ K:x"));
+        assert!(persisted.contains("> R D:y"));
+        assert!(persisted.contains(&format!("schema_version={GRAPH_SCHEMA_VERSION}")));
     }
 
     #[test]
@@ -1843,7 +2345,7 @@ mod tests {
 
         graph.save(&path).expect("save kg");
         let raw = std::fs::read_to_string(&path).expect("read kg");
-        assert!(raw.contains("! note:1 concept:refrigerator"));
+        assert!(raw.contains("! note:1 K:refrigerator"));
         assert!(!raw.trim_start().starts_with('{'));
 
         let loaded = GraphFile::load(&path).expect("load kg");
@@ -1902,6 +2404,9 @@ mod tests {
 
         graph.save(&path).expect("save kg");
         let raw = std::fs::read_to_string(&path).expect("read kg");
+        assert!(raw.contains("@ K:refrigerator"));
+        assert!(raw.contains("> R D:settings"));
+        assert!(raw.contains("! note:1 K:refrigerator"));
         assert!(raw.contains("N Lodowka\\nSmart"));
         assert!(raw.contains("D Linia 1\\nLinia 2\\\\nliteral"));
         assert!(raw.contains("- domain_area ops\\nfield"));
@@ -1926,6 +2431,61 @@ mod tests {
         assert_eq!(note.author, "alice\nbob");
         assert_eq!(note.provenance, "manual\nentry");
         assert_eq!(note.source_files, vec!["docs/a\nb.md".to_owned()]);
+    }
+
+    #[test]
+    fn compress_kg_text_only_touches_generated_node_blocks() {
+        let raw = concat!(
+            "@ GDIR:src\n",
+            "N alpha beta gamma\n",
+            "D alpha beta gamma and more\n",
+            "\n",
+            "@ K:concept:plain\n",
+            "N alpha beta gamma\n",
+            "D alpha beta gamma and more\n",
+            "E 2026-04-04T12:00:00Z\n",
+            "V 4\n",
+            "P U\n",
+            "S docs/plain.md\n",
+            "\n",
+        );
+
+        let (compressed, stats) = compress_kg_text(raw, KG_TEXT_COMPRESSION_MIN_LEN);
+        assert!(stats.dictionary_entries > 0);
+        assert!(compressed.contains("`1 "));
+        assert!(compressed.contains("N`1`"));
+        assert!(compressed.contains("D`1` and more"));
+
+        let manual_block = compressed
+            .split("@ K:concept:plain")
+            .nth(1)
+            .expect("manual block");
+        assert!(!manual_block.contains("`1`"));
+
+        let decompressed = expand_kg_tokens(&compressed);
+        assert_eq!(decompressed, raw);
+    }
+
+    #[test]
+    fn load_kg_expands_backtick_tokens_before_parsing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("compressed.kg");
+        std::fs::write(
+            &path,
+            concat!(
+                "`1 alpha beta gamma\n",
+                "@ GDIR:src\n",
+                "N `1`\n",
+                "D `1` and more\n",
+                "\n",
+            ),
+        )
+        .expect("write kg");
+
+        let loaded = GraphFile::load(&path).expect("load kg");
+        let node = loaded.node_by_id("GDIR:src").expect("generated node");
+        assert_eq!(node.name, "alpha beta gamma");
+        assert_eq!(node.properties.description, "alpha beta gamma and more");
     }
 
     #[test]
@@ -2087,5 +2647,6 @@ mod tests {
         let persisted = std::fs::read_to_string(&path).expect("read persisted kg");
         assert!(persisted.contains("graph_info"));
         assert!(persisted.contains("graph_uuid="));
+        assert!(persisted.contains("schema_version="));
     }
 }

@@ -2559,7 +2559,7 @@ impl KgMcpServer {
 
     #[tool(
         name = "kg_edge_add",
-        description = "Add an edge between two nodes. Generated edges use G-prefixed relations like GCONTAINS, GHAS_DOC, GHAS_SYMBOL, GDEFINES, GIMPORTS, GREFERENCES; manual edges keep normal relations. Prefer `kg` when combining multiple actions."
+        description = "Add an edge between two nodes. Generated edges use G-prefixed relations like GCONTAINS, GHAS_DOC, GHAS_SYMBOL, GDEF, GIMPORTS, GREFERENCES; manual edges keep normal relations. Prefer `kg` when combining multiple actions."
     )]
     fn kg_edge_add(
         &self,

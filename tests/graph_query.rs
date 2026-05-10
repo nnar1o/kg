@@ -834,7 +834,7 @@ fn default_runtime_auto_migrates_json_graph_to_kg_side_by_side() {
     assert!(kg_path.exists());
     assert!(graph_path.exists());
     let kg_raw = fs::read_to_string(&kg_path).expect("read migrated kg");
-    assert!(kg_raw.contains("@ K:concept:refrigerator"));
+    assert!(kg_raw.contains("@ K:refrigerator"));
     assert!(!kg_raw.trim_start().starts_with('{'));
 }
 

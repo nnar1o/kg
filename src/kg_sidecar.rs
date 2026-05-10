@@ -162,20 +162,32 @@ pub fn rebuild_kgindex(graph_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn parse_node_id_from_header(line: &str) -> Option<&str> {
+fn parse_node_id_from_header(line: &str) -> Option<String> {
     let rest = line.strip_prefix("@ ")?;
     let rest = rest.trim();
     let first_colon = rest.find(':')?;
-    let after_first = rest[first_colon + 1..].trim();
-    let node_id = if after_first.contains(':') {
-        after_first
-    } else {
-        rest
-    };
-    if node_id.is_empty() {
-        None
-    } else {
-        Some(node_id)
+    let type_token = rest[..first_colon].trim();
+    let node_token = rest[first_colon + 1..].trim();
+    if node_token.is_empty() {
+        return None;
+    }
+    if node_token.contains(':') {
+        return Some(node_token.to_owned());
+    }
+
+    let prefix = crate::validate::TYPE_TO_PREFIX
+        .iter()
+        .find(|(typ, prefix)| {
+            *prefix == type_token
+                || *typ == type_token
+                || crate::validate::canonical_type_code_for(typ)
+                    .is_some_and(|code| code == type_token)
+        })
+        .map(|(_, prefix)| *prefix);
+
+    match prefix {
+        Some(prefix) => Some(format!("{prefix}:{node_token}")),
+        None => Some(node_token.to_owned()),
     }
 }
 
