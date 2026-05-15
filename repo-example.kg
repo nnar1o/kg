@@ -1,0 +1,200 @@
+@ C:config_discovery
+N Config discovery
+D `.kg.toml` is discovered in the current directory and parents.
+F README documents git-friendly local graph storage.
+F The config can define graph directories and defaults.
+V 4
+P A
+S DOC README.md
+S SOURCECODE src/config.rs
+
+@ D:event_log_snapshots
+N Event log snapshots
+D Append-only event log support for graph mutations.
+F Mutating operations can be captured as snapshots.
+F The repo includes feedback and log workflows around this store.
+V 3
+P A
+S DOC README.md
+S SOURCECODE src/event_log.rs
+S SOURCECODE src/lib.rs
+
+@ D:local_graph_files
+N Local graph files
+D Native graph files stored locally as readable `.kg` documents.
+F Graph loading supports `.kg` text plus legacy JSON fallback.
+F The README recommends keeping `.kg` files in git.
+V 5
+P A
+S DOC README.md
+S SOURCECODE src/graph.rs
+S SOURCECODE src/storage.rs
+
+@ F:persistent_memory
+N Persistent memory
+D Stable project memory for AI assistants across sessions.
+F The README describes Git-friendly, structured memory.
+V 5
+P A
+S DOC README.md
+
+@ I:kg_cli
+N kg CLI
+D Command-line interface for creating, querying, and maintaining graphs.
+F `src/cli.rs` defines the main graph, node, edge, note, and export commands.
+F `src/main.rs` delegates to `kg::run`.
+V 5
+P A
+S SOURCECODE src/cli.rs
+S SOURCECODE src/lib.rs
+S SOURCECODE src/main.rs
+> A P:command_dispatch
+
+@ I:kg_mcp
+N kg-mcp
+D Local stdio MCP server that exposes kg operations to AI clients.
+F `src/bin/kg-mcp.rs` implements the server entrypoint.
+F README and `docs/mcp.md` document MCP client setup.
+V 5
+P A
+S DOC docs/mcp.md
+S DOC README.md
+S SOURCECODE src/bin/kg-mcp.rs
+S SOURCECODE src/lib.rs
+> A P:graph_mutation
+> A P:graph_query
+
+@ K:graph_serialization
+N Graph serialization
+D Native .kg serialization plus import/export paths.
+F `src/export_html.rs` renders graph data for visualization.
+F `src/graph.rs` parses and serializes the line-based .kg format.
+V 4
+P A
+S SOURCECODE src/export_html.rs
+S SOURCECODE src/graph.rs
+S SOURCECODE src/import_csv.rs
+S SOURCECODE src/import_markdown.rs
+> DECIDED_BY Z:native_kg_format
+
+@ K:kg_repo
+N kg repository
+D Local knowledge-graph tooling for AI assistants.
+F Persistent project memory stored locally as readable .kg files.
+V 5
+P A
+S DOC docs/build-graph-from-docs.md
+S DOC docs/mcp.md
+S DOC README.md
+> A P:command_dispatch
+> A P:graph_mutation
+> A P:graph_query
+> A P:quality_checks
+> H F:persistent_memory
+> H I:kg_cli
+> H I:kg_mcp
+> H K:graph_serialization
+> H K:repo_scope
+
+@ K:repo_scope
+N Repository scope
+D Compact graph slice covering the repo, not every file.
+F Grounded in the docs and code that describe repo workflows.
+V 4
+P A
+S DOC docs/build-graph-from-docs.md
+S DOC README.md
+
+@ P:command_dispatch
+N Command dispatch
+D Routing CLI arguments into graph operations.
+F `src/lib.rs` wires the CLI parser to execution handlers.
+F `src/main.rs` handles exit paths.
+V 4
+P A
+S SOURCECODE src/cli.rs
+S SOURCECODE src/lib.rs
+S SOURCECODE src/main.rs
+> G C:config_discovery
+
+@ P:graph_mutation
+N Graph mutation
+D Node, edge, and note updates.
+F `src/app/graph_node_edge.rs` and `src/app/graph_note.rs` implement mutation flows.
+F `src/graph.rs` persists graph updates with schema migration.
+V 5
+P A
+S SOURCECODE src/app/graph_node_edge.rs
+S SOURCECODE src/app/graph_note.rs
+S SOURCECODE src/graph.rs
+S SOURCECODE src/lib.rs
+> A D:event_log_snapshots
+> G R:grounded_facts_only
+> STORED_IN D:local_graph_files
+
+@ P:graph_query
+N Graph query
+D Search, list, KQL, and inspection workflows.
+F `src/cli.rs` exposes `node find`, `node get`, `list`, and `kql`.
+F Query rendering lives in `src/output.rs`.
+V 5
+P A
+S SOURCECODE src/cli.rs
+S SOURCECODE src/lib.rs
+S SOURCECODE src/output.rs
+> R D:local_graph_files
+
+@ P:quality_checks
+N Quality checks
+D Validation and quality reporting for graph content.
+F `src/lib.rs` exposes check, audit, and quality commands.
+F `src/validate.rs` defines allowed types, relations, and edge rules.
+V 5
+P A
+S SOURCECODE src/cli.rs
+S SOURCECODE src/lib.rs
+S SOURCECODE src/validate.rs
+> G R:stable_ids
+
+@ R:grounded_facts_only
+N Grounded facts only
+D Add only facts supported by docs, code, or current discussion.
+F Ambiguous items should become notes or be skipped.
+F The build-graph docs explicitly prohibit speculation.
+V 5
+P A
+S DOC docs/ai-prompt-graph-from-docs.md
+S DOC docs/build-graph-from-docs.md
+S DOC README.md
+
+@ R:stable_ids
+N Stable IDs
+D Use canonical `<type>:<snake_case_name>` identifiers from day one.
+F `src/validate.rs` maps node types to expected prefixes.
+F The docs recommend one canonical ID per concept.
+V 5
+P A
+S DOC docs/ai-prompt-graph-from-docs.md
+S DOC docs/build-graph-from-docs.md
+S SOURCECODE src/validate.rs
+
+@ Z:native_kg_format
+N Native .kg format
+D The repo prefers readable .kg files over JSON-only storage.
+F `src/graph.rs` still accepts legacy JSON payloads for migration.
+F README says .kg is git-friendly and diffable.
+V 5
+P A
+S DOC README.md
+S SOURCECODE src/graph.rs
+
+@ ^:graph_info
+N Graph Metadata
+D Internal graph metadata for cross-graph linking.
+F graph_uuid=0123456789abcdef0123
+F schema_version=2
+V 1
+P A
+S DOC .kg/internal/graph_info
+> USES K:kg_repo
+

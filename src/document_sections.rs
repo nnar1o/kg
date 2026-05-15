@@ -13,7 +13,10 @@ pub struct DocumentSection {
 }
 
 pub fn is_document_source(path: &Path) -> bool {
-    let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("");
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
     matches!(
         name,
         "README" | "README.md" | "README.markdown" | "CHANGELOG.md" | "LICENSE" | "COPYING"
@@ -56,11 +59,7 @@ pub fn parse_document_sections(source: &str) -> Vec<DocumentSection> {
                 let parent_id_path = parent
                     .map(|section| section.id_path.clone())
                     .unwrap_or_default();
-                let ordinal = next_sibling_ordinal(
-                    &mut sibling_counts,
-                    &parent_path,
-                    &title,
-                );
+                let ordinal = next_sibling_ordinal(&mut sibling_counts, &parent_path, &title);
                 let mut path = parent_path;
                 path.push(title.clone());
                 let mut id_path = parent_id_path;
@@ -101,7 +100,11 @@ fn detect_heading(lines: &[&str], index: usize) -> Option<(usize, String, usize)
     }
 
     if let Some(level) = atx_heading_level(trimmed) {
-        let title = trimmed[level + 1..].trim().trim_end_matches('#').trim().to_owned();
+        let title = trimmed[level + 1..]
+            .trim()
+            .trim_end_matches('#')
+            .trim()
+            .to_owned();
         if !title.is_empty() {
             return Some((level, title, 1));
         }
@@ -123,7 +126,12 @@ fn detect_heading(lines: &[&str], index: usize) -> Option<(usize, String, usize)
 
 fn atx_heading_level(line: &str) -> Option<usize> {
     let hashes = line.chars().take_while(|ch| *ch == '#').count();
-    if (1..=6).contains(&hashes) && line.chars().nth(hashes).is_some_and(|ch| ch.is_whitespace()) {
+    if (1..=6).contains(&hashes)
+        && line
+            .chars()
+            .nth(hashes)
+            .is_some_and(|ch| ch.is_whitespace())
+    {
         Some(hashes)
     } else {
         None
@@ -132,7 +140,12 @@ fn atx_heading_level(line: &str) -> Option<usize> {
 
 fn asciidoc_heading_level(line: &str) -> Option<usize> {
     let equals = line.chars().take_while(|ch| *ch == '=').count();
-    if (1..=6).contains(&equals) && line.chars().nth(equals).is_some_and(|ch| ch.is_whitespace()) {
+    if (1..=6).contains(&equals)
+        && line
+            .chars()
+            .nth(equals)
+            .is_some_and(|ch| ch.is_whitespace())
+    {
         Some(equals)
     } else {
         None
@@ -220,9 +233,7 @@ fn escape_section_title(title: &str) -> String {
     let mut out = String::new();
     for byte in title.as_bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.' => {
-                out.push(*byte as char)
-            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.' => out.push(*byte as char),
             _ => {
                 out.push('~');
                 out.push_str(&format!("{:02X}", byte));
@@ -270,7 +281,11 @@ More text.
         let sections = parse_document_sections(source);
         assert_eq!(sections.len(), 2);
         assert!(sections.iter().any(|section| section.path == vec!["Intro"]));
-        assert!(sections.iter().any(|section| section.path == vec!["Intro", "Details"]));
+        assert!(
+            sections
+                .iter()
+                .any(|section| section.path == vec!["Intro", "Details"])
+        );
         assert!(sections
             .iter()
             .any(|section| section.title == "Details" && section.content.contains("More text.")));

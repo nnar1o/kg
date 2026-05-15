@@ -1,8 +1,16 @@
+#![allow(
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::manual_clamp,
+    clippy::field_reassign_with_default
+)]
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
+use crate::annotate;
 use crate::graph::{Edge, GraphFile, Node, Note};
 use crate::index::Bm25Index;
 use crate::text_norm;
@@ -580,6 +588,19 @@ pub fn render_find_adaptive_with_index_tuned(
         sections.push(section);
     }
     format!("{}\n", sections.join("\n\n"))
+}
+
+pub fn render_annotate(graph: &GraphFile, text: &str) -> String {
+    render_annotate_with_index(graph, text, None)
+}
+
+pub fn render_annotate_with_index(
+    graph: &GraphFile,
+    text: &str,
+    index: Option<&Bm25Index>,
+) -> String {
+    let selected = annotate::collect_annotations(graph, text, index);
+    format!("{}\n", annotate::render_annotated_text(text, &selected))
 }
 
 #[derive(Clone, Copy)]
@@ -2512,6 +2533,94 @@ mod tests {
             &mut matcher,
         );
         assert!(empty_score.is_none());
+    }
+
+    #[test]
+    fn render_annotate_prefers_alias_and_name_matches() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(make_node(
+            "concept:refrigerator",
+            "Lodowka",
+            "",
+            &[],
+            &["Fridge"],
+            0.5,
+            0.0,
+            0,
+        ));
+        graph.nodes.push(make_node(
+            "concept:authentication",
+            "Authentication",
+            "",
+            &[],
+            &["Login"],
+            0.5,
+            0.0,
+            0,
+        ));
+
+        let rendered = render_annotate(&graph, "Uh, we need the fridge and login flow.");
+        assert!(rendered.contains("fridge [kg fridge @K:refrigerator]"));
+        assert!(rendered.contains("login [kg login @K:authentication]"));
+        assert!(!rendered.contains("Uh [kg"));
+    }
+
+    #[test]
+    fn render_annotate_keeps_only_best_non_overlapping_span() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(make_node(
+            "concept:home_assistant",
+            "Smart Home API",
+            "",
+            &[],
+            &[],
+            0.5,
+            0.0,
+            0,
+        ));
+        graph
+            .nodes
+            .push(make_node("concept:home", "Home", "", &[], &[], 0.5, 0.0, 0));
+
+        let rendered = render_annotate(&graph, "smart home api");
+        assert!(rendered.contains("smart home api [kg smart home api @K:home_assistant]"));
+        assert!(!rendered.contains("home [kg home @K:home]"));
+    }
+
+    #[test]
+    fn render_annotate_skips_filler_only_text() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(make_node(
+            "concept:refrigerator",
+            "Lodowka",
+            "",
+            &[],
+            &["Fridge"],
+            0.5,
+            0.0,
+            0,
+        ));
+
+        let rendered = render_annotate(&graph, "uh wiesz generalnie");
+        assert_eq!(rendered.trim_end(), "uh wiesz generalnie");
+    }
+
+    #[test]
+    fn render_annotate_matches_stable_ids_phrase() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(make_node(
+            "rule:stable_ids",
+            "Stable IDs",
+            "",
+            &[],
+            &[],
+            0.5,
+            0.0,
+            0,
+        ));
+
+        let rendered = render_annotate(&graph, "stable id");
+        assert!(rendered.contains("stable id [kg stable id @K:stable_ids]"));
     }
 
     #[test]

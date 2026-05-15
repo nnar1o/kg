@@ -1,3 +1,5 @@
+#![allow(clippy::manual_pattern_char_comparison)]
+
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -136,7 +138,8 @@ fn normalize_symbol_name(raw_name: &str) -> Option<String> {
         return None;
     }
     let candidate = trimmed.split_whitespace().last().unwrap_or(trimmed);
-    let candidate = candidate.trim_matches(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '$');
+    let candidate =
+        candidate.trim_matches(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '$');
     if candidate.is_empty() {
         None
     } else {
@@ -157,8 +160,16 @@ public class Greeter {
 }
 "#;
         let symbols = extract_code_symbols(Path::new("Greeter.java"), source).unwrap();
-        assert!(symbols.iter().any(|s| s.kind == "class" && s.name == "Greeter"));
-        assert!(symbols.iter().any(|s| s.kind == "method" && s.name == "hello"));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.kind == "class" && s.name == "Greeter")
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.kind == "method" && s.name == "hello")
+        );
     }
 
     #[test]
@@ -168,7 +179,11 @@ export class Greeter {}
 export function hello() {}
 "#;
         let symbols = extract_code_symbols(Path::new("greeter.js"), source).unwrap();
-        assert!(symbols.iter().any(|s| s.kind == "class" && s.name == "Greeter"));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.kind == "class" && s.name == "Greeter")
+        );
         assert!(symbols.iter().any(|s| s.kind == "fn" && s.name == "hello"));
     }
 
@@ -180,7 +195,11 @@ class Greeter:
         pass
 "#;
         let symbols = extract_code_symbols(Path::new("greeter.py"), source).unwrap();
-        assert!(symbols.iter().any(|s| s.kind == "class" && s.name == "Greeter"));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.kind == "class" && s.name == "Greeter")
+        );
         assert!(symbols.iter().any(|s| s.kind == "fn" && s.name == "hello"));
     }
 
@@ -195,7 +214,11 @@ public:
 void hello() {}
 "#;
         let symbols = extract_code_symbols(Path::new("greeter.cpp"), source).unwrap();
-        assert!(symbols.iter().any(|s| s.kind == "class" && s.name == "Greeter"));
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.kind == "class" && s.name == "Greeter")
+        );
         assert!(symbols.iter().any(|s| s.kind == "fn" && s.name == "hello"));
     }
 }

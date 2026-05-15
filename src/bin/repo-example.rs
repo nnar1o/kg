@@ -51,7 +51,11 @@ fn build_graph() -> GraphFile {
         "kg repository",
         "Local knowledge-graph tooling for AI assistants.",
         vec!["Persistent project memory stored locally as readable .kg files."],
-        vec!["DOC README.md", "DOC docs/build-graph-from-docs.md", "DOC docs/mcp.md"],
+        vec![
+            "DOC README.md",
+            "DOC docs/build-graph-from-docs.md",
+            "DOC docs/mcp.md",
+        ],
         5.0,
     ));
     graph.nodes.push(node(
@@ -81,7 +85,11 @@ fn build_graph() -> GraphFile {
             "`src/cli.rs` defines the main graph, node, edge, note, and export commands.",
             "`src/main.rs` delegates to `kg::run`.",
         ],
-        vec!["SOURCECODE src/cli.rs", "SOURCECODE src/lib.rs", "SOURCECODE src/main.rs"],
+        vec![
+            "SOURCECODE src/cli.rs",
+            "SOURCECODE src/lib.rs",
+            "SOURCECODE src/main.rs",
+        ],
         5.0,
     ));
     graph.nodes.push(node(
@@ -106,8 +114,15 @@ fn build_graph() -> GraphFile {
         "Process",
         "Command dispatch",
         "Routing CLI arguments into graph operations.",
-        vec!["`src/lib.rs` wires the CLI parser to execution handlers.", "`src/main.rs` handles exit paths."],
-        vec!["SOURCECODE src/cli.rs", "SOURCECODE src/lib.rs", "SOURCECODE src/main.rs"],
+        vec![
+            "`src/lib.rs` wires the CLI parser to execution handlers.",
+            "`src/main.rs` handles exit paths.",
+        ],
+        vec![
+            "SOURCECODE src/cli.rs",
+            "SOURCECODE src/lib.rs",
+            "SOURCECODE src/main.rs",
+        ],
         4.0,
     ));
     graph.nodes.push(node(
@@ -115,8 +130,15 @@ fn build_graph() -> GraphFile {
         "Process",
         "Graph query",
         "Search, list, KQL, and inspection workflows.",
-        vec!["Query rendering lives in `src/output.rs`.", "`src/cli.rs` exposes `node find`, `node get`, `list`, and `kql`."],
-        vec!["SOURCECODE src/cli.rs", "SOURCECODE src/lib.rs", "SOURCECODE src/output.rs"],
+        vec![
+            "Query rendering lives in `src/output.rs`.",
+            "`src/cli.rs` exposes `node find`, `node get`, `list`, and `kql`.",
+        ],
+        vec![
+            "SOURCECODE src/cli.rs",
+            "SOURCECODE src/lib.rs",
+            "SOURCECODE src/output.rs",
+        ],
         5.0,
     ));
     graph.nodes.push(node(
@@ -145,7 +167,11 @@ fn build_graph() -> GraphFile {
             "`src/validate.rs` defines allowed types, relations, and edge rules.",
             "`src/lib.rs` exposes check, audit, and quality commands.",
         ],
-        vec!["SOURCECODE src/cli.rs", "SOURCECODE src/lib.rs", "SOURCECODE src/validate.rs"],
+        vec![
+            "SOURCECODE src/cli.rs",
+            "SOURCECODE src/lib.rs",
+            "SOURCECODE src/validate.rs",
+        ],
         5.0,
     ));
     graph.nodes.push(node(
@@ -153,7 +179,10 @@ fn build_graph() -> GraphFile {
         "Convention",
         "Config discovery",
         "`.kg.toml` is discovered in the current directory and parents.",
-        vec!["The config can define graph directories and defaults.", "README documents git-friendly local graph storage."],
+        vec![
+            "The config can define graph directories and defaults.",
+            "README documents git-friendly local graph storage.",
+        ],
         vec!["DOC README.md", "SOURCECODE src/config.rs"],
         4.0,
     ));
@@ -162,8 +191,15 @@ fn build_graph() -> GraphFile {
         "DataStore",
         "Local graph files",
         "Native graph files stored locally as readable `.kg` documents.",
-        vec!["The README recommends keeping `.kg` files in git.", "Graph loading supports `.kg` text plus legacy JSON fallback."],
-        vec!["DOC README.md", "SOURCECODE src/graph.rs", "SOURCECODE src/storage.rs"],
+        vec![
+            "The README recommends keeping `.kg` files in git.",
+            "Graph loading supports `.kg` text plus legacy JSON fallback.",
+        ],
+        vec![
+            "DOC README.md",
+            "SOURCECODE src/graph.rs",
+            "SOURCECODE src/storage.rs",
+        ],
         5.0,
     ));
     graph.nodes.push(node(
@@ -171,8 +207,15 @@ fn build_graph() -> GraphFile {
         "DataStore",
         "Event log snapshots",
         "Append-only event log support for graph mutations.",
-        vec!["Mutating operations can be captured as snapshots.", "The repo includes feedback and log workflows around this store."],
-        vec!["DOC README.md", "SOURCECODE src/event_log.rs", "SOURCECODE src/lib.rs"],
+        vec![
+            "Mutating operations can be captured as snapshots.",
+            "The repo includes feedback and log workflows around this store.",
+        ],
+        vec![
+            "DOC README.md",
+            "SOURCECODE src/event_log.rs",
+            "SOURCECODE src/lib.rs",
+        ],
         3.0,
     ));
     graph.nodes.push(node(
@@ -180,7 +223,10 @@ fn build_graph() -> GraphFile {
         "Decision",
         "Native .kg format",
         "The repo prefers readable .kg files over JSON-only storage.",
-        vec!["README says .kg is git-friendly and diffable.", "`src/graph.rs` still accepts legacy JSON payloads for migration."],
+        vec![
+            "README says .kg is git-friendly and diffable.",
+            "`src/graph.rs` still accepts legacy JSON payloads for migration.",
+        ],
         vec!["DOC README.md", "SOURCECODE src/graph.rs"],
         5.0,
     ));
@@ -189,8 +235,15 @@ fn build_graph() -> GraphFile {
         "Rule",
         "Grounded facts only",
         "Add only facts supported by docs, code, or current discussion.",
-        vec!["The build-graph docs explicitly prohibit speculation.", "Ambiguous items should become notes or be skipped."],
-        vec!["DOC docs/ai-prompt-graph-from-docs.md", "DOC docs/build-graph-from-docs.md", "DOC README.md"],
+        vec![
+            "The build-graph docs explicitly prohibit speculation.",
+            "Ambiguous items should become notes or be skipped.",
+        ],
+        vec![
+            "DOC docs/ai-prompt-graph-from-docs.md",
+            "DOC docs/build-graph-from-docs.md",
+            "DOC README.md",
+        ],
         5.0,
     ));
     graph.nodes.push(node(
@@ -198,8 +251,15 @@ fn build_graph() -> GraphFile {
         "Rule",
         "Stable IDs",
         "Use canonical `<type>:<snake_case_name>` identifiers from day one.",
-        vec!["`src/validate.rs` maps node types to expected prefixes.", "The docs recommend one canonical ID per concept."],
-        vec!["DOC docs/ai-prompt-graph-from-docs.md", "DOC docs/build-graph-from-docs.md", "SOURCECODE src/validate.rs"],
+        vec![
+            "`src/validate.rs` maps node types to expected prefixes.",
+            "The docs recommend one canonical ID per concept.",
+        ],
+        vec![
+            "DOC docs/ai-prompt-graph-from-docs.md",
+            "DOC docs/build-graph-from-docs.md",
+            "SOURCECODE src/validate.rs",
+        ],
         5.0,
     ));
 

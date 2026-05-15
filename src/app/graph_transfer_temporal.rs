@@ -1,3 +1,5 @@
+#![allow(clippy::needless_question_mark)]
+
 use std::path::Path;
 
 use anyhow::Result;

@@ -1,8 +1,8 @@
 mod common;
 
+use assert_cmd::cargo::cargo_bin;
 use common::{exec_ok, load_graph, temp_workspace, test_graph_root, write_fixture, write_graph};
 use kg::{Node, NodeProperties};
-use assert_cmd::cargo::cargo_bin;
 use std::process::Command;
 
 #[test]
@@ -281,8 +281,7 @@ fn auto_update_is_idempotent() {
 fn auto_update_fails_on_manual_collision_with_generated_id() {
     let dir = temp_workspace();
     std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
-    std::fs::write(dir.path().join("src/main.rs"), b"fn main() {}")
-        .expect("write main.rs");
+    std::fs::write(dir.path().join("src/main.rs"), b"fn main() {}").expect("write main.rs");
 
     exec_ok(&["kg", "create", "project"], dir.path());
 
@@ -343,7 +342,9 @@ fn update_with_spaces_in_paths() {
     assert!(output.contains("nodes_added: 3"));
 
     let graph = load_graph(&test_graph_root(dir.path()).join("project.kg"));
-    let node = graph.node_by_id("GFIL:readme.md").expect("generated file node");
+    let node = graph
+        .node_by_id("GFIL:readme.md")
+        .expect("generated file node");
     assert_eq!(node.source_files.len(), 0);
 }
 
@@ -455,6 +456,9 @@ fn generated_node_rendering_fallback_without_explicit_names() {
     let output = exec_ok(&["kg", "project", "node", "get", "D:src"], dir.path());
     assert!(output.contains("D:src") || output.contains("src"));
 
-    let output = exec_ok(&["kg", "project", "node", "get", "GFIL:main.rs"], dir.path());
+    let output = exec_ok(
+        &["kg", "project", "node", "get", "GFIL:main.rs"],
+        dir.path(),
+    );
     assert!(output.contains("main.rs"));
 }

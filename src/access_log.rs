@@ -1,3 +1,5 @@
+#![allow(dead_code, clippy::manual_pattern_char_comparison)]
+
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};

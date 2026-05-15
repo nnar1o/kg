@@ -1,3 +1,5 @@
+#![allow(clippy::explicit_counter_loop, clippy::items_after_test_module)]
+
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;

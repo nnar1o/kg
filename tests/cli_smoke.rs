@@ -39,6 +39,7 @@ fn kg_help_shows_current_command_descriptions() {
     assert!(stdout.contains("Create a new graph"));
     assert!(stdout.contains("List available graphs"));
     assert!(stdout.contains("Run commands against a graph"));
+    assert!(stdout.contains("kg graph fridge annotate \"Need fridge help\""));
     assert!(stdout.contains("kg graph fridge node find lodowka"));
 }
 
@@ -53,6 +54,7 @@ fn kg_graph_help_shows_nested_command_descriptions() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Find, inspect, and edit nodes"));
     assert!(stdout.contains("Add and remove graph edges"));
+    assert!(stdout.contains("Annotate free text with graph matches"));
     assert!(stdout.contains("Run graph quality reports"));
 }
 
@@ -149,4 +151,33 @@ fn kg_node_add_minimal_command_applies_safe_defaults() {
     assert!(stdout.contains("nodes: 1"));
     assert!(stdout.contains("Concept: 1"));
     assert!(!stdout.contains("^:"));
+}
+
+#[test]
+fn kg_graph_annotate_renders_inline_matches() {
+    let dir = tempdir().expect("tempdir");
+    let graph_root = dir.path().join(".kg").join("graphs");
+    std::fs::create_dir_all(&graph_root).expect("create graph root");
+    std::fs::write(
+        graph_root.join("fridge.json"),
+        include_str!("../graph-example-fridge.json"),
+    )
+    .expect("write fixture");
+
+    let output = Command::new(cargo_bin("kg"))
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .args([
+            "graph",
+            "fridge",
+            "annotate",
+            "Need fridge and lodowka help",
+        ])
+        .output()
+        .expect("run kg annotate");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("fridge [kg fridge @K:refrigerator]"));
+    assert!(stdout.contains("lodowka [kg lodowka @K:refrigerator]"));
 }

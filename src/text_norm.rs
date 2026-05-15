@@ -1,6 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenSpan {
+    pub raw: String,
+    pub normalized: String,
+    pub start: usize,
+    pub end: usize,
+}
+
 pub fn normalize_text(raw: &str) -> String {
     let mut out = Vec::new();
     let mut current = String::new();
@@ -29,6 +37,71 @@ pub fn tokenize(text: &str) -> Vec<String> {
         .split_whitespace()
         .map(ToOwned::to_owned)
         .collect()
+}
+
+pub fn tokenize_spans(raw: &str) -> Vec<TokenSpan> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut start: Option<usize> = None;
+
+    let flush =
+        |end: usize, current: &mut String, start: &mut Option<usize>, out: &mut Vec<TokenSpan>| {
+            if current.is_empty() {
+                return;
+            }
+            if let Some(normalized) = normalize_token(current) {
+                if let Some(start) = start.take() {
+                    out.push(TokenSpan {
+                        raw: raw[start..end].to_owned(),
+                        normalized,
+                        start,
+                        end,
+                    });
+                }
+            }
+            current.clear();
+            *start = None;
+        };
+
+    for (idx, ch) in raw.char_indices() {
+        if ch.is_alphanumeric() {
+            if start.is_none() {
+                start = Some(idx);
+            }
+            for lower in ch.to_lowercase() {
+                current.push(lower);
+            }
+        } else {
+            flush(idx, &mut current, &mut start, &mut out);
+        }
+    }
+    flush(raw.len(), &mut current, &mut start, &mut out);
+
+    out
+}
+
+pub fn is_colloquial_filler(token: &str) -> bool {
+    const FILLERS: &[&str] = &[
+        "uh",
+        "um",
+        "erm",
+        "hmm",
+        "eee",
+        "yyy",
+        "eh",
+        "wiesz",
+        "jakby",
+        "generalnie",
+        "właściwie",
+        "wlasciwie",
+        "czyli",
+        "doslownie",
+        "literally",
+        "actually",
+        "basically",
+        "well",
+    ];
+    FILLERS.contains(&token)
 }
 
 pub fn expand_query_terms(query: &str) -> Vec<String> {
@@ -88,6 +161,7 @@ fn synonym_map() -> &'static HashMap<String, String> {
             ("database".to_owned(), "data_store".to_owned()),
             ("datastore".to_owned(), "data_store".to_owned()),
             ("svc".to_owned(), "service".to_owned()),
+            ("ids".to_owned(), "id".to_owned()),
         ]);
         if let Ok(raw) = std::env::var("KG_SCORE_SYNONYMS") {
             for part in raw.split(',') {
@@ -150,4 +224,44 @@ fn stem_token(token: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokenize_spans_preserves_offsets_and_filters_stopwords_only() {
+        let spans = tokenize_spans("Uh, Refrigerator wiesz login");
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| (
+                    span.raw.as_str(),
+                    span.normalized.as_str(),
+                    span.start,
+                    span.end
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Uh", "uh", 0, 2),
+                ("Refrigerator", "refrigeration", 4, 16),
+                ("wiesz", "wiesz", 17, 22),
+                ("login", "authentication", 23, 28)
+            ]
+        );
+    }
+
+    #[test]
+    fn colloquial_filler_detection_catches_common_markers() {
+        assert!(is_colloquial_filler("uh"));
+        assert!(is_colloquial_filler("wiesz"));
+        assert!(is_colloquial_filler("generalnie"));
+        assert!(!is_colloquial_filler("refrigeration"));
+    }
+
+    #[test]
+    fn normalize_text_maps_plural_ids_to_singular() {
+        assert_eq!(normalize_text("Stable IDs"), "stable id");
+    }
 }

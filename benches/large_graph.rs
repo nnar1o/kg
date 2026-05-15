@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use std::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
@@ -151,6 +153,7 @@ fn bench_large_graph(c: &mut Criterion) {
                 black_box(&queries),
                 limit,
                 true,
+                false,
                 kg::output::FindMode::Fuzzy,
                 None,
             );
@@ -170,6 +173,7 @@ fn bench_large_graph(c: &mut Criterion) {
                     black_box(&queries),
                     limit,
                     true,
+                    false,
                     kg::output::FindMode::Bm25,
                     None,
                 );
@@ -189,6 +193,7 @@ fn bench_large_graph(c: &mut Criterion) {
                     black_box(&queries),
                     limit,
                     true,
+                    false,
                     kg::output::FindMode::Bm25,
                     Some(black_box(&index)),
                 );

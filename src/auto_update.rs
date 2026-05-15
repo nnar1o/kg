@@ -1,3 +1,5 @@
+#![allow(clippy::needless_borrow, clippy::too_many_arguments)]
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -71,12 +73,22 @@ impl GeneratedEdgeIndex {
 
     fn lookup(&self, source_id: &str, target_id: &str, relation: &str) -> Option<usize> {
         self.by_key
-            .get(&(source_id.to_owned(), target_id.to_owned(), relation.to_owned()))
+            .get(&(
+                source_id.to_owned(),
+                target_id.to_owned(),
+                relation.to_owned(),
+            ))
             .copied()
     }
 
     fn insert(&mut self, source_id: &str, target_id: &str, relation: &str, edge_index: usize) {
-        self.by_key.entry((source_id.to_owned(), target_id.to_owned(), relation.to_owned())).or_insert(edge_index);
+        self.by_key
+            .entry((
+                source_id.to_owned(),
+                target_id.to_owned(),
+                relation.to_owned(),
+            ))
+            .or_insert(edge_index);
     }
 }
 
@@ -818,7 +830,12 @@ fn legacy_generated_section_id(relative_path: &Path, id_path: &[String]) -> Stri
 
 fn legacy_generated_symbol_id(relative_path: &Path, kind: &str, name: &str) -> String {
     let path = generated_path_suffix(relative_path);
-    format!("{}~c{}~c{}", escape_name(&path), escape_name(kind), escape_name(name))
+    format!(
+        "{}~c{}~c{}",
+        escape_name(&path),
+        escape_name(kind),
+        escape_name(name)
+    )
 }
 
 fn migrate_legacy_generated_node_id(
@@ -1049,15 +1066,24 @@ mod tests {
         let summary = auto_update_graph(&mut graph).expect("auto update");
         assert!(summary.nodes_added >= 3);
 
-        assert!(graph
-            .nodes
-            .iter()
-            .any(|node| node.r#type == SYMBOL_PREFIX && node.name == "hello"));
-        assert!(graph
-            .nodes
-            .iter()
-            .any(|node| node.r#type == SYMBOL_PREFIX && node.name == "World"));
-        assert!(graph.edges.iter().any(|edge| edge.relation == RELATION_DEFINES));
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|node| node.r#type == SYMBOL_PREFIX && node.name == "hello")
+        );
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|node| node.r#type == SYMBOL_PREFIX && node.name == "World")
+        );
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|edge| edge.relation == RELATION_DEFINES)
+        );
     }
 
     #[test]
@@ -1065,8 +1091,7 @@ mod tests {
         let dir = tempdir().expect("temp dir");
         let src_dir = dir.path().join("src");
         std::fs::create_dir_all(&src_dir).expect("create src dir");
-        std::fs::write(src_dir.join("lib.rs"), "pub fn hello() {}\n")
-            .expect("write rust source");
+        std::fs::write(src_dir.join("lib.rs"), "pub fn hello() {}\n").expect("write rust source");
 
         let mut graph = GraphFile::new("repo");
         graph.nodes.push(Node {
@@ -1081,8 +1106,7 @@ mod tests {
         });
 
         let file_id = generated_node_id(FILE_PREFIX, std::path::Path::new("src/lib.rs"));
-        let symbol_id =
-            generated_symbol_id(std::path::Path::new("src/lib.rs"), "fn", "hello");
+        let symbol_id = generated_symbol_id(std::path::Path::new("src/lib.rs"), "fn", "hello");
         graph.nodes.push(Node {
             id: file_id.clone(),
             r#type: FILE_PREFIX.to_owned(),
@@ -1106,14 +1130,18 @@ mod tests {
 
         auto_update_graph(&mut graph).expect("auto update");
 
-        assert!(graph
-            .edges
-            .iter()
-            .any(|edge| edge.relation == RELATION_DEFINES));
-        assert!(!graph
-            .edges
-            .iter()
-            .any(|edge| edge.relation == LEGACY_RELATION_DEFINES));
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|edge| edge.relation == RELATION_DEFINES)
+        );
+        assert!(
+            !graph
+                .edges
+                .iter()
+                .any(|edge| edge.relation == LEGACY_RELATION_DEFINES)
+        );
     }
 
     #[test]
@@ -1144,10 +1172,12 @@ mod tests {
 
         auto_update_graph(&mut graph).expect("auto update");
 
-        assert!(graph
-            .nodes
-            .iter()
-            .any(|node| node.id == "GSEC:README.md/__section__/A~~2BB"));
+        assert!(
+            graph
+                .nodes
+                .iter()
+                .any(|node| node.id == "GSEC:README.md/__section__/A~~2BB")
+        );
         assert!(!graph.nodes.iter().any(|node| node.id == legacy_section_id));
     }
 

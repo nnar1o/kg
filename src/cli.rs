@@ -1,3 +1,5 @@
+#![allow(clippy::large_enum_variant)]
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[allow(dead_code)]
@@ -31,7 +33,7 @@ const HELP_BANNER: &str = r#"▓ ▄▄
                                           ▄▄▄▄▄▓▓██▓▄▄           ▄▄▓█▀
                                           ▀▀▀       ▀▀▀█▓▓▓▓▓▓▓█▀▀▀"#;
 
-const HELP_EXAMPLES: &str = "Examples:\n  kg create fridge\n  kg list\n  kg graph fridge node find lodowka\n  kg graph fridge node get concept:refrigerator\n  kg graph fridge kql \"node type=Process\"\n  kg graph fridge stats\n  kg graph fridge quality duplicates";
+const HELP_EXAMPLES: &str = "Examples:\n  kg create fridge\n  kg list\n  kg graph fridge node find lodowka\n  kg graph fridge node get concept:refrigerator\n  kg graph fridge annotate \"Need fridge help\"\n  kg graph fridge kql \"node type=Process\"\n  kg graph fridge stats\n  kg graph fridge quality duplicates";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -199,6 +201,8 @@ pub enum GraphCommand {
     ImportMarkdown(ImportMarkdownArgs),
     #[command(name = "kql", about = "Query graph with KQL")]
     Kql(KqlArgs),
+    #[command(about = "Annotate free text with graph matches")]
+    Annotate(AnnotateArgs),
     #[command(name = "export-json", about = "Export graph to JSON file")]
     ExportJson(ExportJsonArgs),
     #[command(name = "import-json", about = "Import graph from JSON file")]
@@ -340,6 +344,12 @@ pub struct KqlArgs {
     pub query: String,
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AnnotateArgs {
+    #[arg(help = "Text to annotate")]
+    pub text: String,
 }
 
 #[derive(Debug, Args)]

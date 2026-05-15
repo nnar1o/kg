@@ -1,3 +1,5 @@
+#![allow(clippy::unnecessary_sort_by)]
+
 use crate::graph::{GraphFile, Note};
 use anyhow::Result;
 use std::collections::HashMap;

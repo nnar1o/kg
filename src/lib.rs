@@ -1,11 +1,19 @@
+#![allow(
+    clippy::needless_borrow,
+    clippy::collapsible_match,
+    clippy::too_many_arguments
+)]
+
 mod access_log;
 mod analysis;
+mod annotate;
 mod app;
 mod auto_update;
-mod code_symbols;
 mod cache_paths;
 mod cli;
+mod code_symbols;
 mod config;
+mod document_sections;
 mod event_log;
 mod export_html;
 pub mod graph;
@@ -13,7 +21,6 @@ mod graph_lock;
 mod import_csv;
 mod import_markdown;
 mod index;
-mod document_sections;
 mod init;
 mod kg_sidecar;
 mod kql;
@@ -62,6 +69,7 @@ use serde_json::Value;
 // (graph types are re-exported above)
 use storage::{GraphStore, graph_store};
 
+use app::graph_annotate::execute_annotate;
 use app::graph_node_edge::{GraphCommandContext, execute_edge, execute_node};
 use app::graph_note::{GraphNoteContext, execute_note};
 use app::graph_query_quality::{
@@ -183,11 +191,16 @@ fn colorize_cli_output(rendered: &str) -> String {
     if looks_like_json(rendered) {
         return rendered.to_owned();
     }
-    rendered
+    let trailing_newline = rendered.ends_with('\n');
+    let mut colored = rendered
         .lines()
         .map(colorize_line)
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if trailing_newline {
+        colored.push('\n');
+    }
+    colored
 }
 
 fn looks_like_json(rendered: &str) -> bool {
@@ -426,6 +439,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                     args,
                 ),
                 GraphCommand::Kql(args) => execute_kql(&graph_file, args),
+                GraphCommand::Annotate(args) => Ok(execute_annotate(&graph_file, &args)),
                 GraphCommand::ExportJson(args) => execute_export_json(&graph, &graph_file, args),
                 GraphCommand::ImportJson(args) => {
                     execute_import_json(&path, &graph, store.as_ref(), args)
@@ -527,6 +541,7 @@ fn graph_command_mutates(command: &GraphCommand) -> bool {
         | GraphCommand::List(_)
         | GraphCommand::AccessPaths(_)
         | GraphCommand::Kql(_)
+        | GraphCommand::Annotate(_)
         | GraphCommand::ExportJson(_)
         | GraphCommand::ExportDot(_)
         | GraphCommand::ExportMermaid(_)
@@ -3504,6 +3519,12 @@ mod tests {
     fn colorize_cli_output_leaves_json_unchanged() {
         let rendered = "{\n  \"nodes\": []\n}\n";
         assert_eq!(colorize_cli_output(rendered), rendered);
+    }
+
+    #[test]
+    fn colorize_cli_output_preserves_trailing_newline() {
+        let rendered = "line one\nline two\n";
+        assert!(colorize_cli_output(rendered).ends_with('\n'));
     }
 
     #[test]

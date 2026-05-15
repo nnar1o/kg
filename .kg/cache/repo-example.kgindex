@@ -1,0 +1,17 @@
+convention:config_discovery 1
+datastore:event_log_snapshots 11
+datastore:local_graph_files 22
+feature:persistent_memory 33
+interface:kg_cli 41
+interface:kg_mcp 53
+concept:graph_serialization 67
+concept:kg_repo 80
+concept:repo_scope 99
+process:command_dispatch 108
+process:graph_mutation 120
+process:graph_query 135
+process:quality_checks 147
+rule:grounded_facts_only 159
+rule:stable_ids 170
+decision:native_kg_format 181
+graph_info 191

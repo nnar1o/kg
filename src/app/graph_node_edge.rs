@@ -1,3 +1,5 @@
+#![allow(clippy::useless_conversion)]
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};

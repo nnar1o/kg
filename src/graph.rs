@@ -1,3 +1,5 @@
+#![allow(clippy::manual_contains, clippy::collapsible_if)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write;
@@ -331,7 +333,10 @@ fn decode_kg_token_reference_line(line: &str) -> Option<(String, String)> {
     Some((token.to_owned(), value.to_owned()))
 }
 
-fn expand_kg_tokens_in_line(line: &str, dictionary: &std::collections::HashMap<String, String>) -> String {
+fn expand_kg_tokens_in_line(
+    line: &str,
+    dictionary: &std::collections::HashMap<String, String>,
+) -> String {
     let mut out = String::new();
     let chars: Vec<char> = line.chars().collect();
     let mut idx = 0;
@@ -399,8 +404,7 @@ fn node_header_type_token(line: &str) -> Option<&str> {
 }
 
 fn is_generated_node_block_header(line: &str) -> bool {
-    node_header_type_token(line)
-        .is_some_and(|token| token.starts_with('G'))
+    node_header_type_token(line).is_some_and(|token| token.starts_with('G'))
 }
 
 fn collect_generated_text_lines(raw: &str) -> Vec<(usize, String)> {
@@ -586,8 +590,7 @@ fn replace_kg_text_with_tokens(line: &str, candidates: &[KgCompressionCandidate]
                 continue;
             }
             match best {
-                Some(current)
-                    if current.value.chars().count() >= candidate_chars.len() => {}
+                Some(current) if current.value.chars().count() >= candidate_chars.len() => {}
                 _ => best = Some(candidate),
             }
         }
@@ -614,7 +617,10 @@ fn compress_kg_text(raw: &str, min_len: usize) -> (String, KgCompressionStats) {
     let mut defs_by_line: std::collections::HashMap<usize, Vec<&KgCompressionCandidate>> =
         std::collections::HashMap::new();
     for candidate in &candidates {
-        defs_by_line.entry(candidate.first_line).or_default().push(candidate);
+        defs_by_line
+            .entry(candidate.first_line)
+            .or_default()
+            .push(candidate);
     }
     for defs in defs_by_line.values_mut() {
         defs.sort_by(|a, b| {
@@ -1861,12 +1867,11 @@ impl GraphFile {
                     .and_then(|stem| stem.to_str())
                     .unwrap_or("graph");
                 let decompressed = expand_kg_tokens(&raw);
-                let (graph, warnings) = parse_kg_with_warnings(
-                    &decompressed,
-                    graph_name,
-                    strict_kg_mode(),
-                )
-                    .with_context(|| format!("failed to parse .kg graph: {}", path.display()))?;
+                let (graph, warnings) =
+                    parse_kg_with_warnings(&decompressed, graph_name, strict_kg_mode())
+                        .with_context(|| {
+                            format!("failed to parse .kg graph: {}", path.display())
+                        })?;
                 for warning in warnings {
                     let _ = crate::kg_sidecar::append_warning(
                         path,
@@ -2150,9 +2155,8 @@ fn generate_graph_uuid() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        compress_kg_text, expand_kg_tokens, GRAPH_INFO_NODE_ID, GRAPH_INFO_NODE_TYPE,
-        GRAPH_SCHEMA_VERSION, GRAPH_UUID_FACT_PREFIX, GraphFile, KG_TEXT_COMPRESSION_MIN_LEN,
-        parse_kg,
+        GRAPH_INFO_NODE_ID, GRAPH_INFO_NODE_TYPE, GRAPH_SCHEMA_VERSION, GRAPH_UUID_FACT_PREFIX,
+        GraphFile, KG_TEXT_COMPRESSION_MIN_LEN, compress_kg_text, expand_kg_tokens, parse_kg,
     };
 
     #[test]

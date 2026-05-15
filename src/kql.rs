@@ -1,3 +1,5 @@
+#![allow(clippy::unnecessary_sort_by)]
+
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::{Result, bail};

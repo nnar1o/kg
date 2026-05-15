@@ -1,3 +1,4 @@
+pub(crate) mod graph_annotate;
 pub(crate) mod graph_node_edge;
 pub(crate) mod graph_note;
 pub(crate) mod graph_query_quality;

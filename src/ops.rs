@@ -1,3 +1,5 @@
+#![allow(clippy::ptr_arg, clippy::field_reassign_with_default)]
+
 use anyhow::{Result, anyhow, bail};
 
 use crate::graph::{Edge, GraphFile, Node};
