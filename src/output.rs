@@ -506,10 +506,6 @@ pub fn render_node(graph: &GraphFile, node: &Node, full: bool) -> String {
 
 pub fn render_node_adaptive(graph: &GraphFile, node: &Node, target_chars: Option<usize>) -> String {
     let target = clamp_target_chars(target_chars);
-    let full = format!("{}\n", render_node_block(graph, node, true));
-    if fits_target_chars(&full, target) {
-        return full;
-    }
     let mut candidates = Vec::new();
     for (depth, detail, edge_cap) in [
         (0usize, DetailLevel::Rich, 8usize),
@@ -642,21 +638,6 @@ fn render_single_result_section(
     debug_score: bool,
 ) -> String {
     let header = render_result_header(query, 1, total_available);
-    let full = render_single_result_candidate(
-        graph,
-        query,
-        &header,
-        node,
-        total_available,
-        0,
-        DetailLevel::Rich,
-        8,
-        true,
-        debug_score,
-    );
-    if fits_target_chars(&full, target) {
-        return full.trim_end().to_owned();
-    }
     let mut candidates = Vec::new();
     for (depth, detail, edge_cap) in [
         (0usize, DetailLevel::Rich, 8usize),
@@ -697,10 +678,6 @@ fn render_multi_result_section(
     debug_score: bool,
 ) -> String {
     let visible_total = nodes.len();
-    let full = render_full_result_section(graph, query, nodes, total_available, debug_score);
-    if fits_target_chars(&full, target) {
-        return full;
-    }
     let mut candidates = Vec::new();
     let full_cap = visible_total;
     let mid_cap = full_cap.min(5);
@@ -786,27 +763,6 @@ fn pick_best_candidate(candidates: Vec<Candidate>, target: usize) -> String {
     best.map(|item| item.4).unwrap_or_else(|| "\n".to_owned())
 }
 
-fn render_full_result_section(
-    graph: &GraphFile,
-    query: &str,
-    nodes: &[ScoredNode<'_>],
-    total_available: usize,
-    debug_score: bool,
-) -> String {
-    let mut lines = vec![render_result_header(query, nodes.len(), total_available)];
-    for node in nodes {
-        lines.push(render_scored_node_block(
-            graph,
-            node,
-            true,
-            debug_score,
-            Some(query),
-        ));
-    }
-    push_limit_omission_line(&mut lines, nodes.len(), total_available);
-    lines.join("\n")
-}
-
 fn render_result_header(query: &str, shown: usize, total: usize) -> String {
     let query = escape_cli_text(query);
     if shown < total {
@@ -821,10 +777,6 @@ fn push_limit_omission_line(lines: &mut Vec<String>, shown: usize, total: usize)
     if omitted > 0 {
         lines.push(format!("... {omitted} more nodes omitted by limit"));
     }
-}
-
-fn fits_target_chars(rendered: &str, target: usize) -> bool {
-    rendered.chars().count() <= target
 }
 
 fn render_single_node_candidate(
@@ -1038,7 +990,12 @@ fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
                         .join(", ")
                 ));
             }
-            push_description_line(&mut lines, &node.properties.description, None);
+            push_description_line(
+                &mut lines,
+                &node.properties.description,
+                None,
+                Some(&display_name),
+            );
             let shown_facts = node.properties.key_facts.len().min(3);
             for fact in node.properties.key_facts.iter().take(shown_facts) {
                 lines.push(format!("- {}", escape_cli_text(fact)));
@@ -1055,7 +1012,12 @@ fn render_node_identity_lines(node: &Node, detail: DetailLevel) -> Vec<String> {
                 escape_cli_text(&display_name),
                 node.r#type
             ));
-            push_description_line(&mut lines, &node.properties.description, Some(140));
+            push_description_line(
+                &mut lines,
+                &node.properties.description,
+                Some(140),
+                Some(&display_name),
+            );
             if let Some(fact) = node.properties.key_facts.first() {
                 lines.push(format!("- {}", escape_cli_text(fact)));
             }
@@ -1283,6 +1245,7 @@ fn render_node_block_with_query(
     let mut lines = Vec::new();
     let display_name = node_display_name(node);
     let generated = crate::validate::is_generated_node_type(&node.r#type);
+    let is_metadata = is_default_graph_metadata_node(node);
     lines.push(format!(
         "# {} | {} [{}]",
         node.id,
@@ -1305,9 +1268,10 @@ fn render_node_block_with_query(
         &mut lines,
         &node.properties.description,
         if full { None } else { Some(200) },
+        Some(&display_name),
     );
     if full && !generated {
-        if !node.properties.domain_area.is_empty() {
+        if !domain_area_is_redundant(node) {
             lines.push(format!(
                 "domain_area: {}",
                 escape_cli_text(&node.properties.domain_area)
@@ -1336,18 +1300,16 @@ fn render_node_block_with_query(
 
     let facts_to_show = if full {
         node.properties.key_facts.len()
+    } else if is_metadata {
+        0
     } else {
         node.properties.key_facts.len().min(2)
     };
     for fact in node.properties.key_facts.iter().take(facts_to_show) {
         lines.push(format!("- {}", escape_cli_text(fact)));
     }
-    let omitted = node
-        .properties
-        .key_facts
-        .len()
-        .saturating_sub(facts_to_show);
-    if omitted > 0 {
+    let omitted = node.properties.key_facts.len().saturating_sub(facts_to_show);
+    if omitted > 0 && (full || !is_metadata) {
         lines.push(format!("... {omitted} more facts omitted"));
     }
 
@@ -1555,8 +1517,16 @@ fn escape_cli_text(value: &str) -> String {
     out
 }
 
-fn push_description_line(lines: &mut Vec<String>, description: &str, max_len: Option<usize>) {
+fn push_description_line(
+    lines: &mut Vec<String>,
+    description: &str,
+    max_len: Option<usize>,
+    display_name: Option<&str>,
+) {
     if description.is_empty() {
+        return;
+    }
+    if display_name.is_some_and(|name| description_is_redundant(description, name)) {
         return;
     }
     let escaped = escape_cli_text(description);
@@ -1565,6 +1535,34 @@ fn push_description_line(lines: &mut Vec<String>, description: &str, max_len: Op
         None => escaped,
     };
     lines.push(format!("desc: {rendered}"));
+}
+
+fn normalize_for_redundancy(value: &str) -> String {
+    text_norm::normalize_text(value)
+}
+
+fn description_is_redundant(description: &str, display_name: &str) -> bool {
+    let normalized_desc = normalize_for_redundancy(description);
+    if normalized_desc.is_empty() {
+        return false;
+    }
+    normalized_desc == normalize_for_redundancy(display_name)
+}
+
+fn domain_area_is_redundant(node: &Node) -> bool {
+    if node.properties.domain_area.trim().is_empty() {
+        return true;
+    }
+    let normalized_domain = normalize_for_redundancy(&node.properties.domain_area);
+    if normalized_domain.is_empty() {
+        return true;
+    }
+    normalized_domain == normalize_for_redundancy(&node.r#type)
+        || normalized_domain == normalize_for_redundancy(&node.id)
+}
+
+fn is_default_graph_metadata_node(node: &Node) -> bool {
+    node.r#type == "^" || node.id.starts_with("^:graph_")
 }
 
 fn push_feedback_lines(
@@ -2965,5 +2963,156 @@ mod tests {
         );
         assert_eq!(shown.len(), 1);
         assert_eq!(shown[0].node.id, "^:graph_info");
+    }
+
+    #[test]
+    fn adaptive_node_rendering_keeps_non_full_shape_even_when_size_allows_more() {
+        let mut graph = GraphFile::new("test");
+        let mut node = make_node(
+            "concept:thermostat",
+            "Thermostat",
+            "Thermostat",
+            &["fact one", "fact two", "fact three"],
+            &[],
+            0.5,
+            0.0,
+            0,
+        );
+        node.properties.domain_area = "Concept".to_owned();
+        node.source_files = vec!["src/domain.rs".to_owned()];
+        graph.nodes.push(node.clone());
+
+        let rendered = render_node_adaptive(&graph, &node, Some(12_000));
+        assert!(!rendered.contains("sources:"));
+        assert!(!rendered.contains("importance:"));
+        assert!(!rendered.contains("domain_area:"));
+        assert!(!rendered.contains("desc:"));
+    }
+
+    #[test]
+    fn non_full_render_suppresses_redundant_description_and_metadata_noise() {
+        let mut graph = GraphFile::new("test");
+        let mut node = make_node(
+            "^:graph_info",
+            "Graph Metadata",
+            "Graph metadata",
+            &["graph_uuid=abc", "version=1"],
+            &[],
+            0.5,
+            0.0,
+            0,
+        );
+        node.r#type = "^".to_owned();
+        graph.nodes.push(node.clone());
+
+        let rendered = render_node(&graph, &node, false);
+        assert!(!rendered.contains("desc:"));
+        assert!(!rendered.contains("- graph_uuid=abc"));
+        assert!(!rendered.contains("... 2 more facts omitted"));
+    }
+
+    #[test]
+    fn adaptive_find_single_result_keeps_non_full_shape_with_large_budget() {
+        let mut graph = GraphFile::new("test");
+        let mut node = make_node(
+            "concept:thermostat",
+            "Thermostat Controller",
+            "Controls temperature profile",
+            &["supports eco mode"],
+            &[],
+            0.9,
+            0.0,
+            0,
+        );
+        node.properties.domain_area = "iot_controls".to_owned();
+        node.properties.created_at = "2026-01-01T00:00:00Z".to_owned();
+        node.source_files = vec!["src/hvac.rs".to_owned()];
+        graph.nodes.push(node);
+
+        let rendered = render_find_adaptive_with_index(
+            &graph,
+            &["thermostat".to_owned()],
+            5,
+            true,
+            false,
+            FindMode::Hybrid,
+            Some(12_000),
+            false,
+            None,
+        );
+
+        assert!(rendered.contains("? thermostat"));
+        assert!(rendered.contains("# concept:thermostat"));
+        assert!(rendered.contains("desc: Controls temperature profile"));
+        assert!(!rendered.contains("importance:"));
+        assert!(!rendered.contains("sources:"));
+        assert!(!rendered.contains("created_at:"));
+    }
+
+    #[test]
+    fn adaptive_find_multi_result_keeps_non_full_shape_with_large_budget() {
+        let mut graph = GraphFile::new("test");
+        let mut left = make_node(
+            "concept:cooling_a",
+            "Cooling A",
+            "Cooling profile alpha",
+            &["shared fact"],
+            &[],
+            0.8,
+            0.0,
+            0,
+        );
+        left.source_files = vec!["src/cooling/a.rs".to_owned()];
+        let mut right = make_node(
+            "concept:cooling_b",
+            "Cooling B",
+            "Cooling profile beta",
+            &["shared fact"],
+            &[],
+            0.7,
+            0.0,
+            0,
+        );
+        right.source_files = vec!["src/cooling/b.rs".to_owned()];
+        graph.nodes.push(left);
+        graph.nodes.push(right);
+
+        let rendered = render_find_adaptive_with_index(
+            &graph,
+            &["cooling".to_owned()],
+            5,
+            true,
+            false,
+            FindMode::Hybrid,
+            Some(12_000),
+            false,
+            None,
+        );
+
+        assert!(rendered.contains("? cooling"));
+        assert!(rendered.contains("# concept:cooling_a"));
+        assert!(rendered.contains("# concept:cooling_b"));
+        assert!(!rendered.contains("importance:"));
+        assert!(!rendered.contains("sources:"));
+    }
+
+    #[test]
+    fn full_render_keeps_non_redundant_domain_area() {
+        let mut graph = GraphFile::new("test");
+        let mut node = make_node(
+            "concept:thermostat",
+            "Thermostat",
+            "Thermostat node",
+            &[],
+            &[],
+            0.5,
+            0.0,
+            0,
+        );
+        node.properties.domain_area = "hvac_controls".to_owned();
+        graph.nodes.push(node.clone());
+
+        let rendered = render_node(&graph, &node, true);
+        assert!(rendered.contains("domain_area: hvac_controls"));
     }
 }

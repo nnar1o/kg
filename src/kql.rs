@@ -36,6 +36,7 @@ struct Filter {
 
 #[derive(Debug, Clone)]
 enum Expr {
+    True,
     Filter(Filter),
     And(Box<Expr>, Box<Expr>),
 }
@@ -154,11 +155,7 @@ fn parse_query(input: &str) -> Result<QueryKind> {
         }
         expr
     } else {
-        Expr::Filter(Filter {
-            key: "id".to_string(),
-            op: FilterOp::Eq,
-            value: "*".to_string(),
-        })
+        Expr::True
     };
 
     let kind = parts[0].to_lowercase();
@@ -408,6 +405,7 @@ pub fn query(graph: &GraphFile, input: &str) -> Result<KqlResponse> {
 
 fn eval_node_expr(node: &Node, expr: &Expr) -> bool {
     match expr {
+        Expr::True => true,
         Expr::Filter(f) => matches_node(node, f),
         Expr::And(left, right) => eval_node_expr(node, left) && eval_node_expr(node, right),
     }
@@ -415,6 +413,7 @@ fn eval_node_expr(node: &Node, expr: &Expr) -> bool {
 
 fn eval_edge_expr(edge: &Edge, expr: &Expr) -> bool {
     match expr {
+        Expr::True => true,
         Expr::Filter(f) => matches_edge(edge, f),
         Expr::And(left, right) => eval_edge_expr(edge, left) && eval_edge_expr(edge, right),
     }
@@ -422,6 +421,7 @@ fn eval_edge_expr(edge: &Edge, expr: &Expr) -> bool {
 
 fn eval_note_expr(note: &Note, expr: &Expr) -> bool {
     match expr {
+        Expr::True => true,
         Expr::Filter(f) => matches_note(note, f),
         Expr::And(left, right) => eval_note_expr(note, left) && eval_note_expr(note, right),
     }
@@ -764,4 +764,95 @@ fn aggregate(graph: &GraphFile, kind: &str, group_by: &str) -> Result<Vec<(Strin
     let mut groups: Vec<(String, usize)> = counts.into_iter().collect();
     groups.sort_by(|a, b| b.1.cmp(&a.1));
     Ok(groups)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_without_filters_matches_all_nodes() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(Node {
+            id: "concept:a".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "A".to_owned(),
+            properties: Default::default(),
+            source_files: Vec::new(),
+        });
+        graph.nodes.push(Node {
+            id: "concept:b".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "B".to_owned(),
+            properties: Default::default(),
+            source_files: Vec::new(),
+        });
+
+        let result = query(&graph, "node").expect("query should succeed");
+        match result {
+            KqlResponse::Nodes { nodes, total } => {
+                assert_eq!(total, 2);
+                assert_eq!(nodes.len(), 2);
+            }
+            _ => panic!("expected node response"),
+        }
+    }
+
+    #[test]
+    fn query_without_filters_matches_all_edges() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(Node {
+            id: "concept:a".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "A".to_owned(),
+            properties: Default::default(),
+            source_files: Vec::new(),
+        });
+        graph.nodes.push(Node {
+            id: "concept:b".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "B".to_owned(),
+            properties: Default::default(),
+            source_files: Vec::new(),
+        });
+        graph.edges.push(Edge {
+            source_id: "concept:a".to_owned(),
+            relation: "HAS".to_owned(),
+            target_id: "concept:b".to_owned(),
+            properties: Default::default(),
+        });
+
+        let result = query(&graph, "edge").expect("query should succeed");
+        match result {
+            KqlResponse::Edges { edges, total } => {
+                assert_eq!(total, 1);
+                assert_eq!(edges.len(), 1);
+            }
+            _ => panic!("expected edge response"),
+        }
+    }
+
+    #[test]
+    fn query_without_filters_matches_all_notes() {
+        let mut graph = GraphFile::new("test");
+        graph.notes.push(Note {
+            id: "note:1".to_owned(),
+            node_id: "concept:a".to_owned(),
+            body: "text".to_owned(),
+            tags: vec!["tag".to_owned()],
+            author: "tester".to_owned(),
+            created_at: "2026-01-01".to_owned(),
+            provenance: "U".to_owned(),
+            source_files: vec![],
+        });
+
+        let result = query(&graph, "note").expect("query should succeed");
+        match result {
+            KqlResponse::Notes { notes, total } => {
+                assert_eq!(total, 1);
+                assert_eq!(notes.len(), 1);
+            }
+            _ => panic!("expected note response"),
+        }
+    }
 }

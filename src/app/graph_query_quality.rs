@@ -160,3 +160,38 @@ pub(crate) fn execute_baseline(
     let quality = compute_quality_snapshot(graph, args.include_features, 0.85);
     crate::render_baseline_report(cwd, graph_name, graph, &quality, args)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execute_list_without_filters_returns_nodes() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(crate::graph::Node {
+            id: "concept:first".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "First".to_owned(),
+            properties: Default::default(),
+            source_files: Vec::new(),
+        });
+        graph.nodes.push(crate::graph::Node {
+            id: "concept:second".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Second".to_owned(),
+            properties: Default::default(),
+            source_files: Vec::new(),
+        });
+
+        let args = crate::cli::ListArgs {
+            r#type: None,
+            since: None,
+            limit: Some(10),
+            fields: None,
+        };
+        let rendered = execute_list(&graph, &args).expect("list should succeed");
+        assert!(rendered.contains("nodes: 2 (total: 2)"));
+        assert!(rendered.contains("# concept:first | First [Concept]"));
+        assert!(rendered.contains("# concept:second | Second [Concept]"));
+    }
+}
