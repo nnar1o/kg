@@ -1,6 +1,7 @@
 /target
 /.opencode
 /.logs/
+/.kg/cache/
 /docs/competition.md
 *.priv
 *.pub
