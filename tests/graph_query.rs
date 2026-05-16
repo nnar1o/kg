@@ -653,8 +653,8 @@ fn get_with_large_output_size_shows_richer_adaptive_output() {
 
     assert!(output.contains("desc: Glowne urzadzenie AGD do przechowywania zywnosci"));
     assert!(output.contains("Klasa energetyczna: A++ lub wyzsza dla nowych modeli"));
-    assert!(output.contains("importance: 0.5"));
-    assert!(!output.contains("depth 1:"));
+    assert!(!output.contains("importance:"));
+    assert!(output.contains("depth 1:"));
 }
 
 #[test]
@@ -676,8 +676,8 @@ fn find_with_large_output_size_shows_description_for_single_result() {
     );
 
     assert!(output.contains("desc: Glowne urzadzenie AGD do przechowywania zywnosci"));
-    assert!(output.contains("importance: 0.5"));
-    assert!(!output.contains("depth 1:"));
+    assert!(!output.contains("importance:"));
+    assert!(output.contains("depth 1:"));
 }
 
 #[test]
