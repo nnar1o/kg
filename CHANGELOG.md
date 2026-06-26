@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.2.19] - 2026-06-26
+
+### Changed
+- reduce MCP tools from 22 to 3 (`kg`, `kg_help`, `kg_schema`)
+- add `kg_help` tool with domain-specific documentation for common graph workflows
+- update docs to reflect 3-tool MCP surface
+
+## [0.2.18] - 2026-05-15
+
+### Fixed
+- fix adaptive non-full output behavior and expand regression coverage
+- fix adaptive graph query test expectations
+
+## [0.2.17] - 2026-05-10
+
+### Added
+- add scan controls for auto-indexed roots during graph resolution
+- add generated ownership guards for indexed graph updates
+
+## [0.2.16] - 2026-04-22
+
+### Added
+- add regression tests for generated node workflow (#6)
+
+### Fixed
+- restore `kg-mcp.rs` from v0.2.14 stable state to fix compilation errors
+- fix `resolve_existing_node_id` and add unit tests for path parsing (#7)
+- add `valid_from`/`valid_to` to MCP API for CLI parity
+- fix API consistency improvements
+
 ## [0.2.15] - 2026-04-15
 
 ### Added

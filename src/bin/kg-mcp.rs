@@ -63,6 +63,8 @@ struct NodeFindArgs {
     #[serde(default)]
     skip_feedback: bool,
     #[serde(default)]
+    with_feedback: bool,
+    #[serde(default)]
     debug: bool,
 }
 
@@ -334,23 +336,28 @@ impl KgMcpServer {
         let redacted_args = redact_cli_args(&raw_args);
         let redacted_command = redacted_args.join(" ");
 
-        let _guard = self.exec_lock.lock().map_err(|_| {
-            let mut data = json!({
-                "tool": tool_name,
-                "operation": operation,
-                "trace_id": trace_id,
-                "cli_command": redacted_command,
-                "reason": "previous command panicked",
-            });
-            if debug_enabled {
-                data["debug"] = json!({
-                    "cwd": self.cwd.display().to_string(),
-                    "cli_args": redacted_args,
-                    "duration_ms": started_at.elapsed().as_millis(),
+        // Skip exec_lock for read-only commands (Item 11)
+        let _guard: Option<std::sync::MutexGuard<'_, ()>> = if is_read_only_tool(tool_name) {
+            None
+        } else {
+            Some(self.exec_lock.lock().map_err(|_| {
+                let mut data = json!({
+                    "tool": tool_name,
+                    "operation": operation,
+                    "trace_id": trace_id,
+                    "cli_command": redacted_command,
+                    "reason": "previous command panicked",
                 });
-            }
-            McpError::internal_error("kg command lock poisoned", Some(data))
-        })?;
+                if debug_enabled {
+                    data["debug"] = json!({
+                        "cwd": self.cwd.display().to_string(),
+                        "cli_args": redacted_args,
+                        "duration_ms": started_at.elapsed().as_millis(),
+                    });
+                }
+                McpError::internal_error("kg command lock poisoned", Some(data))
+            })?)
+        };
 
         let cwd = self.cwd.clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -363,6 +370,17 @@ impl KgMcpServer {
                 let stderr = kg::format_error_chain(&err);
                 let duration_ms = started_at.elapsed().as_millis();
                 let (code, message, kind, exit_code) = classify_kg_error(&stderr);
+                // Include first meaningful stderr line in error message (Item 5)
+                let first_line = stderr
+                    .lines()
+                    .find(|l| !l.is_empty())
+                    .unwrap_or("unknown error");
+                let truncated = if first_line.len() > 120 {
+                    format!("{}...", &first_line[..117])
+                } else {
+                    first_line.to_owned()
+                };
+                let detailed_message = format!("{} — {}", message, truncated);
                 let mut data = json!({
                     "tool": tool_name,
                     "operation": operation,
@@ -382,7 +400,7 @@ impl KgMcpServer {
                         "raw_error": last_lines(&stderr, 80),
                     });
                 }
-                Err(McpError::new(code, message, Some(data)))
+                Err(McpError::new(code, detailed_message, Some(data)))
             }
             Err(payload) => {
                 let panic = panic_payload_to_string(payload);
@@ -848,7 +866,7 @@ impl KgMcpServer {
     fn handle_node_find(&self, args: NodeFindArgs) -> Result<CallToolResult, McpError> {
         let graph = args.graph.clone();
         let queries = args.queries.clone();
-        let skip_feedback = args.skip_feedback;
+        let mut skip_feedback = args.skip_feedback;
         let mut cmd = vec![args.graph, "node".to_owned(), "find".to_owned()];
         cmd.extend(args.queries);
         if let Some(limit) = args.limit {
@@ -876,6 +894,20 @@ impl KgMcpServer {
         let mut candidate_ids = parse_find_candidate_ids(&rendered);
         if candidate_ids.len() > 25 {
             candidate_ids.truncate(25);
+        }
+
+        // Auto-skip feedback for high-confidence lookups (Item 1)
+        let top_score = parse_top_score(&rendered);
+        let threshold = std::env::var("KG_FEEDBACK_AUTO_SKIP_SCORE")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(800);
+        if !skip_feedback && (top_score >= threshold || total <= 1) {
+            skip_feedback = true;
+        }
+        // --with-feedback flag overrides auto-skip
+        if args.with_feedback && skip_feedback {
+            skip_feedback = false;
         }
 
         if skip_feedback {
@@ -1872,6 +1904,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
     let mut output_size = None;
     let mut mode = None;
     let mut full = false;
+    let mut with_feedback = false;
 
     let mut i = 3;
     while i < args.len() {
@@ -1920,6 +1953,11 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
             i += 1;
             continue;
         }
+        if token == "--with-feedback" {
+            with_feedback = true;
+            i += 1;
+            continue;
+        }
         if token.starts_with("--") {
             return Some(Err(format!("unknown option: {token}")));
         }
@@ -1939,6 +1977,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
         mode,
         full,
         skip_feedback: false,
+        with_feedback,
         debug: false,
     }))
 }
@@ -2303,6 +2342,27 @@ fn parse_find_candidate_ids(rendered: &str) -> Vec<String> {
         }
     }
     ids
+}
+
+fn is_read_only_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "kg_node_find" | "kg_node_get" | "kg_stats" | "kg_check" | "kg_gap_summary"
+            | "kg_quality" | "kg_access_log" | "kg_access_stats" | "kg_schema"
+            | "kg_help"
+    )
+}
+
+fn parse_top_score(rendered: &str) -> i64 {
+    rendered
+        .lines()
+        .filter(|line| line.starts_with("# "))
+        .find_map(|line| {
+            let open = line.rfind('(')?;
+            let close = line.rfind(')')?;
+            line[open + 1..close].parse::<i64>().ok()
+        })
+        .unwrap_or(0)
 }
 
 fn feedback_delta(action: &str) -> Option<f64> {

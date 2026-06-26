@@ -40,6 +40,7 @@ pub(crate) fn execute_node(
             json,
             debug_score,
             include_metadata,
+            skip_feedback,
             tune,
             vector_query,
         } => {
@@ -168,6 +169,12 @@ pub(crate) fn execute_node(
                 }
             }
 
+            let result = if skip_feedback && !json {
+                // Append feedback-skipped note to CLI output
+                format!("{}# feedback skipped\n", result.trim_end())
+            } else {
+                result
+            };
             Ok(result)
         }
 

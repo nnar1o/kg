@@ -160,6 +160,8 @@ pub enum GraphCommand {
     },
     #[command(about = "Show graph statistics")]
     Stats(StatsArgs),
+    #[command(about = "Show graph schema (global alias)")]
+    Schema,
     #[command(
         name = "list",
         about = "List all nodes with optional filters (KQL-based)"
@@ -506,6 +508,8 @@ pub enum NodeCommand {
         debug_score: bool,
         #[arg(long)]
         include_metadata: bool,
+        #[arg(long)]
+        skip_feedback: bool,
         /// Optional tuning weights for find ranking, e.g. bm25=0.6,fuzzy=0.3,vector=0.1
         #[arg(long)]
         tune: Option<String>,

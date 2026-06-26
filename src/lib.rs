@@ -32,12 +32,24 @@ mod storage;
 mod text_norm;
 mod validate;
 mod vectors;
+mod graph_diff;
+mod graph_merge;
+mod graph_clusters;
+mod find_render;
+mod graph_list_render;
 
 // Re-export the core graph types for embedding (e.g. kg-mcp).
 pub use cache_paths::cache_root_for_cwd;
 pub use graph::{Edge, EdgeProperties, GraphFile, Metadata, Node, NodeProperties, Note};
 pub use graph_lock::acquire_for_graph as acquire_graph_write_lock;
 pub use output::FindMode;
+
+// Re-export extracted functions for cross-module access.
+pub(crate) use find_render::render_find_json_with_index;
+pub(crate) use find_render::render_node_json;
+// Re-export for tests and cross-module access.
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use graph_clusters::{find_latest_score_snapshot, render_clusters};
 
 // Re-export validation constants for schema tools.
 pub use validate::{
@@ -58,14 +70,13 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use cli::{
-    AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, ClusterSkill, ClustersArgs, Command,
+    AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, Command,
     DiffAsOfArgs, EdgeCommand, ExportDotArgs, ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs,
     FeedbackLogArgs, FeedbackSummaryArgs, FindMode as CliFindMode, GraphCommand, HistoryArgs,
     ImportCsvArgs, ImportMarkdownArgs, MergeStrategy, NodeCommand, NoteAddArgs, NoteCommand,
     NoteListArgs, ScoreAllArgs, SplitArgs, TemporalSource, TimelineArgs, UpdateArgs, VectorCommand,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 // (graph types are re-exported above)
 use storage::{GraphStore, graph_store};
 
@@ -88,11 +99,59 @@ use app::graph_transfer_temporal::{
 use schema::{GraphSchema, SchemaViolation};
 use validate::validate_graph;
 
+// Import extracted module functions.
+use graph_diff::{
+    render_graph_diff, render_graph_diff_from_files, render_graph_diff_json,
+    render_graph_diff_json_from_files,
+};
+use graph_merge::merge_graphs;
+use graph_clusters::execute_clusters;
+use graph_list_render::{render_graph_list, render_graph_list_json};
+
 static EVENT_LOG_MODE: AtomicU8 = AtomicU8::new(0);
 
 // ---------------------------------------------------------------------------
 // Schema validation helpers
 // ---------------------------------------------------------------------------
+
+/// Render the built-in schema reference from validation constants.
+fn render_builtin_schema() -> String {
+    use crate::validate::{EDGE_TYPE_RULES, TYPE_TO_PREFIX, VALID_RELATIONS, VALID_TYPES};
+
+    let mut lines = Vec::new();
+
+    lines.push("## Node Types".to_string());
+    for t in VALID_TYPES {
+        let prefix = TYPE_TO_PREFIX
+            .iter()
+            .find(|(ty, _)| *ty == *t)
+            .map(|(_, p)| *p)
+            .unwrap_or("-");
+        lines.push(format!("- {t} (prefix: {prefix})"));
+    }
+
+    lines.push("\n## Relations".to_string());
+    for r in VALID_RELATIONS {
+        lines.push(format!("- {r}"));
+    }
+
+    lines.push("\n## Edge Type Rules".to_string());
+    for (relation, src_types, tgt_types) in EDGE_TYPE_RULES {
+        let src = if src_types.is_empty() {
+            "any".to_string()
+        } else {
+            src_types.join(", ")
+        };
+        let tgt = if tgt_types.is_empty() {
+            "any".to_string()
+        } else {
+            tgt_types.join(", ")
+        };
+        lines.push(format!("- {relation}: {src} -> {tgt}"));
+    }
+
+    lines.join("\n")
+}
 
 fn format_schema_violations(violations: &[SchemaViolation]) -> String {
     let mut lines = Vec::new();
@@ -394,6 +453,16 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                     },
                 ),
 
+                GraphCommand::Schema => {
+                    let schema_str = render_builtin_schema();
+                    Ok(format!(
+                        "# Schema (global)\n\n{}\n\n= graph '{}': nodes: {}, edges: {}\n",
+                        schema_str,
+                        graph,
+                        graph_file.nodes.len(),
+                        graph_file.edges.len()
+                    ))
+                }
                 GraphCommand::Stats(args) => Ok(execute_stats(&graph_file, &args)),
                 GraphCommand::List(args) => execute_list(&graph_file, &args),
                 GraphCommand::Check(args) => Ok(execute_check(&graph_file, cwd, &args)),
@@ -501,20 +570,6 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
     }
 }
 
-fn render_graph_list(store: &dyn GraphStore, full: bool) -> Result<String> {
-    let graphs = store.list_graphs()?;
-
-    let mut lines = vec![format!("= graphs ({})", graphs.len())];
-    for (name, path) in graphs {
-        if full {
-            lines.push(format!("- {name} | {}", path.display()));
-        } else {
-            lines.push(format!("- {name}"));
-        }
-    }
-    Ok(format!("{}\n", lines.join("\n")))
-}
-
 fn graph_command_mutates(command: &GraphCommand) -> bool {
     match command {
         GraphCommand::Node { command } => node_command_mutates(command),
@@ -526,7 +581,8 @@ fn graph_command_mutates(command: &GraphCommand) -> bool {
         | GraphCommand::Vector {
             command: VectorCommand::Import(_),
         } => true,
-        GraphCommand::Stats(_)
+        GraphCommand::Schema
+        | GraphCommand::Stats(_)
         | GraphCommand::Check(_)
         | GraphCommand::Audit(_)
         | GraphCommand::Quality { .. }
@@ -613,154 +669,6 @@ fn execute_update(ctx: GraphCommandContext<'_>, _args: UpdateArgs) -> Result<Str
     ))
 }
 
-fn execute_clusters(graph: &GraphFile, path: &Path, args: &ClustersArgs) -> Result<String> {
-    let source_graph = resolve_cluster_source_graph(graph, path)?;
-    Ok(render_clusters(&source_graph, args))
-}
-
-fn resolve_cluster_source_graph(graph: &GraphFile, path: &Path) -> Result<GraphFile> {
-    let filename = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    if filename.contains(".score.") {
-        return Ok(graph.clone());
-    }
-
-    let latest = find_latest_score_snapshot(path)?.ok_or_else(|| {
-        anyhow!(
-            "no score cache found for '{}'; run `kg graph {} score-all` first",
-            path.display(),
-            graph.metadata.name
-        )
-    })?;
-    GraphFile::load(&latest)
-}
-
-fn find_latest_score_snapshot(path: &Path) -> Result<Option<PathBuf>> {
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| anyhow!("invalid graph filename"))?;
-    let prefix = format!("{stem}.score.");
-    let suffix = ".kg";
-    let mut latest: Option<(u128, PathBuf)> = None;
-
-    let cache_dir = cache_paths::cache_root_for_graph(path);
-    let Ok(entries) = std::fs::read_dir(&cache_dir) else {
-        return Ok(None);
-    };
-
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with(&prefix) || !name.ends_with(suffix) {
-            continue;
-        }
-        let ts_part = &name[prefix.len()..name.len() - suffix.len()];
-        let Ok(ts) = ts_part.parse::<u128>() else {
-            continue;
-        };
-        if latest.as_ref().map(|(curr, _)| ts > *curr).unwrap_or(true) {
-            latest = Some((ts, entry.path()));
-        }
-    }
-
-    Ok(latest.map(|(_, path)| path))
-}
-
-#[derive(Debug, Serialize)]
-struct ClusterView {
-    id: String,
-    size: usize,
-    relevance: f64,
-    members: Vec<(String, f64)>,
-}
-
-fn render_clusters(graph: &GraphFile, args: &ClustersArgs) -> String {
-    let mut clusters: Vec<ClusterView> = graph
-        .nodes
-        .iter()
-        .filter(|node| node.r#type == "@" && node.id.starts_with("@:cluster_"))
-        .map(|cluster| {
-            let mut members: Vec<(String, f64)> = graph
-                .edges
-                .iter()
-                .filter(|edge| edge.source_id == cluster.id && edge.relation == "HAS")
-                .map(|edge| {
-                    (
-                        edge.target_id.clone(),
-                        edge.properties.detail.parse::<f64>().unwrap_or(0.0),
-                    )
-                })
-                .collect();
-            members.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            let relevance = if members.is_empty() {
-                0.0
-            } else {
-                members.iter().map(|(_, v)| *v).sum::<f64>() / members.len() as f64
-            };
-            ClusterView {
-                id: cluster.id.clone(),
-                size: members.len(),
-                relevance,
-                members,
-            }
-        })
-        .collect();
-
-    clusters.sort_by(|a, b| {
-        b.relevance
-            .partial_cmp(&a.relevance)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.size.cmp(&a.size))
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    clusters.truncate(args.limit);
-
-    if args.json {
-        return serde_json::to_string_pretty(&clusters).unwrap_or_else(|_| "[]".to_owned());
-    }
-
-    if matches!(args.skill, Some(ClusterSkill::Gardener)) {
-        let mut lines = vec![format!("= gardener clusters ({})", clusters.len())];
-        for cluster in &clusters {
-            let top = cluster
-                .members
-                .iter()
-                .take(3)
-                .map(|(id, score)| format!("{id} ({score:.3})"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            lines.push(format!(
-                "- {} | relevance {:.3} | size {} | top: {}",
-                cluster.id, cluster.relevance, cluster.size, top
-            ));
-            lines.push(format!(
-                "- action: review cluster {}, merge aliases/facts, then keep strongest node as canonical",
-                cluster.id
-            ));
-        }
-        return format!("{}\n", lines.join("\n"));
-    }
-
-    let mut lines = vec![format!("= clusters ({})", clusters.len())];
-    for cluster in &clusters {
-        let top = cluster
-            .members
-            .iter()
-            .take(5)
-            .map(|(id, score)| format!("{id}:{score:.3}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!(
-            "- {} | relevance {:.3} | size {} | top {}",
-            cluster.id, cluster.relevance, cluster.size, top
-        ));
-    }
-    format!("{}\n", lines.join("\n"))
-}
-
 fn node_command_mutates(command: &NodeCommand) -> bool {
     matches!(
         command,
@@ -780,760 +688,6 @@ fn edge_command_mutates(command: &EdgeCommand) -> bool {
 
 fn note_command_mutates(command: &NoteCommand) -> bool {
     matches!(command, NoteCommand::Add(_) | NoteCommand::Remove { .. })
-}
-
-#[derive(Debug, Serialize)]
-struct GraphListEntry {
-    name: String,
-    path: String,
-}
-
-#[derive(Debug, Serialize)]
-struct GraphListResponse {
-    graphs: Vec<GraphListEntry>,
-}
-
-fn render_graph_list_json(store: &dyn GraphStore) -> Result<String> {
-    let graphs = store.list_graphs()?;
-    let entries = graphs
-        .into_iter()
-        .map(|(name, path)| GraphListEntry {
-            name,
-            path: path.display().to_string(),
-        })
-        .collect();
-    let payload = GraphListResponse { graphs: entries };
-    Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned()))
-}
-
-#[derive(Debug, Serialize)]
-struct FindQueryResult {
-    query: String,
-    count: usize,
-    nodes: Vec<ScoredFindNode>,
-}
-
-#[derive(Debug, Serialize)]
-struct ScoredFindNode {
-    score: i64,
-    node: Node,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    score_breakdown: Option<ScoredFindBreakdown>,
-}
-
-#[derive(Debug, Serialize)]
-struct ScoredFindBreakdown {
-    raw_relevance: f64,
-    normalized_relevance: i64,
-    lexical_boost: i64,
-    feedback_boost: i64,
-    importance_boost: i64,
-    authority_raw: i64,
-    authority_applied: i64,
-    authority_cap: i64,
-}
-
-#[derive(Debug, Serialize)]
-struct FindResponse {
-    total: usize,
-    queries: Vec<FindQueryResult>,
-}
-
-pub(crate) fn render_find_json_with_index(
-    graph: &GraphFile,
-    queries: &[String],
-    limit: usize,
-    include_metadata: bool,
-    mode: output::FindMode,
-    debug_score: bool,
-    index: Option<&Bm25Index>,
-    tune: Option<&output::FindTune>,
-) -> String {
-    let mut total = 0usize;
-    let mut results = Vec::new();
-    for query in queries {
-        let (count, scored_nodes) = output::find_scored_nodes_and_total_with_index_tuned(
-            graph,
-            query,
-            limit,
-            true,
-            include_metadata,
-            mode,
-            index,
-            tune,
-        );
-        total += count;
-        let nodes = scored_nodes
-            .into_iter()
-            .map(|entry| ScoredFindNode {
-                score: entry.score,
-                node: entry.node,
-                score_breakdown: debug_score.then_some(ScoredFindBreakdown {
-                    raw_relevance: entry.breakdown.raw_relevance,
-                    normalized_relevance: entry.breakdown.normalized_relevance,
-                    lexical_boost: entry.breakdown.lexical_boost,
-                    feedback_boost: entry.breakdown.feedback_boost,
-                    importance_boost: entry.breakdown.importance_boost,
-                    authority_raw: entry.breakdown.authority_raw,
-                    authority_applied: entry.breakdown.authority_applied,
-                    authority_cap: entry.breakdown.authority_cap,
-                }),
-            })
-            .collect();
-        results.push(FindQueryResult {
-            query: query.clone(),
-            count,
-            nodes,
-        });
-    }
-    let payload = FindResponse {
-        total,
-        queries: results,
-    };
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
-}
-
-#[derive(Debug, Serialize)]
-struct NodeGetResponse {
-    node: Node,
-}
-
-pub(crate) fn render_node_json(node: &Node) -> String {
-    let payload = NodeGetResponse { node: node.clone() };
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
-}
-
-fn render_graph_diff(store: &dyn GraphStore, left: &str, right: &str) -> Result<String> {
-    let left_path = store.resolve_graph_path(left)?;
-    let right_path = store.resolve_graph_path(right)?;
-    let left_graph = store.load_graph(&left_path)?;
-    let right_graph = store.load_graph(&right_path)?;
-    Ok(render_graph_diff_from_files(
-        left,
-        right,
-        &left_graph,
-        &right_graph,
-    ))
-}
-
-fn render_graph_diff_json(store: &dyn GraphStore, left: &str, right: &str) -> Result<String> {
-    let left_path = store.resolve_graph_path(left)?;
-    let right_path = store.resolve_graph_path(right)?;
-    let left_graph = store.load_graph(&left_path)?;
-    let right_graph = store.load_graph(&right_path)?;
-    Ok(render_graph_diff_json_from_files(
-        left,
-        right,
-        &left_graph,
-        &right_graph,
-    ))
-}
-
-#[derive(Debug, Serialize)]
-struct DiffEntry {
-    path: String,
-    left: Value,
-    right: Value,
-}
-
-#[derive(Debug, Serialize)]
-struct EntityDiff {
-    id: String,
-    diffs: Vec<DiffEntry>,
-}
-
-#[derive(Debug, Serialize)]
-struct GraphDiffResponse {
-    left: String,
-    right: String,
-    added_nodes: Vec<String>,
-    removed_nodes: Vec<String>,
-    changed_nodes: Vec<EntityDiff>,
-    added_edges: Vec<String>,
-    removed_edges: Vec<String>,
-    changed_edges: Vec<EntityDiff>,
-    added_notes: Vec<String>,
-    removed_notes: Vec<String>,
-    changed_notes: Vec<EntityDiff>,
-}
-
-fn render_graph_diff_json_from_files(
-    left: &str,
-    right: &str,
-    left_graph: &GraphFile,
-    right_graph: &GraphFile,
-) -> String {
-    use std::collections::{HashMap, HashSet};
-
-    let left_nodes: HashSet<String> = left_graph.nodes.iter().map(|n| n.id.clone()).collect();
-    let right_nodes: HashSet<String> = right_graph.nodes.iter().map(|n| n.id.clone()).collect();
-
-    let left_node_map: HashMap<String, &Node> =
-        left_graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
-    let right_node_map: HashMap<String, &Node> = right_graph
-        .nodes
-        .iter()
-        .map(|n| (n.id.clone(), n))
-        .collect();
-
-    let left_edges: HashSet<String> = left_graph
-        .edges
-        .iter()
-        .map(|e| format!("{} {} {}", e.source_id, e.relation, e.target_id))
-        .collect();
-    let right_edges: HashSet<String> = right_graph
-        .edges
-        .iter()
-        .map(|e| format!("{} {} {}", e.source_id, e.relation, e.target_id))
-        .collect();
-
-    let left_edge_map: HashMap<String, &Edge> = left_graph
-        .edges
-        .iter()
-        .map(|e| (format!("{} {} {}", e.source_id, e.relation, e.target_id), e))
-        .collect();
-    let right_edge_map: HashMap<String, &Edge> = right_graph
-        .edges
-        .iter()
-        .map(|e| (format!("{} {} {}", e.source_id, e.relation, e.target_id), e))
-        .collect();
-
-    let left_notes: HashSet<String> = left_graph.notes.iter().map(|n| n.id.clone()).collect();
-    let right_notes: HashSet<String> = right_graph.notes.iter().map(|n| n.id.clone()).collect();
-
-    let left_note_map: HashMap<String, &Note> =
-        left_graph.notes.iter().map(|n| (n.id.clone(), n)).collect();
-    let right_note_map: HashMap<String, &Note> = right_graph
-        .notes
-        .iter()
-        .map(|n| (n.id.clone(), n))
-        .collect();
-
-    let mut added_nodes: Vec<String> = right_nodes.difference(&left_nodes).cloned().collect();
-    let mut removed_nodes: Vec<String> = left_nodes.difference(&right_nodes).cloned().collect();
-    let mut added_edges: Vec<String> = right_edges.difference(&left_edges).cloned().collect();
-    let mut removed_edges: Vec<String> = left_edges.difference(&right_edges).cloned().collect();
-    let mut added_notes: Vec<String> = right_notes.difference(&left_notes).cloned().collect();
-    let mut removed_notes: Vec<String> = left_notes.difference(&right_notes).cloned().collect();
-
-    let mut changed_nodes: Vec<String> = left_nodes
-        .intersection(&right_nodes)
-        .filter_map(|id| {
-            let left_node = left_node_map.get(id.as_str())?;
-            let right_node = right_node_map.get(id.as_str())?;
-            if eq_serialized(*left_node, *right_node) {
-                None
-            } else {
-                Some(id.clone())
-            }
-        })
-        .collect();
-    let mut changed_edges: Vec<String> = left_edges
-        .intersection(&right_edges)
-        .filter_map(|key| {
-            let left_edge = left_edge_map.get(key.as_str())?;
-            let right_edge = right_edge_map.get(key.as_str())?;
-            if eq_serialized(*left_edge, *right_edge) {
-                None
-            } else {
-                Some(key.clone())
-            }
-        })
-        .collect();
-    let mut changed_notes: Vec<String> = left_notes
-        .intersection(&right_notes)
-        .filter_map(|id| {
-            let left_note = left_note_map.get(id.as_str())?;
-            let right_note = right_note_map.get(id.as_str())?;
-            if eq_serialized(*left_note, *right_note) {
-                None
-            } else {
-                Some(id.clone())
-            }
-        })
-        .collect();
-
-    added_nodes.sort();
-    removed_nodes.sort();
-    added_edges.sort();
-    removed_edges.sort();
-    added_notes.sort();
-    removed_notes.sort();
-    changed_nodes.sort();
-    changed_edges.sort();
-    changed_notes.sort();
-
-    let changed_nodes = changed_nodes
-        .into_iter()
-        .map(|id| EntityDiff {
-            diffs: left_node_map
-                .get(id.as_str())
-                .zip(right_node_map.get(id.as_str()))
-                .map(|(left_node, right_node)| diff_serialized_values_json(*left_node, *right_node))
-                .unwrap_or_default(),
-            id,
-        })
-        .collect();
-    let changed_edges = changed_edges
-        .into_iter()
-        .map(|id| EntityDiff {
-            diffs: left_edge_map
-                .get(id.as_str())
-                .zip(right_edge_map.get(id.as_str()))
-                .map(|(left_edge, right_edge)| diff_serialized_values_json(*left_edge, *right_edge))
-                .unwrap_or_default(),
-            id,
-        })
-        .collect();
-    let changed_notes = changed_notes
-        .into_iter()
-        .map(|id| EntityDiff {
-            diffs: left_note_map
-                .get(id.as_str())
-                .zip(right_note_map.get(id.as_str()))
-                .map(|(left_note, right_note)| diff_serialized_values_json(*left_note, *right_note))
-                .unwrap_or_default(),
-            id,
-        })
-        .collect();
-
-    let payload = GraphDiffResponse {
-        left: left.to_owned(),
-        right: right.to_owned(),
-        added_nodes,
-        removed_nodes,
-        changed_nodes,
-        added_edges,
-        removed_edges,
-        changed_edges,
-        added_notes,
-        removed_notes,
-        changed_notes,
-    };
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
-}
-
-fn render_graph_diff_from_files(
-    left: &str,
-    right: &str,
-    left_graph: &GraphFile,
-    right_graph: &GraphFile,
-) -> String {
-    use std::collections::{HashMap, HashSet};
-
-    let left_nodes: HashSet<String> = left_graph.nodes.iter().map(|n| n.id.clone()).collect();
-    let right_nodes: HashSet<String> = right_graph.nodes.iter().map(|n| n.id.clone()).collect();
-
-    let left_node_map: HashMap<String, &Node> =
-        left_graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
-    let right_node_map: HashMap<String, &Node> = right_graph
-        .nodes
-        .iter()
-        .map(|n| (n.id.clone(), n))
-        .collect();
-
-    let left_edges: HashSet<String> = left_graph
-        .edges
-        .iter()
-        .map(|e| format!("{} {} {}", e.source_id, e.relation, e.target_id))
-        .collect();
-    let right_edges: HashSet<String> = right_graph
-        .edges
-        .iter()
-        .map(|e| format!("{} {} {}", e.source_id, e.relation, e.target_id))
-        .collect();
-
-    let left_edge_map: HashMap<String, &Edge> = left_graph
-        .edges
-        .iter()
-        .map(|e| (format!("{} {} {}", e.source_id, e.relation, e.target_id), e))
-        .collect();
-    let right_edge_map: HashMap<String, &Edge> = right_graph
-        .edges
-        .iter()
-        .map(|e| (format!("{} {} {}", e.source_id, e.relation, e.target_id), e))
-        .collect();
-
-    let left_notes: HashSet<String> = left_graph.notes.iter().map(|n| n.id.clone()).collect();
-    let right_notes: HashSet<String> = right_graph.notes.iter().map(|n| n.id.clone()).collect();
-
-    let left_note_map: HashMap<String, &Note> =
-        left_graph.notes.iter().map(|n| (n.id.clone(), n)).collect();
-    let right_note_map: HashMap<String, &Note> = right_graph
-        .notes
-        .iter()
-        .map(|n| (n.id.clone(), n))
-        .collect();
-
-    let mut added_nodes: Vec<String> = right_nodes.difference(&left_nodes).cloned().collect();
-    let mut removed_nodes: Vec<String> = left_nodes.difference(&right_nodes).cloned().collect();
-    let mut added_edges: Vec<String> = right_edges.difference(&left_edges).cloned().collect();
-    let mut removed_edges: Vec<String> = left_edges.difference(&right_edges).cloned().collect();
-    let mut added_notes: Vec<String> = right_notes.difference(&left_notes).cloned().collect();
-    let mut removed_notes: Vec<String> = left_notes.difference(&right_notes).cloned().collect();
-
-    let mut changed_nodes: Vec<String> = left_nodes
-        .intersection(&right_nodes)
-        .filter_map(|id| {
-            let left_node = left_node_map.get(id.as_str())?;
-            let right_node = right_node_map.get(id.as_str())?;
-            if eq_serialized(*left_node, *right_node) {
-                None
-            } else {
-                Some(id.clone())
-            }
-        })
-        .collect();
-
-    let mut changed_edges: Vec<String> = left_edges
-        .intersection(&right_edges)
-        .filter_map(|key| {
-            let left_edge = left_edge_map.get(key.as_str())?;
-            let right_edge = right_edge_map.get(key.as_str())?;
-            if eq_serialized(*left_edge, *right_edge) {
-                None
-            } else {
-                Some(key.clone())
-            }
-        })
-        .collect();
-
-    let mut changed_notes: Vec<String> = left_notes
-        .intersection(&right_notes)
-        .filter_map(|id| {
-            let left_note = left_note_map.get(id.as_str())?;
-            let right_note = right_note_map.get(id.as_str())?;
-            if eq_serialized(*left_note, *right_note) {
-                None
-            } else {
-                Some(id.clone())
-            }
-        })
-        .collect();
-
-    added_nodes.sort();
-    removed_nodes.sort();
-    added_edges.sort();
-    removed_edges.sort();
-    added_notes.sort();
-    removed_notes.sort();
-    changed_nodes.sort();
-    changed_edges.sort();
-    changed_notes.sort();
-
-    let mut lines = vec![format!("= diff {left} -> {right}")];
-    lines.push(format!("+ nodes ({})", added_nodes.len()));
-    for id in added_nodes {
-        lines.push(format!("+ node {id}"));
-    }
-    lines.push(format!("- nodes ({})", removed_nodes.len()));
-    for id in removed_nodes {
-        lines.push(format!("- node {id}"));
-    }
-    lines.push(format!("~ nodes ({})", changed_nodes.len()));
-    for id in changed_nodes {
-        if let (Some(left_node), Some(right_node)) = (
-            left_node_map.get(id.as_str()),
-            right_node_map.get(id.as_str()),
-        ) {
-            lines.extend(render_entity_diff_lines("node", &id, left_node, right_node));
-        } else {
-            lines.push(format!("~ node {id}"));
-        }
-    }
-    lines.push(format!("+ edges ({})", added_edges.len()));
-    for edge in added_edges {
-        lines.push(format!("+ edge {edge}"));
-    }
-    lines.push(format!("- edges ({})", removed_edges.len()));
-    for edge in removed_edges {
-        lines.push(format!("- edge {edge}"));
-    }
-    lines.push(format!("~ edges ({})", changed_edges.len()));
-    for edge in changed_edges {
-        if let (Some(left_edge), Some(right_edge)) = (
-            left_edge_map.get(edge.as_str()),
-            right_edge_map.get(edge.as_str()),
-        ) {
-            lines.extend(render_entity_diff_lines(
-                "edge", &edge, left_edge, right_edge,
-            ));
-        } else {
-            lines.push(format!("~ edge {edge}"));
-        }
-    }
-    lines.push(format!("+ notes ({})", added_notes.len()));
-    for note_id in added_notes {
-        lines.push(format!("+ note {note_id}"));
-    }
-    lines.push(format!("- notes ({})", removed_notes.len()));
-    for note_id in removed_notes {
-        lines.push(format!("- note {note_id}"));
-    }
-    lines.push(format!("~ notes ({})", changed_notes.len()));
-    for note_id in changed_notes {
-        if let (Some(left_note), Some(right_note)) = (
-            left_note_map.get(note_id.as_str()),
-            right_note_map.get(note_id.as_str()),
-        ) {
-            lines.extend(render_entity_diff_lines(
-                "note", &note_id, left_note, right_note,
-            ));
-        } else {
-            lines.push(format!("~ note {note_id}"));
-        }
-    }
-
-    format!("{}\n", lines.join("\n"))
-}
-
-fn eq_serialized<T: Serialize>(left: &T, right: &T) -> bool {
-    match (serde_json::to_value(left), serde_json::to_value(right)) {
-        (Ok(left_value), Ok(right_value)) => left_value == right_value,
-        _ => false,
-    }
-}
-
-fn render_entity_diff_lines<T: Serialize>(
-    kind: &str,
-    id: &str,
-    left: &T,
-    right: &T,
-) -> Vec<String> {
-    let mut lines = Vec::new();
-    lines.push(format!("~ {kind} {id}"));
-    for diff in diff_serialized_values(left, right) {
-        lines.push(format!("  ~ {diff}"));
-    }
-    lines
-}
-
-fn diff_serialized_values<T: Serialize>(left: &T, right: &T) -> Vec<String> {
-    match (serde_json::to_value(left), serde_json::to_value(right)) {
-        (Ok(left_value), Ok(right_value)) => {
-            let mut diffs = Vec::new();
-            collect_value_diffs("", &left_value, &right_value, &mut diffs);
-            diffs
-        }
-        _ => vec!["<serialization failed>".to_owned()],
-    }
-}
-
-fn diff_serialized_values_json<T: Serialize>(left: &T, right: &T) -> Vec<DiffEntry> {
-    match (serde_json::to_value(left), serde_json::to_value(right)) {
-        (Ok(left_value), Ok(right_value)) => {
-            let mut diffs = Vec::new();
-            collect_value_diffs_json("", &left_value, &right_value, &mut diffs);
-            diffs
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn collect_value_diffs_json(path: &str, left: &Value, right: &Value, out: &mut Vec<DiffEntry>) {
-    if left == right {
-        return;
-    }
-    match (left, right) {
-        (Value::Object(left_obj), Value::Object(right_obj)) => {
-            use std::collections::BTreeSet;
-
-            let mut keys: BTreeSet<&str> = BTreeSet::new();
-            for key in left_obj.keys() {
-                keys.insert(key.as_str());
-            }
-            for key in right_obj.keys() {
-                keys.insert(key.as_str());
-            }
-            for key in keys {
-                let left_value = left_obj.get(key).unwrap_or(&Value::Null);
-                let right_value = right_obj.get(key).unwrap_or(&Value::Null);
-                let next_path = if path.is_empty() {
-                    key.to_owned()
-                } else {
-                    format!("{path}.{key}")
-                };
-                collect_value_diffs_json(&next_path, left_value, right_value, out);
-            }
-        }
-        (Value::Array(_), Value::Array(_)) => {
-            let label = if path.is_empty() {
-                "<root>[]".to_owned()
-            } else {
-                format!("{path}[]")
-            };
-            out.push(DiffEntry {
-                path: label,
-                left: left.clone(),
-                right: right.clone(),
-            });
-        }
-        _ => {
-            let label = if path.is_empty() { "<root>" } else { path };
-            out.push(DiffEntry {
-                path: label.to_owned(),
-                left: left.clone(),
-                right: right.clone(),
-            });
-        }
-    }
-}
-
-fn collect_value_diffs(path: &str, left: &Value, right: &Value, out: &mut Vec<String>) {
-    if left == right {
-        return;
-    }
-    match (left, right) {
-        (Value::Object(left_obj), Value::Object(right_obj)) => {
-            use std::collections::BTreeSet;
-
-            let mut keys: BTreeSet<&str> = BTreeSet::new();
-            for key in left_obj.keys() {
-                keys.insert(key.as_str());
-            }
-            for key in right_obj.keys() {
-                keys.insert(key.as_str());
-            }
-            for key in keys {
-                let left_value = left_obj.get(key).unwrap_or(&Value::Null);
-                let right_value = right_obj.get(key).unwrap_or(&Value::Null);
-                let next_path = if path.is_empty() {
-                    key.to_owned()
-                } else {
-                    format!("{path}.{key}")
-                };
-                collect_value_diffs(&next_path, left_value, right_value, out);
-            }
-        }
-        (Value::Array(_), Value::Array(_)) => {
-            let label = if path.is_empty() {
-                "<root>[]".to_owned()
-            } else {
-                format!("{path}[]")
-            };
-            out.push(format!(
-                "{label}: {} -> {}",
-                format_value(left),
-                format_value(right)
-            ));
-        }
-        _ => {
-            let label = if path.is_empty() { "<root>" } else { path };
-            out.push(format!(
-                "{label}: {} -> {}",
-                format_value(left),
-                format_value(right)
-            ));
-        }
-    }
-}
-
-fn format_value(value: &Value) -> String {
-    let mut rendered =
-        serde_json::to_string(value).unwrap_or_else(|_| "<unserializable>".to_owned());
-    rendered = rendered.replace('\n', "\\n");
-    truncate_value(rendered, 160)
-}
-
-fn truncate_value(mut value: String, limit: usize) -> String {
-    if value.len() <= limit {
-        return value;
-    }
-    value.truncate(limit.saturating_sub(3));
-    value.push_str("...");
-    value
-}
-
-fn merge_graphs(
-    store: &dyn GraphStore,
-    target: &str,
-    source: &str,
-    strategy: MergeStrategy,
-) -> Result<String> {
-    use std::collections::HashMap;
-
-    let target_path = store.resolve_graph_path(target)?;
-    let _target_write_lock = graph_lock::acquire_for_graph(&target_path)?;
-    let source_path = store.resolve_graph_path(source)?;
-    let mut target_graph = store.load_graph(&target_path)?;
-    let source_graph = store.load_graph(&source_path)?;
-
-    let mut node_index: HashMap<String, usize> = HashMap::new();
-    for (idx, node) in target_graph.nodes.iter().enumerate() {
-        node_index.insert(node.id.clone(), idx);
-    }
-
-    let mut node_added = 0usize;
-    let mut node_updated = 0usize;
-    for node in &source_graph.nodes {
-        if let Some(&idx) = node_index.get(&node.id) {
-            if matches!(strategy, MergeStrategy::PreferNew) {
-                target_graph.nodes[idx] = node.clone();
-                node_updated += 1;
-            }
-        } else {
-            target_graph.nodes.push(node.clone());
-            node_index.insert(node.id.clone(), target_graph.nodes.len() - 1);
-            node_added += 1;
-        }
-    }
-
-    let mut edge_index: HashMap<String, usize> = HashMap::new();
-    for (idx, edge) in target_graph.edges.iter().enumerate() {
-        let key = format!("{} {} {}", edge.source_id, edge.relation, edge.target_id);
-        edge_index.insert(key, idx);
-    }
-
-    let mut edge_added = 0usize;
-    let mut edge_updated = 0usize;
-    for edge in &source_graph.edges {
-        let key = format!("{} {} {}", edge.source_id, edge.relation, edge.target_id);
-        if let Some(&idx) = edge_index.get(&key) {
-            if matches!(strategy, MergeStrategy::PreferNew) {
-                target_graph.edges[idx] = edge.clone();
-                edge_updated += 1;
-            }
-        } else {
-            target_graph.edges.push(edge.clone());
-            edge_index.insert(key, target_graph.edges.len() - 1);
-            edge_added += 1;
-        }
-    }
-
-    let mut note_index: HashMap<String, usize> = HashMap::new();
-    for (idx, note) in target_graph.notes.iter().enumerate() {
-        note_index.insert(note.id.clone(), idx);
-    }
-
-    let mut note_added = 0usize;
-    let mut note_updated = 0usize;
-    for note in &source_graph.notes {
-        if let Some(&idx) = note_index.get(&note.id) {
-            if matches!(strategy, MergeStrategy::PreferNew) {
-                target_graph.notes[idx] = note.clone();
-                note_updated += 1;
-            }
-        } else {
-            target_graph.notes.push(note.clone());
-            note_index.insert(note.id.clone(), target_graph.notes.len() - 1);
-            note_added += 1;
-        }
-    }
-
-    store.save_graph(&target_path, &target_graph)?;
-    append_event_snapshot(
-        &target_path,
-        "graph.merge",
-        Some(format!("{source} -> {target} ({strategy:?})")),
-        &target_graph,
-    )?;
-
-    let mut lines = vec![format!("+ merged {source} -> {target}")];
-    lines.push(format!("nodes: +{node_added} ~{node_updated}"));
-    lines.push(format!("edges: +{edge_added} ~{edge_updated}"));
-    lines.push(format!("notes: +{note_added} ~{note_updated}"));
-
-    Ok(format!("{}\n", lines.join("\n")))
 }
 
 pub(crate) fn export_graph_as_of(path: &Path, graph: &str, args: &AsOfArgs) -> Result<String> {
@@ -3447,6 +2601,7 @@ fn format_validation_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{ClusterSkill, ClustersArgs};
     use tempfile::tempdir;
 
     fn fixture_graph() -> GraphFile {
