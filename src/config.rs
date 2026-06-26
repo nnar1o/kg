@@ -93,6 +93,13 @@ pub fn resolve_default_graph(cwd: &Path) -> Option<String> {
     }
 }
 
+fn home_or_cwd(cwd: &Path) -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| cwd.to_path_buf())
+}
+
 pub fn ensure_user_short_uid(cwd: &Path) -> String {
     let env_uid = std::env::var("KG_USER_SHORT_UID").ok();
     resolve_user_short_uid_with_env(cwd, env_uid.as_deref())
@@ -118,7 +125,7 @@ fn resolve_user_short_uid_with_env(cwd: &Path, env_uid: Option<&str>) -> String 
         }
         Ok(None) | Err(_) => {
             let generated = generate_user_short_uid();
-            let config_path = cwd.join(".kg.toml");
+            let config_path = home_or_cwd(cwd).join(".kg.toml");
             let _ = persist_user_short_uid(&config_path, &generated);
             generated
         }

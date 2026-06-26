@@ -27,19 +27,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct KgCommandArgs {
-    #[schemars(description = "Arguments passed to `kg` (without the binary name)")]
-    args: Vec<String>,
-    #[serde(default)]
-    #[schemars(description = "Enable per-request debug output")]
-    debug: bool,
-}
-
 #[derive(Debug, Deserialize, JsonSchema)]
 struct KgScriptArgs {
     #[schemars(description = "Script with one or more kg commands separated by ';' or newlines")]
@@ -53,12 +40,13 @@ struct KgScriptArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct CreateGraphArgs {
-    graph_name: String,
-}
+struct EmptyArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
-struct EmptyArgs {}
+struct KgHelpArgs {
+    #[schemars(description = "Help domain: node, edge, graph, schema, kql, feedback, batch, script, all")]
+    domain: String,
+}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct NodeFindArgs {
@@ -90,247 +78,10 @@ struct NodeGetArgs {
     debug: bool,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-struct NodeAddArgs {
-    graph: String,
-    id: String,
-    node_type: String,
-    name: String,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    domain_area: Option<String>,
-    #[serde(default)]
-    provenance: Option<String>,
-    #[serde(default)]
-    confidence: Option<f64>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    importance: Option<f64>,
-    #[serde(default)]
-    facts: Vec<String>,
-    #[serde(default)]
-    aliases: Vec<String>,
-    #[serde(default)]
-    sources: Vec<String>,
-    #[serde(default = "default_true")]
-    scan: bool,
-    #[serde(default = "default_true")]
-    scan_ignore_unknown: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct NodeModifyArgs {
-    graph: String,
-    id: String,
-    #[serde(default)]
-    node_type: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    domain_area: Option<String>,
-    #[serde(default)]
-    provenance: Option<String>,
-    #[serde(default)]
-    confidence: Option<f64>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    importance: Option<f64>,
-    #[serde(default)]
-    facts: Vec<String>,
-    #[serde(default)]
-    aliases: Vec<String>,
-    #[serde(default)]
-    sources: Vec<String>,
-    #[serde(default)]
-    scan: Option<bool>,
-    #[serde(default)]
-    scan_ignore_unknown: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct NodeRemoveArgs {
-    graph: String,
-    id: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct EdgeAddArgs {
-    graph: String,
-    source_id: String,
-    relation: String,
-    target_id: String,
-    #[serde(default)]
-    detail: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct EdgeAddBatchItem {
-    source_id: String,
-    relation: String,
-    target_id: String,
-    #[serde(default)]
-    detail: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct EdgeAddBatchArgs {
-    graph: String,
-    edges: Vec<EdgeAddBatchItem>,
-    #[serde(default)]
-    mode: Option<String>,
-    #[serde(default)]
-    dry_run: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct EdgeRemoveArgs {
-    graph: String,
-    source_id: String,
-    relation: String,
-    target_id: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct GraphStatsArgs {
-    graph: String,
-    #[serde(default)]
-    include_features: bool,
-    #[serde(default)]
-    by_type: bool,
-    #[serde(default)]
-    by_relation: bool,
-    #[serde(default)]
-    show_sources: bool,
-}
-
-#[derive(Debug, Clone)]
-struct EdgePreflightFailure {
-    message: String,
-    data: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct GraphValidateArgs {
-    graph: String,
-    #[serde(default)]
-    deep: bool,
-    #[serde(default)]
-    base_dir: Option<String>,
-    #[serde(default)]
-    errors_only: bool,
-    #[serde(default)]
-    warnings_only: bool,
-    #[serde(default)]
-    limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct GraphQualityArgs {
-    graph: String,
-    command: String,
-    #[serde(default)]
-    limit: Option<usize>,
-    #[serde(default)]
-    node_types: Vec<String>,
-    #[serde(default)]
-    include_features: Option<bool>,
-    #[serde(default)]
-    threshold: Option<f64>,
-    #[serde(default)]
-    relation: Option<String>,
-    #[serde(default)]
-    sort: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct ExportHtmlArgs {
-    graph: String,
-    #[serde(default)]
-    output: Option<String>,
-    #[serde(default)]
-    title: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct AccessLogArgs {
-    graph: String,
-    #[serde(default)]
-    limit: Option<usize>,
-    #[serde(default)]
-    show_empty: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct AccessStatsArgs {
-    graph: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct GapSummaryArgs {
-    graph: String,
-    #[serde(default = "default_gap_limit")]
-    limit: usize,
-}
-
-fn default_gap_limit() -> usize {
-    5
-}
-
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 struct KgPromptArgs {
     graph: String,
     goal: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct FeedbackBatchArgs {
-    #[schemars(description = "Feedback lines, e.g. `uid=abc123 YES` or `uid=abc123 PICK 2`")]
-    lines: Vec<String>,
-    /// best_effort (default) or strict
-    #[serde(default)]
-    mode: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct NodeAddBatchItem {
-    id: String,
-    node_type: String,
-    name: String,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    domain_area: Option<String>,
-    #[serde(default)]
-    provenance: Option<String>,
-    #[serde(default)]
-    confidence: Option<f64>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    importance: Option<f64>,
-    #[serde(default)]
-    facts: Vec<String>,
-    #[serde(default)]
-    aliases: Vec<String>,
-    #[serde(default)]
-    sources: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-struct NodeAddBatchArgs {
-    graph: String,
-    nodes: Vec<NodeAddBatchItem>,
-    /// atomic (default) or best_effort
-    #[serde(default)]
-    mode: Option<String>,
-    /// error (default) or skip
-    #[serde(default)]
-    on_conflict: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -339,399 +90,6 @@ struct FindContext {
     graph: String,
     queries: Vec<String>,
     candidate_ids: Vec<String>,
-}
-
-const VALID_PROVENANCE_CODES: &[&str] = &["U", "D", "A"];
-const VALID_SOURCE_TYPES: &[&str] = &[
-    "URL",
-    "SVN",
-    "SOURCECODE",
-    "WIKI",
-    "CONFLUENCE",
-    "CONVERSATION",
-    "GIT_COMMIT",
-    "PULL_REQUEST",
-    "ISSUE",
-    "DOC",
-    "LOG",
-    "OTHER",
-];
-
-fn is_valid_iso_utc_timestamp(value: &str) -> bool {
-    if value.len() != 20 {
-        return false;
-    }
-    let bytes = value.as_bytes();
-    let is_digit = |idx: usize| bytes.get(idx).is_some_and(|b| b.is_ascii_digit());
-    if !(is_digit(0)
-        && is_digit(1)
-        && is_digit(2)
-        && is_digit(3)
-        && bytes.get(4) == Some(&b'-')
-        && is_digit(5)
-        && is_digit(6)
-        && bytes.get(7) == Some(&b'-')
-        && is_digit(8)
-        && is_digit(9)
-        && bytes.get(10) == Some(&b'T')
-        && is_digit(11)
-        && is_digit(12)
-        && bytes.get(13) == Some(&b':')
-        && is_digit(14)
-        && is_digit(15)
-        && bytes.get(16) == Some(&b':')
-        && is_digit(17)
-        && is_digit(18)
-        && bytes.get(19) == Some(&b'Z'))
-    {
-        return false;
-    }
-    true
-}
-
-fn is_valid_iso_date(value: &str) -> bool {
-    if value.len() != 10 {
-        return false;
-    }
-    let bytes = value.as_bytes();
-    let is_digit = |idx: usize| bytes.get(idx).is_some_and(|b| b.is_ascii_digit());
-    is_digit(0)
-        && is_digit(1)
-        && is_digit(2)
-        && is_digit(3)
-        && bytes.get(4) == Some(&b'-')
-        && is_digit(5)
-        && is_digit(6)
-        && bytes.get(7) == Some(&b'-')
-        && is_digit(8)
-        && is_digit(9)
-}
-
-fn current_utc_timestamp() -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    let remaining = secs % 86_400;
-    let hours = remaining / 3_600;
-    let minutes = (remaining % 3_600) / 60;
-    let seconds = remaining % 60;
-
-    let days_since_epoch = secs / 86_400;
-    let (year, month, day) = days_to_date(days_since_epoch as i64);
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hours, minutes, seconds
-    )
-}
-
-fn days_to_date(days: i64) -> (i64, u32, u32) {
-    let mut year = 1970;
-    let mut remaining_days = days;
-
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-
-    let month_days = if is_leap_year(year) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1;
-    for &days_in_month in &month_days {
-        if remaining_days < days_in_month as i64 {
-            return (year, month, (remaining_days + 1) as u32);
-        }
-        remaining_days -= days_in_month as i64;
-        month += 1;
-    }
-
-    (year, 12, 31)
-}
-
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-fn validate_source_reference(value: &str) -> Result<(), String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err("source entry cannot be empty".to_owned());
-    }
-    let parts: Vec<&str> = trimmed.split_whitespace().collect();
-    if parts.len() < 2 {
-        return Err("source must match '<TYPE> <LINK_OR_DATE> <OPTIONAL_DETAILS>'".to_owned());
-    }
-    if !VALID_SOURCE_TYPES.contains(&parts[0]) {
-        return Err(format!(
-            "invalid source type '{}'; valid types: {}",
-            parts[0],
-            VALID_SOURCE_TYPES.join(", ")
-        ));
-    }
-    if parts[0] == "CONVERSATION" && !is_valid_iso_date(parts[1]) {
-        return Err("CONVERSATION source must use date YYYY-MM-DD".to_owned());
-    }
-    if parts[0] == "GIT_COMMIT" && parts.len() < 3 {
-        return Err("GIT_COMMIT source must include repository and commit SHA".to_owned());
-    }
-    Ok(())
-}
-
-fn normalize_source_reference(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    let source_type = trimmed.split_whitespace().next().unwrap_or_default();
-    if VALID_SOURCE_TYPES.contains(&source_type) {
-        return trimmed.to_owned();
-    }
-    format!("DOC {trimmed}")
-}
-
-#[derive(Debug, Clone)]
-struct PreparedNodeBatchItem {
-    id: String,
-    node_type: String,
-    name: String,
-    description: String,
-    domain_area: String,
-    provenance: String,
-    confidence: f64,
-    created_at: String,
-    importance: f64,
-    facts: Vec<String>,
-    aliases: Vec<String>,
-    sources: Vec<String>,
-}
-
-fn prevalidate_node_batch_items(
-    nodes: Vec<NodeAddBatchItem>,
-) -> (Vec<PreparedNodeBatchItem>, Vec<serde_json::Value>) {
-    let mut prepared = Vec::new();
-    let mut failed = Vec::new();
-    let mut seen_ids = HashSet::new();
-
-    for item in nodes {
-        let NodeAddBatchItem {
-            id: raw_id,
-            node_type,
-            name,
-            description,
-            domain_area,
-            provenance,
-            confidence,
-            created_at,
-            importance,
-            facts,
-            aliases,
-            sources,
-        } = item;
-
-        let id = match kg::canonicalize_node_id_for_type(&raw_id, &node_type) {
-            Ok(value) => value,
-            Err(err) => {
-                failed.push(json!({ "id": raw_id, "error": err }));
-                continue;
-            }
-        };
-
-        if !seen_ids.insert(id.clone()) {
-            failed.push(json!({ "id": id, "error": "duplicate node id in batch" }));
-            continue;
-        }
-
-        if !kg::is_valid_node_type(&node_type) {
-            failed.push(json!({
-                "id": id,
-                "error": format!("invalid node_type '{}': expected non-empty ASCII token without whitespace", node_type)
-            }));
-            continue;
-        }
-
-        if name.trim().is_empty() {
-            failed.push(json!({ "id": id, "error": "name is required and cannot be empty" }));
-            continue;
-        }
-
-        let description = description.unwrap_or_else(|| name.clone());
-        let domain_area = domain_area.unwrap_or_else(|| node_type.to_ascii_lowercase());
-        let provenance = provenance.unwrap_or_else(|| "U".to_owned());
-        let confidence = confidence.unwrap_or(0.8);
-        let created_at = created_at.unwrap_or_else(current_utc_timestamp);
-        let importance = importance.unwrap_or(0.5);
-        let sources = if sources.is_empty() {
-            vec!["DOC kg graph node add".to_owned()]
-        } else {
-            sources
-                .into_iter()
-                .map(|source| normalize_source_reference(&source))
-                .collect()
-        };
-
-        if description.trim().is_empty()
-            || domain_area.trim().is_empty()
-            || provenance.trim().is_empty()
-            || created_at.trim().is_empty()
-        {
-            failed.push(json!({
-                "id": id,
-                "error": "description, domain_area, provenance and created_at are required"
-            }));
-            continue;
-        }
-        if !VALID_PROVENANCE_CODES.contains(&provenance.as_str()) {
-            failed.push(json!({
-                "id": id,
-                "error": format!(
-                    "provenance must be one of: {}",
-                    VALID_PROVENANCE_CODES.join(", ")
-                )
-            }));
-            continue;
-        }
-        if !(0.0..=1.0).contains(&confidence) {
-            failed.push(json!({
-                "id": id,
-                "error": format!("confidence out of range: {confidence}")
-            }));
-            continue;
-        }
-        if !(0.0..=1.0).contains(&importance) {
-            failed.push(json!({
-                "id": id,
-                "error": format!("importance out of range: {importance}")
-            }));
-            continue;
-        }
-        if !is_valid_iso_utc_timestamp(created_at.trim()) {
-            failed.push(json!({
-                "id": id,
-                "error": "created_at must use UTC format YYYY-MM-DDTHH:MM:SSZ"
-            }));
-            continue;
-        }
-
-        let mut source_error = None;
-        for source in &sources {
-            if let Err(err) = validate_source_reference(source) {
-                source_error = Some(format!("invalid source '{}': {err}", source));
-                break;
-            }
-        }
-        if let Some(err) = source_error {
-            failed.push(json!({ "id": id, "error": err }));
-            continue;
-        }
-
-        prepared.push(PreparedNodeBatchItem {
-            id,
-            node_type,
-            name,
-            description,
-            domain_area,
-            provenance,
-            confidence,
-            created_at,
-            importance,
-            facts,
-            aliases,
-            sources,
-        });
-    }
-
-    (prepared, failed)
-}
-
-#[derive(Debug, Clone)]
-struct PreparedEdgeBatchItem {
-    index: usize,
-    source_id: String,
-    relation: String,
-    target_id: String,
-    detail: Option<String>,
-}
-
-fn prevalidate_edge_batch_items(
-    edges: Vec<EdgeAddBatchItem>,
-) -> (Vec<PreparedEdgeBatchItem>, Vec<(usize, serde_json::Value)>) {
-    let mut prepared = Vec::new();
-    let mut failed = Vec::new();
-    let mut seen = HashSet::new();
-
-    for (index, edge) in edges.into_iter().enumerate() {
-        let source_id = kg::normalize_node_id(&edge.source_id);
-        let target_id = kg::normalize_node_id(&edge.target_id);
-        let relation = edge.relation.trim().to_owned();
-
-        if source_id.trim().is_empty() || target_id.trim().is_empty() || relation.is_empty() {
-            failed.push((
-                index,
-                json!({
-                    "index": index,
-                    "source_id": source_id,
-                    "relation": relation,
-                    "target_id": target_id,
-                    "ok": false,
-                    "error": "source_id, relation and target_id are required",
-                }),
-            ));
-            continue;
-        }
-
-        if !kg::is_valid_relation(&relation) {
-            failed.push((
-                index,
-                json!({
-                    "index": index,
-                    "source_id": source_id,
-                    "relation": relation,
-                    "target_id": target_id,
-                    "ok": false,
-                    "error": format!(
-                        "invalid relation '{}': expected non-empty ASCII token without whitespace",
-                        relation,
-                    ),
-                }),
-            ));
-            continue;
-        }
-
-        let dedup_key = format!("{}|{}|{}", source_id, relation, target_id);
-        if !seen.insert(dedup_key) {
-            failed.push((
-                index,
-                json!({
-                    "index": index,
-                    "source_id": source_id,
-                    "relation": relation,
-                    "target_id": target_id,
-                    "ok": false,
-                    "error": "duplicate edge in batch",
-                }),
-            ));
-            continue;
-        }
-
-        prepared.push(PreparedEdgeBatchItem {
-            index,
-            source_id,
-            relation,
-            target_id,
-            detail: edge.detail,
-        });
-    }
-
-    (prepared, failed)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -827,6 +185,104 @@ struct FeedbackUpdate {
 struct PendingFindFeedback {
     uid: String,
     candidate_ids: Vec<String>,
+}
+
+fn get_help(domain: &str) -> String {
+    let header = |title: &str| format!("# {title}\n");
+    let cmd = |s: &str| format!("  {s}");
+
+    match domain {
+        "node" => format!(
+            "{}{}{}{}{}{}{}",
+            header("Node Operations"),
+            "## Find\n  `kg <graph> node find \"<query>\" [--full] [--output-size N] [--limit N] [--skip-feedback]`\n\n  Example:\n    kg fridge node find \"compressor defrost\" --output-size 1200\n\n",
+            "## Get\n  `kg <graph> node get <id> [--full] [--output-size N]`\n\n  Example:\n    kg fridge node get concept:fridge_energy_profile --full\n\n",
+            "## Add\n  `kg <graph> node add <id> --type <T> --name <N> [--description ...] [--domain-area ...] [--provenance U|D|A] [--confidence 0.9] [--importance 0.8] [--created-at ...] [--fact ...] [--alias ...] [--source ...] [--scan true|false]`\n\n  Example:\n    kg fridge node add concept:smart_fridge --type Concept --name \"Smart Fridge\" --description \"Connected refrigerator\" --domain-area kitchen_iot --provenance D --confidence 0.95 --importance 0.9 --created-at 2026-04-10T12:30:00Z --fact \"Tracks items\" --alias fridge --source \"DOC /docs/fridge/manual.pdf ch1\"\n\n  Node types: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug\n  ID format: `type_code:snake_case`\n  Provenance: U=User, D=Documentation, A=AI deduction\n  Source formats: URL <url>, SVN <url>, SOURCECODE <path>, WIKI <url>, CONFLUENCE <url>, CONVERSATION <date>, GIT_COMMIT <repo> <sha>, PULL_REQUEST <url>, ISSUE <id>, DOC <path>, LOG <path>, OTHER <ref>\n\n",
+            "## Modify\n  `kg <graph> node modify <id> [--type ...] [--name ...] [--description ...] [--domain-area ...] [--provenance ...] [--confidence ...] [--importance ...] [--fact ...] [--alias ...] [--source ...]`\n\n  Example:\n    kg fridge node modify concept:smart_fridge --importance 0.95 --fact \"New capability\"\n\n",
+            "## Remove\n  `kg <graph> node remove <id>`\n\n  Example:\n    kg fridge node remove concept:old_idea\n\n",
+            "## Batch Add\n  `kg <graph> node add-batch <nodes-json> [--on-conflict skip] [--mode atomic|best_effort]`\n\n",
+        ),
+        "edge" => format!(
+            "{}{}{}{}{}",
+            header("Edge Operations"),
+            "Relations: HAS, STORED_IN, TRIGGERS, CREATED_BY, AFFECTED_BY, AVAILABLE_IN, DOCUMENTED_IN, DEPENDS_ON, TRANSITIONS, DECIDED_BY, GOVERNED_BY, USES, READS_FROM\n\n",
+            "## Add\n  `kg <graph> edge add <source_id> <relation> <target_id> [--detail \"...\"]`\n\n  Example:\n    kg fridge edge add process:compressor_control TRIGGERS process:auto_defrost --detail \"Triggered after runtime threshold\"\n\n",
+            "## Batch Add\n  `kg <graph> edge add-batch <edges-json> [--dry-run] [--mode atomic|best_effort]`\n\n  Use --dry-run to validate without writing.\n\n",
+            "## Remove\n  `kg <graph> edge remove <source_id> <relation> <target_id>`\n\n  Example:\n    kg fridge edge remove process:compressor_control TRIGGERS process:auto_defrost\n\n",
+        ),
+        "graph" => format!(
+            "{}{}{}{}{}{}{}",
+            header("Graph Management"),
+            "## Create\n  `kg graph create <name>`\n\n  Example:\n    kg graph create my_project\n\n",
+            "## Stats\n  `kg <graph> stats [--by-type] [--by-relation] [--include-features] [--show-sources]`\n\n  Example:\n    kg fridge stats --by-type\n\n",
+            "## Check\n  `kg <graph> check [--deep] [--errors-only] [--warnings-only] [--base-dir ...]`\n\n  Example:\n    kg fridge check --deep\n\n",
+            "## Audit\n  `kg <graph> audit [--deep] [--errors-only]`\n\n  Example:\n    kg fridge audit --deep\n\n",
+            "## Quality\n  `kg <graph> quality <cmd> [--type ...] [--limit N] [--include-features] [--threshold ...] [--relation ...] [--sort ...]`\n\n  Commands: missing-descriptions, missing-facts, edge-gaps, duplicates\n\n",
+            "## Gap Summary\n  `kg <graph> gap-summary [--limit N]`\n\n  Returns all quality gaps (missing descriptions, missing facts, edge gaps, duplicates) in one report.\n\n",
+        ),
+        "schema" => format!(
+            "{}{}{}{}{}",
+            header("Schema Reference"),
+            "Call `kg_schema` to get live schema data.\n\n",
+            "## Node Types\n  Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug\n  Generated types (G-prefix): GDIR, GFIL, GDOC, GSYM, GCONCEPT, GPROCESS\n\n",
+            "## ID Format\n  `<type_code>:snake_case` — e.g., `concept:smart_fridge`, `process:monitor_temperature`\n\n",
+            "## Edge Rules\n  Generated edges use G-prefixed relations: GCONTAINS, GHAS_DOC, GHAS_SYMBOL, GDEF, GIMPORTS, GREFERENCES\n  Manual edges use standard relations.\n\n",
+        ),
+        "kql" => format!(
+            "{}{}",
+            header("KQL Reference"),
+            "KQL (Knowledge Query Language) for advanced graph queries.\n\n  `kg <graph> kql \"<query>\"`\n\n  Example:\n    kg fridge kql \"MATCH (n:Concept) WHERE n.importance > 0.8 RETURN n\"\n\n",
+        ),
+        "feedback" => format!(
+            "{}{}{}{}{}{}{}",
+            header("Feedback System"),
+            "After `node find` or `node get`, check `structured_content.requires_feedback`.\n\n",
+            "## Feedback Lines\n  `uid=<uid> YES` — confirm node is relevant\n  `uid=<uid> NO` — confirm node is NOT relevant\n  `uid=<uid> NIL` — explicitly decline feedback\n  `uid=<uid> PICK <n>` — pick Nth candidate as most relevant (1-indexed)\n\n",
+            "Usage in kg script:\n",
+            &cmd("kg fridge node find \"compressor\" --output-size 1200; uid=abc123 YES\n"),
+            "\n",
+            "Passive feedback: When `node get` follows `node find` in same script, PICK is auto-resolved.\n\n",
+        ),
+        "batch" => format!(
+            "{}{}{}{}{}{}{}",
+            header("Batch Operations"),
+            "## Node Batch\n  `kg <graph> node add-batch <json-array> [--on-conflict skip] [--mode atomic|best_effort]`\n\n",
+            "## Edge Batch\n  `kg <graph> edge add-batch <json-array> [--dry-run] [--mode atomic|best_effort]`\n\n",
+            "## Feedback Batch\n  Inline in kg script:\n",
+            &cmd("kg fridge node find \"x\"; uid=a1 YES; uid=a2 PICK 1; uid=a3 NO\n"),
+            "\n",
+            "Modes:\n  `atomic` (default) — all or nothing\n  `best_effort` — apply valid items, skip failures\n\n",
+        ),
+        "script" => format!(
+            "{}{}{}{}{}{}{}{}{}{}",
+            header("Script Syntax"),
+            "Commands separated by `;` or newlines. Lines starting with `#` are comments.\n\n",
+            "Structure:\n",
+            &cmd("kg <cmd1>; kg <cmd2>; uid=xxx YES\n"),
+            "\n",
+            "The `kg ` prefix is stripped automatically. You can also write:\n",
+            &cmd("<graph> node find \"query\"; <graph> node get <id>; uid=xxx PICK 1\n"),
+            "\n",
+            "Feedback lines are buffered and flushed before each non-feedback command.\n",
+            "Mode: `best_effort` (default) or `strict` (fail on first error).\n",
+        ),
+        "all" => format!(
+            "{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n",
+            get_help("node"),
+            get_help("edge"),
+            get_help("graph"),
+            get_help("schema"),
+            get_help("kql"),
+            get_help("feedback"),
+            get_help("batch"),
+            get_help("script"),
+        ),
+        _ => format!(
+            "Unknown domain '{}'. Available: node, edge, graph, schema, kql, feedback, batch, script, all.\n\n{}",
+            domain,
+            get_help("all")
+        ),
+    }
 }
 
 #[derive(Clone)]
@@ -953,208 +409,6 @@ impl KgMcpServer {
                 Err(McpError::internal_error("kg command panicked", Some(data)))
             }
         }
-    }
-
-    fn execute_kg(&self, args: Vec<String>) -> Result<CallToolResult, McpError> {
-        self.execute_kg_for("kg_typed", args, false)
-    }
-
-    fn load_graph_file(&self, graph: &str) -> Result<kg::GraphFile, McpError> {
-        let graph_root = kg::default_graph_root(&self.cwd);
-        let path = kg::resolve_graph_path(&self.cwd, &graph_root, graph).map_err(|error| {
-            McpError::invalid_params(
-                "graph not found",
-                Some(json!({
-                    "graph": graph,
-                    "hint": error.to_string(),
-                })),
-            )
-        })?;
-
-        kg::GraphFile::load(&path).map_err(|error| {
-            let detail = kg::format_error_chain(&error);
-            McpError::internal_error(
-                format!("failed to load graph: {detail}"),
-                Some(json!({
-                    "graph": graph,
-                    "path": path.display().to_string(),
-                    "error": detail,
-                })),
-            )
-        })
-    }
-
-    fn resolve_existing_node_id_mcp(graph: &kg::GraphFile, raw_id: &str) -> String {
-        if graph.node_by_id(raw_id).is_some() {
-            return raw_id.to_owned();
-        }
-        kg::normalize_node_id(raw_id)
-    }
-
-    fn preflight_edge(
-        &self,
-        graph: &kg::GraphFile,
-        source_id: &str,
-        relation: &str,
-        target_id: &str,
-    ) -> Result<(), EdgePreflightFailure> {
-        if !kg::is_valid_relation(relation) {
-            return Err(EdgePreflightFailure {
-                message: format!(
-                    "invalid relation '{}' (expected non-empty ASCII token without whitespace)",
-                    relation,
-                ),
-                data: json!({
-                    "relation": relation,
-                    "hint": "Call kg_schema before adding edges to inspect allowed relations and edge rules.",
-                }),
-            });
-        }
-
-        let source_id = Self::resolve_existing_node_id_mcp(graph, source_id);
-        let target_id = Self::resolve_existing_node_id_mcp(graph, target_id);
-        let source_node = graph.node_by_id(&source_id);
-        let target_node = graph.node_by_id(&target_id);
-
-        if source_node.is_none() || target_node.is_none() {
-            return Err(EdgePreflightFailure {
-                message: format!(
-                    "source/target node missing: {} {} {}",
-                    source_id, relation, target_id
-                ),
-                data: json!({
-                    "source_id": source_id,
-                    "target_id": target_id,
-                    "source_found": source_node.is_some(),
-                    "target_found": target_node.is_some(),
-                }),
-            });
-        }
-
-        let source_node = source_node.expect("source checked above");
-        let target_node = target_node.expect("target checked above");
-
-        if let Some((valid_src, valid_tgt)) = kg::edge_type_rule(relation) {
-            if !valid_src.is_empty() && !valid_src.contains(&source_node.r#type.as_str()) {
-                return Err(EdgePreflightFailure {
-                    message: kg::format_edge_source_type_error(
-                        &source_node.r#type,
-                        relation,
-                        valid_src,
-                    ),
-                    data: json!({
-                        "relation": relation,
-                        "source_id": source_id,
-                        "source_type": source_node.r#type,
-                        "valid_source_types": valid_src,
-                        "hint": "Call kg_schema before adding edges to inspect allowed relations and edge rules.",
-                    }),
-                });
-            }
-            if !valid_tgt.is_empty() && !valid_tgt.contains(&target_node.r#type.as_str()) {
-                return Err(EdgePreflightFailure {
-                    message: kg::format_edge_target_type_error(
-                        &target_node.r#type,
-                        relation,
-                        valid_tgt,
-                    ),
-                    data: json!({
-                        "relation": relation,
-                        "target_id": target_id,
-                        "target_type": target_node.r#type,
-                        "valid_target_types": valid_tgt,
-                        "hint": "Call kg_schema before adding edges to inspect allowed relations and edge rules.",
-                    }),
-                });
-            }
-        }
-
-        if graph.has_edge(&source_id, relation, &target_id) {
-            return Err(EdgePreflightFailure {
-                message: format!(
-                    "edge already exists: {} {} {}",
-                    source_id, relation, target_id
-                ),
-                data: json!({
-                    "source_id": source_id,
-                    "relation": relation,
-                    "target_id": target_id,
-                }),
-            });
-        }
-
-        Ok(())
-    }
-
-    fn apply_edge_to_graph(graph: &mut kg::GraphFile, edge: &PreparedEdgeBatchItem) {
-        let source_id = Self::resolve_existing_node_id_mcp(graph, &edge.source_id);
-        let target_id = Self::resolve_existing_node_id_mcp(graph, &edge.target_id);
-        graph.edges.push(kg::Edge {
-            source_id,
-            relation: edge.relation.clone(),
-            target_id,
-            properties: kg::EdgeProperties {
-                detail: edge.detail.clone().unwrap_or_default(),
-                ..kg::EdgeProperties::default()
-            },
-        });
-        graph.refresh_counts();
-    }
-
-    fn format_edge_batch_output(
-        &self,
-        dry_run: bool,
-        ok_count: usize,
-        failed_count: usize,
-        results: &[serde_json::Value],
-    ) -> String {
-        let status = if failed_count > 0 { "ERROR" } else { "OK" };
-        let mut lines = vec![if dry_run {
-            format!(
-                "{} (dry_run would_add={} failed={})",
-                status, ok_count, failed_count
-            )
-        } else {
-            format!("{} (added={} failed={})", status, ok_count, failed_count)
-        }];
-
-        for result in results.iter().filter(|result| result["ok"] == false) {
-            lines.push(format!(
-                "- edge {} {} {} failed: {}",
-                result["source_id"].as_str().unwrap_or("?"),
-                result["relation"].as_str().unwrap_or("?"),
-                result["target_id"].as_str().unwrap_or("?"),
-                result["error"].as_str().unwrap_or("unknown error")
-            ));
-        }
-
-        format!("{}\n", lines.join("\n"))
-    }
-
-    fn format_node_batch_output(
-        &self,
-        created_count: usize,
-        skipped_count: usize,
-        failed: &[serde_json::Value],
-    ) -> String {
-        let failed_count = failed.len();
-        let status = if failed_count > 0 { "ERROR" } else { "OK" };
-        let mut lines = vec![format!(
-            "{} (created={} skipped={} failed={})",
-            status, created_count, skipped_count, failed_count
-        )];
-
-        for item in failed {
-            lines.push(format!(
-                "- node {} failed: {}",
-                item.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
-                item.get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown error")
-            ));
-        }
-
-        format!("{}\n", lines.join("\n"))
     }
 
     fn format_feedback_batch_output(
@@ -1822,19 +1076,8 @@ impl KgMcpServer {
     }
 
     #[tool(
-        name = "kg_command",
-        description = "Run a single kg command by passing CLI arguments (without the binary name). Prefer `kg` when you have multiple actions."
-    )]
-    fn kg_command(
-        &self,
-        Parameters(args): Parameters<KgCommandArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        self.execute_kg_for("kg_command", args.args, args.debug)
-    }
-
-    #[tool(
         name = "kg",
-        description = "Run one or more kg commands separated by ';' or newlines. Supports batch workflows that mix `find`, `get`, `kql`, and feedback lines like `uid=abc123 YES`. Example: `graph fridge node find \"smart fridge\" --output-size 1200; uid=aa01bc YES; graph fridge node get concept:refrigerator --full`."
+        description = "Run one or more kg commands: find/get nodes, CRUD nodes/edges, graph create/stats, feedback. Use `kg_help <domain>` for usage."
     )]
     fn kg(&self, Parameters(args): Parameters<KgScriptArgs>) -> Result<CallToolResult, McpError> {
         let request_debug = args.debug;
@@ -2173,627 +1416,9 @@ impl KgMcpServer {
         })
     }
 
-    #[tool(name = "kg_create_graph", description = "Create a new graph")]
-    fn kg_create_graph(
-        &self,
-        Parameters(args): Parameters<CreateGraphArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        self.execute_kg(vec!["create".to_owned(), args.graph_name])
-    }
-
-    #[tool(
-        name = "kg_node_find",
-        description = "Find nodes by one or more search queries. Supports `limit`, `mode`, `full`, and `output_size`. Feature nodes are always included. Use skip_feedback=true for lookup-only queries; otherwise check structured_content.requires_feedback and respond via kg_feedback_batch before continuing. Prefer `kg` for batched search workflows."
-    )]
-    fn kg_node_find(
-        &self,
-        Parameters(args): Parameters<NodeFindArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        self.handle_node_find(args)
-    }
-
-    #[tool(
-        name = "kg_feedback_batch",
-        description = "Record multiple feedback events at once (best_effort or strict). Prefer `kg` when mixing feedback with other commands."
-    )]
-    fn kg_feedback_batch(
-        &self,
-        Parameters(args): Parameters<FeedbackBatchArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let mode = args.mode.unwrap_or_else(|| "best_effort".to_owned());
-        if mode != "best_effort" && mode != "strict" {
-            return Err(McpError::invalid_params(
-                "invalid mode",
-                Some(json!({
-                    "expected": ["best_effort", "strict"],
-                    "got": mode,
-                })),
-            ));
-        }
-
-        let result = self.run_feedback_batch(args.lines, &mode)?;
-        let has_errors = result.failed > 0;
-        let content = self.format_feedback_batch_output(result.ok, result.failed, &result.items);
-
-        Ok(CallToolResult {
-            content: vec![Content::text(content)],
-            structured_content: Some(json!({
-                "ok": result.ok,
-                "failed": result.failed,
-                "items": result.items,
-            })),
-            is_error: Some(has_errors),
-            meta: None,
-        })
-    }
-
-    #[tool(
-        name = "kg_node_get",
-        description = "Get a node by its id. Supports `full` and `output_size`. Feature nodes are always included. Always check structured_content.requires_feedback and respond via kg_feedback_batch before continuing. Prefer `kg` when batching get/search commands."
-    )]
-    fn kg_node_get(
-        &self,
-        Parameters(args): Parameters<NodeGetArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        self.handle_node_get(args)
-    }
-
-    #[tool(
-        name = "kg_node_add_batch",
-        description = "Add multiple nodes to a graph (atomic or best_effort) with optional on_conflict=skip. Prefer `kg` when mixing writes with other commands."
-    )]
-    fn kg_node_add_batch(
-        &self,
-        Parameters(args): Parameters<NodeAddBatchArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let graph = args.graph.clone();
-        let mode = args.mode.unwrap_or_else(|| "atomic".to_owned());
-        if mode != "atomic" && mode != "best_effort" {
-            return Err(McpError::invalid_params(
-                "invalid mode",
-                Some(json!({
-                    "expected": ["atomic", "best_effort"],
-                    "got": mode,
-                })),
-            ));
-        }
-        let on_conflict = args.on_conflict.unwrap_or_else(|| "error".to_owned());
-        if on_conflict != "error" && on_conflict != "skip" {
-            return Err(McpError::invalid_params(
-                "invalid on_conflict",
-                Some(json!({
-                    "expected": ["error", "skip"],
-                    "got": on_conflict,
-                })),
-            ));
-        }
-
-        let (prepared_nodes, mut failed) = prevalidate_node_batch_items(args.nodes);
-        if mode == "atomic" && !failed.is_empty() {
-            return Err(McpError::invalid_params(
-                "invalid node batch",
-                Some(json!({
-                    "failed": failed,
-                    "count": failed.len(),
-                })),
-            ));
-        }
-
-        let graph_root = kg::default_graph_root(&self.cwd);
-        let path = kg::resolve_graph_path(&self.cwd, &graph_root, &graph).map_err(|err| {
-            McpError::invalid_params(
-                "graph not found",
-                Some(json!({ "graph": graph.clone(), "error": err.to_string() })),
-            )
-        })?;
-
-        if prepared_nodes.is_empty() {
-            let has_errors = !failed.is_empty();
-            return Ok(CallToolResult {
-                content: vec![Content::text(self.format_node_batch_output(0, 0, &failed))],
-                structured_content: Some(json!({
-                    "graph": graph,
-                    "path": path.display().to_string(),
-                    "created": [],
-                    "skipped": [],
-                    "failed": failed,
-                })),
-                is_error: Some(has_errors),
-                meta: None,
-            });
-        }
-
-        let _graph_write_lock = kg::acquire_graph_write_lock(&path).map_err(|err| {
-            McpError::internal_error(
-                "failed to lock graph for write",
-                Some(json!({ "path": path.display().to_string(), "error": err.to_string() })),
-            )
-        })?;
-
-        let mut graph_file = kg::GraphFile::load(&path).map_err(|err| {
-            let detail = kg::format_error_chain(&err);
-            McpError::internal_error(
-                format!("failed to load graph: {detail}"),
-                Some(json!({ "path": path.display().to_string(), "error": detail })),
-            )
-        })?;
-
-        let mut created: Vec<String> = Vec::new();
-        let mut skipped: Vec<String> = Vec::new();
-        for item in prepared_nodes {
-            let id = item.id.clone();
-            if graph_file.node_by_id(&id).is_some() {
-                if on_conflict == "skip" {
-                    skipped.push(id);
-                    continue;
-                }
-                let err = format!("node already exists: {id}");
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "conflict",
-                        Some(json!({ "id": id, "error": err })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": err }));
-                continue;
-            }
-
-            let node = kg::Node {
-                id: id.clone(),
-                r#type: item.node_type,
-                name: item.name,
-                properties: kg::NodeProperties {
-                    description: item.description,
-                    domain_area: item.domain_area,
-                    provenance: item.provenance,
-                    confidence: Some(item.confidence),
-                    created_at: item.created_at,
-                    importance: item.importance,
-                    key_facts: item.facts,
-                    alias: item.aliases,
-                    ..kg::NodeProperties::default()
-                },
-                source_files: item.sources,
-            };
-
-            if let Err(err) = kg::validate_node_add_with_schema(&self.cwd, &node) {
-                let error = err.to_string();
-                if mode == "atomic" {
-                    return Err(McpError::invalid_params(
-                        "schema violation",
-                        Some(json!({ "id": id, "error": error })),
-                    ));
-                }
-                failed.push(json!({ "id": id, "error": error }));
-                continue;
-            }
-
-            graph_file.nodes.push(node);
-            created.push(id);
-        }
-
-        // Persist once.
-        if !created.is_empty() {
-            graph_file.refresh_counts();
-            graph_file.save(&path).map_err(|err| {
-                McpError::internal_error(
-                    "failed to save graph",
-                    Some(json!({ "path": path.display().to_string(), "error": err.to_string() })),
-                )
-            })?;
-        }
-
-        if mode == "atomic" && !failed.is_empty() {
-            return Err(McpError::internal_error(
-                "atomic write invariant violated",
-                Some(json!({ "failed": failed })),
-            ));
-        }
-
-        Ok(CallToolResult {
-            content: vec![Content::text(self.format_node_batch_output(
-                created.len(),
-                skipped.len(),
-                &failed,
-            ))],
-            structured_content: Some(json!({
-                "graph": graph,
-                "path": path.display().to_string(),
-                "created": created,
-                "skipped": skipped,
-                "failed": failed,
-            })),
-            is_error: Some(!failed.is_empty()),
-            meta: None,
-        })
-    }
-
-    #[tool(
-        name = "kg_node_add",
-        description = "Add a new node to a graph. Generated nodes use G-prefixed types like GDIR, GFIL, GDOC, GSYM; manual nodes use non-generated types. ID must match <type_code>:snake_case (legacy <prefix>:snake_case also accepted). Prefer `kg` when combining multiple actions."
-    )]
-    fn kg_node_add(
-        &self,
-        Parameters(args): Parameters<NodeAddArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        if !kg::is_valid_node_type(&args.node_type) {
-            return Err(McpError::invalid_params(
-                "invalid node_type",
-                Some(json!({
-                    "expected": "non-empty ASCII token without whitespace",
-                    "got": args.node_type,
-                })),
-            ));
-        }
-
-        let mut cmd = vec![
-            args.graph,
-            "node".to_owned(),
-            "add".to_owned(),
-            args.id,
-            "--type".to_owned(),
-            args.node_type,
-            "--name".to_owned(),
-            args.name,
-        ];
-        if let Some(description) = args.description {
-            cmd.push("--description".to_owned());
-            cmd.push(description);
-        }
-        if let Some(domain_area) = args.domain_area {
-            cmd.push("--domain-area".to_owned());
-            cmd.push(domain_area);
-        }
-        if let Some(provenance) = args.provenance {
-            cmd.push("--provenance".to_owned());
-            cmd.push(provenance);
-        }
-        if let Some(confidence) = args.confidence {
-            cmd.push("--confidence".to_owned());
-            cmd.push(confidence.to_string());
-        }
-        if let Some(created_at) = args.created_at {
-            cmd.push("--created-at".to_owned());
-            cmd.push(created_at);
-        }
-        if let Some(importance) = args.importance {
-            cmd.push("--importance".to_owned());
-            cmd.push(importance.to_string());
-        }
-        for fact in args.facts {
-            cmd.push("--fact".to_owned());
-            cmd.push(fact);
-        }
-        for alias in args.aliases {
-            cmd.push("--alias".to_owned());
-            cmd.push(alias);
-        }
-        for source in args.sources {
-            cmd.push("--source".to_owned());
-            cmd.push(source);
-        }
-        cmd.push("--scan".to_owned());
-        cmd.push(args.scan.to_string());
-        cmd.push("--scan-ignore-unknown".to_owned());
-        cmd.push(args.scan_ignore_unknown.to_string());
-        self.execute_kg(cmd)
-    }
-
-    #[tool(
-        name = "kg_node_modify",
-        description = "Modify an existing node. Prefer `kg` when combining multiple actions."
-    )]
-    fn kg_node_modify(
-        &self,
-        Parameters(args): Parameters<NodeModifyArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let mut cmd = vec![args.graph, "node".to_owned(), "modify".to_owned(), args.id];
-        if let Some(node_type) = args.node_type {
-            cmd.push("--type".to_owned());
-            cmd.push(node_type);
-        }
-        if let Some(name) = args.name {
-            cmd.push("--name".to_owned());
-            cmd.push(name);
-        }
-        if let Some(description) = args.description {
-            cmd.push("--description".to_owned());
-            cmd.push(description);
-        }
-        if let Some(domain_area) = args.domain_area {
-            cmd.push("--domain-area".to_owned());
-            cmd.push(domain_area);
-        }
-        if let Some(provenance) = args.provenance {
-            cmd.push("--provenance".to_owned());
-            cmd.push(provenance);
-        }
-        if let Some(confidence) = args.confidence {
-            cmd.push("--confidence".to_owned());
-            cmd.push(confidence.to_string());
-        }
-        if let Some(created_at) = args.created_at {
-            cmd.push("--created-at".to_owned());
-            cmd.push(created_at);
-        }
-        if let Some(importance) = args.importance {
-            cmd.push("--importance".to_owned());
-            cmd.push(importance.to_string());
-        }
-        for fact in args.facts {
-            cmd.push("--fact".to_owned());
-            cmd.push(fact);
-        }
-        for alias in args.aliases {
-            cmd.push("--alias".to_owned());
-            cmd.push(alias);
-        }
-        for source in args.sources {
-            cmd.push("--source".to_owned());
-            cmd.push(source);
-        }
-        if let Some(scan) = args.scan {
-            cmd.push("--scan".to_owned());
-            cmd.push(scan.to_string());
-        }
-        if let Some(scan_ignore_unknown) = args.scan_ignore_unknown {
-            cmd.push("--scan-ignore-unknown".to_owned());
-            cmd.push(scan_ignore_unknown.to_string());
-        }
-        self.execute_kg(cmd)
-    }
-
-    #[tool(
-        name = "kg_node_remove",
-        description = "Remove a node and its incident edges. Prefer `kg` when combining multiple actions."
-    )]
-    fn kg_node_remove(
-        &self,
-        Parameters(args): Parameters<NodeRemoveArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        self.execute_kg(vec![
-            args.graph,
-            "node".to_owned(),
-            "remove".to_owned(),
-            args.id,
-        ])
-    }
-
-    #[tool(
-        name = "kg_edge_add",
-        description = "Add an edge between two nodes. Generated edges use G-prefixed relations like GCONTAINS, GHAS_DOC, GHAS_SYMBOL, GDEF, GIMPORTS, GREFERENCES; manual edges keep normal relations. Prefer `kg` when combining multiple actions."
-    )]
-    fn kg_edge_add(
-        &self,
-        Parameters(args): Parameters<EdgeAddArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let graph_file = self.load_graph_file(&args.graph)?;
-        if let Err(error) = self.preflight_edge(
-            &graph_file,
-            &args.source_id,
-            &args.relation,
-            &args.target_id,
-        ) {
-            return Err(McpError::invalid_params(error.message, Some(error.data)));
-        }
-
-        let mut cmd = vec![
-            args.graph,
-            "edge".to_owned(),
-            "add".to_owned(),
-            args.source_id,
-            args.relation,
-            args.target_id,
-        ];
-        if let Some(detail) = args.detail {
-            cmd.push("--detail".to_owned());
-            cmd.push(detail);
-        }
-        self.execute_kg(cmd)
-    }
-
-    #[tool(
-        name = "kg_edge_add_batch",
-        description = "Add multiple edges to a graph (atomic or best_effort) and optionally validate with dry_run=true before writing. Prefer `kg` when combining multiple actions."
-    )]
-    fn kg_edge_add_batch(
-        &self,
-        Parameters(args): Parameters<EdgeAddBatchArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let graph = args.graph.clone();
-        let mode = args.mode.unwrap_or_else(|| "atomic".to_owned());
-        if mode != "atomic" && mode != "best_effort" {
-            return Err(McpError::invalid_params(
-                "invalid mode",
-                Some(json!({
-                    "expected": ["atomic", "best_effort"],
-                    "got": mode,
-                })),
-            ));
-        }
-
-        let dry_run = args.dry_run;
-        let (prepared_edges, pre_failed) = prevalidate_edge_batch_items(args.edges);
-        if mode == "atomic" && !dry_run && !pre_failed.is_empty() {
-            return Err(McpError::invalid_params(
-                "invalid edge batch",
-                Some(json!({
-                    "count": pre_failed.len(),
-                    "failed": pre_failed.iter().map(|(_, value)| value).collect::<Vec<_>>(),
-                })),
-            ));
-        }
-
-        let graph_root = kg::default_graph_root(&self.cwd);
-        let path = kg::resolve_graph_path(&self.cwd, &graph_root, &graph).map_err(|err| {
-            McpError::invalid_params(
-                "graph not found",
-                Some(json!({ "graph": graph.clone(), "error": err.to_string() })),
-            )
-        })?;
-
-        let mut working_graph = if dry_run {
-            self.load_graph_file(&graph)?
-        } else {
-            let _graph_write_lock = kg::acquire_graph_write_lock(&path).map_err(|err| {
-                McpError::internal_error(
-                    "failed to lock graph for write",
-                    Some(json!({ "path": path.display().to_string(), "error": err.to_string() })),
-                )
-            })?;
-            let mut graph_file = kg::GraphFile::load(&path).map_err(|err| {
-                let detail = kg::format_error_chain(&err);
-                McpError::internal_error(
-                    format!("failed to load graph: {detail}"),
-                    Some(json!({ "path": path.display().to_string(), "error": detail })),
-                )
-            })?;
-
-            let mut results_slots = vec![None; prepared_edges.len() + pre_failed.len()];
-            for (index, value) in pre_failed {
-                results_slots[index] = Some(value);
-            }
-
-            let mut added_count = 0usize;
-            for edge in &prepared_edges {
-                if let Err(error) = self.preflight_edge(
-                    &graph_file,
-                    &edge.source_id,
-                    &edge.relation,
-                    &edge.target_id,
-                ) {
-                    if mode == "atomic" {
-                        return Err(McpError::invalid_params(error.message, Some(error.data)));
-                    }
-                    results_slots[edge.index] = Some(json!({
-                        "index": edge.index,
-                        "source_id": edge.source_id,
-                        "relation": edge.relation,
-                        "target_id": edge.target_id,
-                        "ok": false,
-                        "error": error.message,
-                        "dry_run": false,
-                    }));
-                    continue;
-                }
-
-                Self::apply_edge_to_graph(&mut graph_file, edge);
-                added_count = added_count.saturating_add(1);
-                results_slots[edge.index] = Some(json!({
-                    "index": edge.index,
-                    "source_id": edge.source_id,
-                    "relation": edge.relation,
-                    "target_id": edge.target_id,
-                    "ok": true,
-                    "dry_run": false,
-                }));
-            }
-
-            if added_count > 0 {
-                graph_file.save(&path).map_err(|err| {
-                    McpError::internal_error(
-                        "failed to save graph",
-                        Some(
-                            json!({ "path": path.display().to_string(), "error": err.to_string() }),
-                        ),
-                    )
-                })?;
-            }
-
-            let results: Vec<_> = results_slots.into_iter().flatten().collect();
-            let ok_count = results.iter().filter(|r| r["ok"] == true).count();
-            let failed_count = results.len().saturating_sub(ok_count);
-            let summary = self.format_edge_batch_output(dry_run, ok_count, failed_count, &results);
-            return Ok(CallToolResult {
-                content: vec![Content::text(summary)],
-                structured_content: Some(json!({
-                    "added": ok_count,
-                    "would_add": 0,
-                    "failed": failed_count,
-                    "dry_run": false,
-                    "results": results,
-                })),
-                is_error: Some(failed_count > 0),
-                meta: None,
-            });
-        };
-
-        let mut results_slots = vec![None; prepared_edges.len() + pre_failed.len()];
-        for (index, value) in pre_failed {
-            results_slots[index] = Some(value);
-        }
-
-        for edge in &prepared_edges {
-            if let Err(error) = self.preflight_edge(
-                &working_graph,
-                &edge.source_id,
-                &edge.relation,
-                &edge.target_id,
-            ) {
-                results_slots[edge.index] = Some(json!({
-                    "index": edge.index,
-                    "source_id": edge.source_id,
-                    "relation": edge.relation,
-                    "target_id": edge.target_id,
-                    "ok": false,
-                    "error": error.message,
-                    "dry_run": true,
-                }));
-                continue;
-            }
-
-            Self::apply_edge_to_graph(&mut working_graph, edge);
-            results_slots[edge.index] = Some(json!({
-                "index": edge.index,
-                "source_id": edge.source_id,
-                "relation": edge.relation,
-                "target_id": edge.target_id,
-                "ok": true,
-                "dry_run": true,
-            }));
-        }
-
-        let results: Vec<_> = results_slots.into_iter().flatten().collect();
-
-        let ok_count = results.iter().filter(|r| r["ok"] == true).count();
-        let failed_count = results.len() - ok_count;
-        let summary = self.format_edge_batch_output(dry_run, ok_count, failed_count, &results);
-
-        Ok(CallToolResult {
-            content: vec![Content::text(summary)],
-            structured_content: Some(json!({
-                "added": if dry_run { 0 } else { ok_count },
-                "would_add": if dry_run { ok_count } else { 0 },
-                "failed": failed_count,
-                "dry_run": dry_run,
-                "results": results,
-            })),
-            is_error: Some(failed_count > 0),
-            meta: None,
-        })
-    }
-
-    #[tool(
-        name = "kg_edge_remove",
-        description = "Remove an edge between two nodes. Prefer `kg` when combining multiple actions."
-    )]
-    fn kg_edge_remove(
-        &self,
-        Parameters(args): Parameters<EdgeRemoveArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        self.execute_kg(vec![
-            args.graph,
-            "edge".to_owned(),
-            "remove".to_owned(),
-            args.source_id,
-            args.relation,
-            args.target_id,
-        ])
-    }
-
     #[tool(
         name = "kg_schema",
-        description = "Get graph schema: valid node types, relations, ID prefixes, and edge rules. Use this to understand the data model before adding nodes or edges."
+        description = "Return valid node types, relations, ID prefixes, and edge rules."
     )]
     fn kg_schema(
         &self,
@@ -2844,195 +1469,25 @@ impl KgMcpServer {
     }
 
     #[tool(
-        name = "kg_stats",
-        description = "Show graph structure and usage statistics. Prefer `kg` when issuing multiple commands."
+        name = "kg_help",
+        description = "Return detailed manual with examples for a kg domain: node, edge, graph, schema, kql, feedback, batch, script, all."
     )]
-    fn kg_stats(
+    fn kg_help(
         &self,
-        Parameters(args): Parameters<GraphStatsArgs>,
+        Parameters(args): Parameters<KgHelpArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let mut cmd = vec![args.graph, "stats".to_owned()];
-        if args.include_features {
-            cmd.push("--include-features".to_owned());
-        }
-        if args.by_type {
-            cmd.push("--by-type".to_owned());
-        }
-        if args.by_relation {
-            cmd.push("--by-relation".to_owned());
-        }
-        if args.show_sources {
-            cmd.push("--show-sources".to_owned());
-        }
-        self.execute_kg(cmd)
+        let help_text = get_help(&args.domain);
+        Ok(CallToolResult {
+            content: vec![Content::text(help_text)],
+            structured_content: Some(json!({
+                "domain": args.domain,
+                "available_domains": ["node", "edge", "graph", "schema", "kql", "feedback", "batch", "script", "all"],
+            })),
+            is_error: Some(false),
+            meta: None,
+        })
     }
 
-    #[tool(
-        name = "kg_check",
-        description = "[DEPRECATED: use kg script] Run integrity validation checks. Prefer `kg <graph> check`."
-    )]
-    fn kg_check(
-        &self,
-        Parameters(args): Parameters<GraphValidateArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let mut cmd = vec![args.graph.clone(), "check".to_owned()];
-        append_validation_flags(&mut cmd, &args);
-        self.execute_kg(cmd)
-    }
-
-    #[tool(
-        name = "kg_audit",
-        description = "[DEPRECATED: use kg script] Run deep audit validation checks. Prefer `kg <graph> audit`."
-    )]
-    fn kg_audit(
-        &self,
-        Parameters(args): Parameters<GraphValidateArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let mut cmd = vec![args.graph.clone(), "audit".to_owned()];
-        append_validation_flags(&mut cmd, &args);
-        self.execute_kg(cmd)
-    }
-
-    #[tool(
-        name = "kg_quality",
-        description = "[DEPRECATED: use kg script] Run quality subcommands such as missing-facts or duplicates. Prefer `kg <graph> quality <command>`."
-    )]
-    fn kg_quality(
-        &self,
-        Parameters(args): Parameters<GraphQualityArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let mut cmd = vec![args.graph, "quality".to_owned(), args.command];
-
-        for node_type in args.node_types {
-            cmd.push("--type".to_owned());
-            cmd.push(node_type);
-        }
-        if let Some(limit) = args.limit {
-            cmd.push("--limit".to_owned());
-            cmd.push(limit.to_string());
-        }
-        if let Some(include_features) = args.include_features
-            && include_features
-        {
-            cmd.push("--include-features".to_owned());
-        }
-        if let Some(threshold) = args.threshold {
-            cmd.push("--threshold".to_owned());
-            cmd.push(threshold.to_string());
-        }
-        if let Some(relation) = args.relation {
-            cmd.push("--relation".to_owned());
-            cmd.push(relation);
-        }
-        if let Some(sort) = args.sort {
-            cmd.push("--sort".to_owned());
-            cmd.push(sort);
-        }
-        self.execute_kg(cmd)
-    }
-
-    #[tool(
-        name = "kg_export_html",
-        description = "[DEPRECATED: use kg script] Export graph as an interactive HTML file. Prefer `kg <graph> export-html`."
-    )]
-    fn kg_export_html(
-        &self,
-        Parameters(args): Parameters<ExportHtmlArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let mut cmd = vec![args.graph, "export-html".to_owned()];
-        if let Some(output) = args.output {
-            cmd.push("--output".to_owned());
-            cmd.push(output);
-        }
-        if let Some(title) = args.title {
-            cmd.push("--title".to_owned());
-            cmd.push(title);
-        }
-        self.execute_kg(cmd)
-    }
-
-    #[tool(
-        name = "kg_access_log",
-        description = "[DEPRECATED: use kg script] Read graph access/search history. Prefer `kg <graph> access-log`."
-    )]
-    fn kg_access_log(
-        &self,
-        Parameters(args): Parameters<AccessLogArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let mut cmd = vec![args.graph, "access-log".to_owned()];
-        if let Some(limit) = args.limit {
-            cmd.push("--limit".to_owned());
-            cmd.push(limit.to_string());
-        }
-        if args.show_empty {
-            cmd.push("--show-empty".to_owned());
-        }
-        self.execute_kg(cmd)
-    }
-
-    #[tool(
-        name = "kg_access_stats",
-        description = "[DEPRECATED: use kg script] Read aggregate access statistics. Prefer `kg <graph> access-stats`."
-    )]
-    fn kg_access_stats(
-        &self,
-        Parameters(args): Parameters<AccessStatsArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        self.execute_kg(vec![args.graph, "access-stats".to_owned()])
-    }
-
-    #[tool(
-        name = "kg_gap_summary",
-        description = "Get all quality gaps at once: missing descriptions, missing facts, edge gaps, and duplicates. Use this for collaborative graph improvement sessions."
-    )]
-    fn kg_gap_summary(
-        &self,
-        Parameters(args): Parameters<GapSummaryArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let limit = args.limit.to_string();
-
-        let mut output = String::new();
-        output.push_str("## GRAPH QUALITY GAPS\n\n");
-
-        let commands: Vec<(&str, Vec<&str>)> = vec![
-            ("STATS", vec![&args.graph, "stats", "--by-type"]),
-            (
-                "MISSING DESCRIPTIONS",
-                vec![
-                    &args.graph,
-                    "quality",
-                    "missing-descriptions",
-                    "--limit",
-                    &limit,
-                ],
-            ),
-            (
-                "MISSING FACTS",
-                vec![&args.graph, "quality", "missing-facts", "--limit", &limit],
-            ),
-            (
-                "EDGE GAPS",
-                vec![&args.graph, "quality", "edge-gaps", "--limit", &limit],
-            ),
-            (
-                "DUPLICATES",
-                vec![&args.graph, "quality", "duplicates", "--limit", &limit],
-            ),
-        ];
-
-        for (section, cmd) in commands {
-            let os_args: Vec<OsString> = std::iter::once(OsString::from("kg"))
-                .chain(cmd.into_iter().map(OsString::from))
-                .collect();
-            let result = self.run_kg(os_args, "kg_gap_summary", "quality sweep", false)?;
-
-            output.push_str(&format!("### {}\n{}\n\n", section, result));
-        }
-
-        output.push_str("---\n**Suggested workflow:** Pick one gap category above, then for each item ask the user for the missing information.\n");
-
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
 }
 
 #[prompt_router]
@@ -3046,7 +1501,7 @@ impl KgMcpServer {
         Parameters(args): Parameters<KgPromptArgs>,
     ) -> Result<GetPromptResult, McpError> {
         let text = format!(
-            "Use kg MCP tools to achieve this goal on graph `{}`: {}. First inspect with kg_stats and kg_node_find, then do safe mutations, and finally run kg_check.",
+            "Use kg MCP tools to achieve this goal on graph `{}`: {}. First call `kg_schema` and `kg <graph> stats`, then `kg <graph> node find` to discover, then do safe mutations, and finally run `kg <graph> check`. Use `kg_help <domain>` for detailed usage.",
             args.graph, args.goal
         );
         Ok(GetPromptResult {
@@ -3067,19 +1522,19 @@ impl KgMcpServer {
             r#"You are helping improve the knowledge graph `{}`. Your goal: {}
 
 WORKFLOW:
-1. Use kg_gap_summary to get all quality gaps at once
+1. Use `kg <graph> gap-summary` to get all quality gaps at once
 2. Present the top priorities to the user in Polish, asking which they want to work on
 3. For each gap, ask the user specific questions to gather missing information
-4. Use kg_node_add or kg_node_modify to fill the gaps based on user input
-5. Use kg_edge_add to create connections
-6. Run kg_check to verify integrity
+4. Use `kg <graph> node add` or `kg <graph> node modify` to fill the gaps based on user input
+5. Use `kg <graph> edge add` to create connections
+6. Run `kg <graph> check` to verify integrity
 
 IMPORTANT RULES:
 - Always ask ONE gap at a time - don't overwhelm the user
 - Provide context: show what already exists in the graph
 - Accept partial information - even 1 fact is better than none
 - Mark user-provided content with --source "user-input"
-- After adding nodes, verify with kg_node_get
+- After adding nodes, verify with `kg <graph> node get`
 
 Example question for missing description:
 "Węzeł '{}' nie ma opisu. Co to jest w 1-2 zdaniach?"
@@ -3239,26 +1694,6 @@ impl ServerHandler for KgMcpServer {
         Ok(ReadResourceResult {
             contents: vec![ResourceContents::text(text, uri)],
         })
-    }
-}
-
-fn append_validation_flags(cmd: &mut Vec<String>, args: &GraphValidateArgs) {
-    if args.deep {
-        cmd.push("--deep".to_owned());
-    }
-    if let Some(base_dir) = &args.base_dir {
-        cmd.push("--base-dir".to_owned());
-        cmd.push(base_dir.clone());
-    }
-    if args.errors_only {
-        cmd.push("--errors-only".to_owned());
-    }
-    if args.warnings_only {
-        cmd.push("--warnings-only".to_owned());
-    }
-    if let Some(limit) = args.limit {
-        cmd.push("--limit".to_owned());
-        cmd.push(limit.to_string());
     }
 }
 
@@ -4062,43 +2497,6 @@ mod tests {
     }
 
     #[test]
-    fn prevalidate_edge_batch_allows_custom_relation() {
-        let (prepared, failed) = prevalidate_edge_batch_items(vec![EdgeAddBatchItem {
-            source_id: "concept:refrigerator".to_owned(),
-            relation: "~".to_owned(),
-            target_id: "concept:fridge".to_owned(),
-            detail: Some("0.91".to_owned()),
-        }]);
-
-        assert_eq!(failed.len(), 0);
-        assert_eq!(prepared.len(), 1);
-        assert_eq!(prepared[0].relation, "~");
-    }
-
-    #[test]
-    fn prevalidate_node_batch_allows_custom_type() {
-        let (prepared, failed) = prevalidate_node_batch_items(vec![NodeAddBatchItem {
-            id: "~:dedupe_anchor".to_owned(),
-            node_type: "~".to_owned(),
-            name: "Anchor".to_owned(),
-            description: Some("desc".to_owned()),
-            domain_area: Some("quality".to_owned()),
-            provenance: Some("U".to_owned()),
-            confidence: Some(0.9),
-            created_at: Some("2026-04-10T10:00:00Z".to_owned()),
-            importance: Some(0.7),
-            facts: vec![],
-            aliases: vec![],
-            sources: vec!["DOC /tmp/source.md".to_owned()],
-        }]);
-
-        assert_eq!(failed.len(), 0);
-        assert_eq!(prepared.len(), 1);
-        assert_eq!(prepared[0].node_type, "~");
-        assert_eq!(prepared[0].id, "~:dedupe_anchor");
-    }
-
-    #[test]
     fn parse_find_total_results_supports_shown_total_headers() {
         let rendered = "? lodowka (2/11)\n# concept:refrigerator | Lodowka [Concept]\n\n? api (1)\n# interface:smart_api | Smart API [Interface]\n";
         assert_eq!(parse_find_total_results(rendered), Some(12));
@@ -4280,52 +2678,6 @@ mod tests {
     }
 
     #[test]
-    fn kg_edge_add_batch_dry_run_reports_failures_without_mutation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path();
-        write_test_graph_workspace(cwd);
-
-        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
-        let result = server
-            .kg_edge_add_batch(Parameters(EdgeAddBatchArgs {
-                graph: "fridge".to_owned(),
-                edges: vec![
-                    EdgeAddBatchItem {
-                        source_id: "process:defrost".to_owned(),
-                        relation: "AVAILABLE_IN".to_owned(),
-                        target_id: "interface:smart_api".to_owned(),
-                        detail: Some("Proces rozmrazania dostepny z API".to_owned()),
-                    },
-                    EdgeAddBatchItem {
-                        source_id: "process:defrost".to_owned(),
-                        relation: "AVAILABLE_IN".to_owned(),
-                        target_id: "datastore:temperature_log".to_owned(),
-                        detail: None,
-                    },
-                ],
-                mode: Some("best_effort".to_owned()),
-                dry_run: true,
-            }))
-            .expect("batch dry run");
-
-        assert_eq!(result.is_error, Some(true));
-        let structured = result.structured_content.expect("structured content");
-        assert_eq!(structured["dry_run"], true);
-        assert_eq!(structured["would_add"], 1);
-        assert_eq!(structured["added"], 0);
-        assert_eq!(structured["failed"], 1);
-        assert!(
-            structured["results"][1]["error"]
-                .as_str()
-                .expect("error text")
-                .contains("DataStore cannot be target of AVAILABLE_IN")
-        );
-
-        let graph = load_test_graph(cwd);
-        assert!(!graph.has_edge("process:defrost", "AVAILABLE_IN", "interface:smart_api"));
-    }
-
-    #[test]
     fn kg_script_marks_error_when_step_fails_in_best_effort() {
         let dir = tempfile::tempdir().expect("tempdir");
         let cwd = dir.path();
@@ -4349,314 +2701,6 @@ mod tests {
         assert!(error_text.contains("node get") || error_text.contains("missing node id"));
     }
 
-    #[test]
-    fn kg_feedback_batch_marks_error_on_failed_lines() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path();
-        write_test_graph_workspace(cwd);
-
-        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
-        let result = server
-            .kg_feedback_batch(Parameters(FeedbackBatchArgs {
-                lines: vec!["totally invalid".to_owned()],
-                mode: Some("best_effort".to_owned()),
-            }))
-            .expect("feedback batch result");
-
-        assert_eq!(result.is_error, Some(true));
-        let content = KgMcpServer::render_text_content(&result);
-        let structured = result.structured_content.expect("structured content");
-        assert_eq!(structured["ok"], 0);
-        assert_eq!(structured["failed"], 1);
-        assert!(content.contains("ERROR (ok=0 failed=1)"));
-        assert!(content.contains("- feedback 'totally invalid' failed: invalid feedback line"));
-    }
-
-    #[test]
-    fn kg_feedback_batch_marks_error_on_graph_update_failure() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path();
-        write_test_graph_workspace(cwd);
-
-        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
-        {
-            let mut state = server.feedback_state.lock().expect("feedback lock");
-            state.finds.insert(
-                "abc123".to_owned(),
-                FindContext {
-                    created_at_ms: KgMcpServer::now_ms(),
-                    graph: "missing_graph".to_owned(),
-                    queries: vec!["smart fridge".to_owned()],
-                    candidate_ids: vec!["concept:refrigerator".to_owned()],
-                },
-            );
-        }
-
-        let result = server
-            .kg_feedback_batch(Parameters(FeedbackBatchArgs {
-                lines: vec!["uid=abc123 YES".to_owned()],
-                mode: Some("best_effort".to_owned()),
-            }))
-            .expect("feedback batch result");
-
-        assert_eq!(result.is_error, Some(true));
-        let content = KgMcpServer::render_text_content(&result);
-        let structured = result.structured_content.expect("structured content");
-        assert_eq!(structured["ok"], 0);
-        assert_eq!(structured["failed"], 1);
-        assert_eq!(structured["items"][0]["graph_update"], "error");
-        assert!(content.contains("ERROR (ok=0 failed=1)"));
-        assert!(content.contains("- feedback 'uid=abc123 YES' failed: graph update failed:"));
-    }
-
-    #[test]
-    fn kg_node_add_batch_marks_error_on_prevalidation_failures() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path();
-        write_test_graph_workspace(cwd);
-
-        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
-        let result = server
-            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
-                graph: "fridge".to_owned(),
-                mode: Some("best_effort".to_owned()),
-                on_conflict: None,
-                nodes: vec![NodeAddBatchItem {
-                    id: "X:bad_node".to_owned(),
-                    node_type: "UnknownType".to_owned(),
-                    name: "Bad Node".to_owned(),
-                    description: None,
-                    domain_area: None,
-                    provenance: None,
-                    confidence: None,
-                    created_at: None,
-                    importance: None,
-                    facts: vec![],
-                    aliases: vec![],
-                    sources: vec![],
-                }],
-            }))
-            .expect("node batch result");
-
-        assert_eq!(result.is_error, Some(true));
-        let content = KgMcpServer::render_text_content(&result);
-        let structured = result.structured_content.expect("structured content");
-        assert_eq!(
-            structured["created"]
-                .as_array()
-                .expect("created array")
-                .len(),
-            0
-        );
-        assert_eq!(
-            structured["failed"].as_array().expect("failed array").len(),
-            1
-        );
-        assert!(content.contains("ERROR (created=0 skipped=0 failed=1)"));
-        assert!(content.contains("- node X:bad_node failed:"));
-    }
-
-    #[test]
-    fn kg_node_add_batch_uses_single_add_defaults() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path();
-        write_test_graph_workspace(cwd);
-
-        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
-        let result = server
-            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
-                graph: "fridge".to_owned(),
-                mode: Some("best_effort".to_owned()),
-                on_conflict: None,
-                nodes: vec![NodeAddBatchItem {
-                    id: "concept:batch_defaults_node".to_owned(),
-                    node_type: "Concept".to_owned(),
-                    name: "Batch Defaults Node".to_owned(),
-                    description: None,
-                    domain_area: None,
-                    provenance: None,
-                    confidence: None,
-                    created_at: None,
-                    importance: None,
-                    facts: vec![],
-                    aliases: vec![],
-                    sources: vec![],
-                }],
-            }))
-            .expect("node batch result");
-
-        assert_eq!(result.is_error, Some(false));
-        let structured = result.structured_content.expect("structured content");
-        assert_eq!(
-            structured["created"]
-                .as_array()
-                .expect("created array")
-                .len(),
-            1
-        );
-
-        let graph = load_test_graph(cwd);
-        let node = graph
-            .node_by_id("concept:batch_defaults_node")
-            .expect("defaulted node");
-        assert_eq!(node.properties.description, "Batch Defaults Node");
-        assert_eq!(node.properties.domain_area, "concept");
-        assert_eq!(node.properties.provenance, "U");
-        assert_eq!(node.properties.confidence, Some(0.8));
-        assert_eq!(node.properties.importance, 0.5);
-        assert!(is_valid_iso_utc_timestamp(&node.properties.created_at));
-        assert_eq!(node.source_files, vec!["DOC kg graph node add".to_owned()]);
-    }
-
-    #[test]
-    fn kg_node_add_batch_normalizes_sources_like_single_add() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path();
-        write_test_graph_workspace(cwd);
-
-        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
-        let result = server
-            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
-                graph: "fridge".to_owned(),
-                mode: Some("best_effort".to_owned()),
-                on_conflict: None,
-                nodes: vec![NodeAddBatchItem {
-                    id: "concept:batch_source_normalized".to_owned(),
-                    node_type: "Concept".to_owned(),
-                    name: "Batch Source Normalized".to_owned(),
-                    description: None,
-                    domain_area: None,
-                    provenance: None,
-                    confidence: None,
-                    created_at: None,
-                    importance: None,
-                    facts: vec![],
-                    aliases: vec![],
-                    sources: vec!["/tmp/source.md".to_owned()],
-                }],
-            }))
-            .expect("node batch result");
-
-        assert_eq!(result.is_error, Some(false));
-        let graph = load_test_graph(cwd);
-        let node = graph
-            .node_by_id("concept:batch_source_normalized")
-            .expect("normalized source node");
-        assert_eq!(node.source_files, vec!["DOC /tmp/source.md".to_owned()]);
-    }
-
-    #[test]
-    fn kg_node_add_batch_applies_schema_validation() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path();
-        write_test_graph_workspace(cwd);
-        fs::write(
-            cwd.join(".kg.schema.toml"),
-            "[node_types]\nallowed = [\"Process\"]\n",
-        )
-        .expect("write schema");
-
-        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
-        let result = server
-            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
-                graph: "fridge".to_owned(),
-                mode: Some("best_effort".to_owned()),
-                on_conflict: None,
-                nodes: vec![NodeAddBatchItem {
-                    id: "concept:schema_rejected".to_owned(),
-                    node_type: "Concept".to_owned(),
-                    name: "Schema Rejected".to_owned(),
-                    description: None,
-                    domain_area: None,
-                    provenance: None,
-                    confidence: None,
-                    created_at: None,
-                    importance: None,
-                    facts: vec![],
-                    aliases: vec![],
-                    sources: vec!["DOC /tmp/source.md".to_owned()],
-                }],
-            }))
-            .expect("node batch result");
-
-        assert_eq!(result.is_error, Some(true));
-        let content = KgMcpServer::render_text_content(&result);
-        let structured = result.structured_content.expect("structured content");
-        assert_eq!(
-            structured["created"]
-                .as_array()
-                .expect("created array")
-                .len(),
-            0
-        );
-        assert_eq!(
-            structured["failed"].as_array().expect("failed array").len(),
-            1
-        );
-        assert!(content.contains("ERROR (created=0 skipped=0 failed=1)"));
-        assert!(content.contains("node type 'Concept' is not allowed by schema"));
-
-        let graph = load_test_graph(cwd);
-        assert!(graph.node_by_id("concept:schema_rejected").is_none());
-    }
-
-    #[test]
-    fn kg_node_add_batch_content_lists_all_failures() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let cwd = dir.path();
-        write_test_graph_workspace(cwd);
-
-        let server = KgMcpServer::new(cwd.to_path_buf()).expect("server");
-        let result = server
-            .kg_node_add_batch(Parameters(NodeAddBatchArgs {
-                graph: "fridge".to_owned(),
-                mode: Some("best_effort".to_owned()),
-                on_conflict: None,
-                nodes: vec![
-                    NodeAddBatchItem {
-                        id: "concept:bad_conf".to_owned(),
-                        node_type: "Concept".to_owned(),
-                        name: "Bad Confidence".to_owned(),
-                        description: None,
-                        domain_area: None,
-                        provenance: None,
-                        confidence: Some(2.0),
-                        created_at: None,
-                        importance: None,
-                        facts: vec![],
-                        aliases: vec![],
-                        sources: vec!["DOC /tmp/source.md".to_owned()],
-                    },
-                    NodeAddBatchItem {
-                        id: "concept:bad_source".to_owned(),
-                        node_type: "Concept".to_owned(),
-                        name: "Bad Source".to_owned(),
-                        description: None,
-                        domain_area: None,
-                        provenance: None,
-                        confidence: None,
-                        created_at: None,
-                        importance: None,
-                        facts: vec![],
-                        aliases: vec![],
-                        sources: vec!["   ".to_owned()],
-                    },
-                ],
-            }))
-            .expect("node batch result");
-
-        assert_eq!(result.is_error, Some(true));
-        let content = KgMcpServer::render_text_content(&result);
-        let structured = result.structured_content.expect("structured content");
-        assert_eq!(
-            structured["failed"].as_array().expect("failed array").len(),
-            2
-        );
-
-        assert!(content.contains("ERROR (created=0 skipped=0 failed=2)"));
-        assert!(content.contains("- node concept:bad_conf failed:"));
-        assert!(content.contains("- node concept:bad_source failed:"));
-    }
 }
 
 #[tokio::main]
