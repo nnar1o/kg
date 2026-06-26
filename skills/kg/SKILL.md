@@ -67,34 +67,15 @@ Examples:
 
 ## 2.1 Examples (Best Practices)
 
-Use these as reference patterns for high-quality, traceable graph data.
+Use these as reference patterns for high-quality, traceable graph data. All operations use the `kg` script runner. Call `kg_help <domain>` for full syntax.
 
 ### Create Node (Complete Metadata)
 
 ```json
 {
-  "tool": "kg-mcp_kg_node_add",
+  "tool": "kg",
   "arguments": {
-    "graph": "fridge",
-    "id": "concept:fridge_energy_profile",
-    "name": "Fridge Energy Profile",
-    "node_type": "Concept",
-    "description": "Model of daily and seasonal refrigerator energy behavior.",
-    "domain_area": "kitchen_iot",
-    "provenance": "D",
-    "confidence": 0.93,
-    "importance": 0.88,
-    "created_at": "2026-02-14T09:10:00Z",
-    "facts": [
-      "Average daily consumption is tracked per cooling mode.",
-      "Door-open frequency strongly impacts compressor cycles."
-    ],
-    "aliases": ["energy profile", "fridge power model"],
-    "sources": [
-      "CONFLUENCE https://confluence.abc/display/FRIDGE/energy-model v3",
-      "LOG telemetry/fridge-eu-17.log 2026-02-01..2026-02-07",
-      "CONVERSATION 2026-02-12 ai chat with maintenance lead"
-    ]
+    "script": "fridge node add concept:fridge_energy_profile --type Concept --name \"Fridge Energy Profile\" --description \"Model of daily and seasonal refrigerator energy behavior.\" --domain-area kitchen_iot --provenance D --confidence 0.93 --importance 0.88 --created-at 2026-02-14T09:10:00Z --fact \"Average daily consumption is tracked per cooling mode.\" --fact \"Door-open frequency strongly impacts compressor cycles.\" --alias \"energy profile\" --alias \"fridge power model\" --source \"CONFLUENCE https://confluence.abc/display/FRIDGE/energy-model v3\" --source \"LOG telemetry/fridge-eu-17.log 2026-02-01..2026-02-07\" --source \"CONVERSATION 2026-02-12 ai chat with maintenance lead\""
   }
 }
 ```
@@ -103,13 +84,9 @@ Use these as reference patterns for high-quality, traceable graph data.
 
 ```json
 {
-  "tool": "kg-mcp_kg_edge_add",
+  "tool": "kg",
   "arguments": {
-    "graph": "fridge",
-    "source_id": "process:compressor_control_loop",
-    "relation": "TRIGGERS",
-    "target_id": "process:auto_defrost_scheduler",
-    "detail": "Defrost scheduler is triggered after compressor runtime threshold is exceeded."
+    "script": "fridge edge add process:compressor_control_loop TRIGGERS process:auto_defrost_scheduler --detail \"Defrost scheduler is triggered after compressor runtime threshold is exceeded.\""
   }
 }
 ```
@@ -118,25 +95,18 @@ Use these as reference patterns for high-quality, traceable graph data.
 
 ```json
 {
-  "tool": "kg-mcp_kg_node_find",
+  "tool": "kg",
   "arguments": {
-    "graph": "fridge",
-    "queries": ["energy profile compressor defrost", "kitchen_iot"],
-    "full": true,
-    "output_size": 1200,
-    "skip_feedback": true
+    "script": "fridge node find \"energy profile compressor defrost\" \"kitchen_iot\" --full --output-size 1200 --skip-feedback"
   }
 }
 ```
 
 ```json
 {
-  "tool": "kg-mcp_kg_node_get",
+  "tool": "kg",
   "arguments": {
-    "graph": "fridge",
-    "id": "concept:fridge_energy_profile",
-    "full": true,
-    "output_size": 1200
+    "script": "fridge node get concept:fridge_energy_profile --full --output-size 1200"
   }
 }
 ```
@@ -149,53 +119,19 @@ Use these as reference patterns for high-quality, traceable graph data.
 - Attach multiple `sources[]` with explicit, auditable context.
 - Use edge `detail` to explain causal or operational meaning, not just restate relation.
 
-# 3. Tools (Current Only)
+# 3. Tools (3)
 
-Use these tools for active kg-mcp workflows (deprecated tools intentionally omitted).
+All kg operations are exposed through 3 MCP tools. Call `kg_help <domain>` for detailed syntax and examples before unfamiliar operations.
 
-### Core Execution
-
-| Tool | Purpose | Typical Use |
+| Tool | Purpose | Parameters |
 | --- | --- | --- |
-| `kg-mcp_kg` | Run one or more kg commands as a script. | Best default for multi-step flows: find/get/update/feedback in one call. |
-| `kg-mcp_kg_command` | Run a single kg CLI command via args array. | Good for one-shot operations when scripting is not needed. |
-
-### Graph Metadata and Quality
-
-| Tool | Purpose | Typical Use |
-| --- | --- | --- |
-| `kg-mcp_kg_schema` | Return valid node types, relations, ID rules, edge rules. | Validate structure expectations before writes. |
-| `kg-mcp_kg_stats` | Return graph usage and structure statistics. | Fast graph overview and trend checks. |
-| `kg-mcp_kg_gap_summary` | Return top quality gaps (facts, descriptions, edge gaps, duplicates). | Prioritize cleanup and enrichment work. |
-| `kg-mcp_kg_feedback_batch` | Submit relevance feedback (`YES`/`NO`/`PICK`). | Close the feedback loop after find/get calls. |
-
-### Graph Lifecycle
-
-| Tool | Purpose | Typical Use |
-| --- | --- | --- |
-| `kg-mcp_kg_create_graph` | Create a new graph. | Bootstrap a new domain graph (for example `fridge`). |
-
-### Node Operations
-
-| Tool | Purpose | Typical Use |
-| --- | --- | --- |
-| `kg-mcp_kg_node_find` | Search nodes using one or more queries. | Discovery, candidate collection, semantic lookup. |
-| `kg-mcp_kg_node_get` | Fetch a node by ID (with optional full payload). | Detailed inspection before modify/edge updates. |
-| `kg-mcp_kg_node_add` | Add one node. | High-quality single node creation. |
-| `kg-mcp_kg_node_add_batch` | Add many nodes in one request. | Imports and large structured updates. |
-| `kg-mcp_kg_node_modify` | Modify node fields. | Metadata refinement and corrections. |
-| `kg-mcp_kg_node_remove` | Remove a node and incident edges. | Controlled cleanup of obsolete entities. |
-
-### Edge Operations
-
-| Tool | Purpose | Typical Use |
-| --- | --- | --- |
-| `kg-mcp_kg_edge_add` | Add one edge between nodes. | Express explicit dependency/causality relations. |
-| `kg-mcp_kg_edge_add_batch` | Add many edges (with optional `dry_run`). | Bulk relation modeling and migration workflows. |
-| `kg-mcp_kg_edge_remove` | Remove an edge between nodes. | Remove stale or invalid relationships. |
+| `kg` | Execute one or more kg commands: find/get nodes, CRUD nodes/edges, graph create/stats, audit, feedback. | `script` (string), `mode?` (`best_effort`\|`strict`), `debug?` (bool) |
+| `kg_help` | Return detailed manual with examples for a domain. | `domain` (string): `node`, `edge`, `graph`, `schema`, `kql`, `feedback`, `batch`, `script`, `all` |
+| `kg_schema` | Return valid node types, relations, ID prefixes, and edge rules. | (none) |
 
 ### Recommended Defaults
 
-- Prefer `kg-mcp_kg` for end-to-end workflows.
-- Use `kg-mcp_kg_node_find` + `kg-mcp_kg_node_get` before any destructive update.
-- Use batch tools for volume changes; use single-item tools for precise edits.
+- Start with `kg_schema()` to discover valid types/relations.
+- Call `kg_help(domain="node")` or `kg_help(domain="edge")` before unfamiliar operations.
+- Use `kg` for all execution. Multi-step flows (find → feedback → get) go in one script call.
+- Inspect `structured_content.requires_feedback` after `node find`/`node get`; submit feedback via `uid=...` lines in the next `kg` call.

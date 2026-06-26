@@ -9,9 +9,9 @@ If you are new to MCP, start with `kg-mcp` as a local stdio process (no network 
 1. Ensure `kg-mcp` is installed and runnable.
 2. Add it to your MCP client config.
 3. Restart the client and verify tools appear.
-4. Run a simple tool call (`kg_node_find`, `kg_node_get`, or `kg`).
+4. Run a simple tool call: `kg_schema` to inspect valid types/relations, `kg_help` with a domain for examples, then `kg` to execute.
 
-For edge work, start with `kg_schema` so you can see valid relations, allowed source/target types, and ID prefixes before mutating the graph.
+Start with `kg_schema` so you can see valid relations, allowed source/target types, and ID prefixes before mutating the graph. Call `kg_help <domain>` (domains: `node`, `edge`, `graph`, `schema`, `kql`, `feedback`, `batch`, `script`, `all`) for detailed syntax and examples.
 
 Example first command through MCP shell tool:
 
@@ -67,13 +67,15 @@ Installation stays the same:
 - `install.sh`
 - local `cargo run --bin kg-mcp` during development
 
-## Tools
+## Tools (3)
 
-### Shell-like
+All kg operations are exposed through **3 tools**. The `kg` script runner handles node/edge CRUD, graph management, stats, audit, and feedback. `kg_help` provides on-demand documentation with examples. `kg_schema` returns the live schema.
 
-- `kg` — run multiple commands separated by `;` or newlines
+### `kg` — Script runner
 
-Good for compact read workflows, for example:
+Execute one or more kg commands separated by `;` or newlines. Lines starting with `#` are comments. Feedback lines (`uid=...`) are buffered and flushed before the next non-feedback command.
+
+Parameters: `script` (string), `mode` (`best_effort`|`strict`, default `best_effort`), `debug` (bool, optional).
 
 ```text
 graph fridge node find refrigerator --output-size 1200; uid=abc123 YES; graph fridge node get concept:refrigerator --full
@@ -81,68 +83,35 @@ graph fridge node find refrigerator --output-size 1200; uid=abc123 YES; graph fr
 
 The shell tool passes normal CLI flags through unchanged. For read/search flows it mirrors the CLI surface for `node find`, `node get`, and `kql`, including `--output-size`, `--limit`, `--mode`, and `--full`.
 
-### Core tools
+### `kg_help` — Dynamic documentation
 
-- `kg_command` — run one CLI command by passing argv-style arguments
-- `kg_create_graph` — create a new graph
-- `kg_schema` — inspect valid node types, relations, ID prefixes, and edge rules
-- `kg_stats` — graph statistics
-- `kg_gap_summary` — run a bundled quality sweep for collaborative cleanup
+Returns detailed manual with examples for a given domain. Use this before unfamiliar operations.
 
-### Nodes
+Parameters: `domain` (string).
 
-- `kg_node_find` — search nodes by query, with `limit`, `mode`, `full`, and `output_size`; feature nodes are always included
-- `kg_node_get` — get node by ID, with `full` and `output_size`; feature nodes are always included
-- `kg_node_add` — create single node
-- `kg_node_add_batch` — create multiple nodes, with `mode=atomic|best_effort` and optional `on_conflict=skip`
-- `kg_node_modify` — update node fields
-- `kg_node_remove` — delete node
+| Domain | Covers |
+|--------|--------|
+| `node` | find, get, add, modify, remove, batch add — field reference, source formats, provenance |
+| `edge` | add, batch add (dry-run), remove — relation dictionary |
+| `graph` | create, stats, check, audit, quality, gap-summary |
+| `schema` | node types, ID format, edge rules, G-prefix conventions |
+| `kql` | KQL query language syntax and examples |
+| `feedback` | YES/NO/NIL/PICK lines, passive feedback, feedback-required flow |
+| `batch` | node/edge batch modes (atomic vs best_effort), on_conflict=skip, dry-run |
+| `script` | multi-command syntax, separators, comments, mode selection |
+| `all` | complete reference (all domains combined) |
 
-### Edges
+### `kg_schema` — Live schema
 
-- `kg_edge_add` — create edge
-- `kg_edge_add_batch` — create multiple edges, with `mode=atomic|best_effort` and optional `dry_run=true` preflight
-- `kg_edge_remove` — delete edge
+Returns valid node types, relations, ID prefixes, and edge rules. No parameters.
 
-Example batch preflight:
+### Usage flow
 
-```json
-{
-  "graph": "fridge",
-  "mode": "best_effort",
-  "dry_run": true,
-  "edges": [
-    {
-      "source_id": "process:defrost",
-      "relation": "AVAILABLE_IN",
-      "target_id": "interface:smart_api",
-      "detail": "Proces rozmrazania dostepny z API"
-    }
-  ]
-}
 ```
-
-### Graph
-
-- `kg_check` — deprecated compatibility tool for integrity validation
-- `kg_audit` — deprecated compatibility tool for deep audit (errors/warnings)
-- `kg_quality` — deprecated compatibility tool for quality subcommands
-- `kg_export_html` — deprecated compatibility tool for HTML export
-
-### Feedback
-
-- `kg_feedback_batch` — batch feedback
-
-For `kg_node_find` and `kg_node_get`, inspect `structured_content.requires_feedback` and send follow-up feedback with `kg_feedback_batch` before continuing when requested.
-
-### Access
-
-- `kg_access_log` — deprecated compatibility tool for search access history
-- `kg_access_stats` — deprecated compatibility tool for access statistics
-
-### Passthrough
-
-- `kg_command` — run arbitrary kg CLI commands
+kg_schema()                              → discover valid types/relations
+kg_help(domain="node")                   → learn node CRUD with examples
+kg(script="fridge node find 'compressor'") → execute
+```
 
 ## Resources
 
@@ -158,7 +127,7 @@ For `kg_node_find` and `kg_node_get`, inspect `structured_content.requires_feedb
 ## Common issues
 
 - Tools not visible in client: verify command path and restart the client process.
-- Feedback-required flow in some operations: follow tool response metadata and submit required feedback through `kg_feedback_batch` before continuing.
+- Feedback-required flow in some operations: follow `structured_content.requires_feedback` in `kg` responses and submit feedback via `uid=...` lines in the next `kg` script call (see `kg_help domain="feedback"`).
 - Unexpected graph format behavior: check whether runtime is using default `.kg` mode or `--legacy` JSON mode.
 
 See also: [`docs/troubleshooting.md`](troubleshooting.md)
