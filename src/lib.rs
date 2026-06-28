@@ -30,6 +30,7 @@ mod schema;
 mod scoring;
 mod storage;
 mod text_norm;
+mod time_util;
 mod validate;
 mod vectors;
 mod graph_diff;

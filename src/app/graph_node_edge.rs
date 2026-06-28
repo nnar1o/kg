@@ -6,6 +6,7 @@ use anyhow::{Result, anyhow, bail};
 use csv::ReaderBuilder;
 
 use crate::access_log;
+use crate::time_util;
 use crate::cli::{
     AddEdgeArgs, AddEdgeBatchArgs, AddNodeArgs, EdgeCommand, ModifyNodeArgs, NodeCommand,
     RemoveEdgeArgs,
@@ -240,7 +241,7 @@ pub(crate) fn execute_node(
             let domain_area = domain_area.unwrap_or_else(|| node_type.to_ascii_lowercase());
             let provenance = provenance.unwrap_or_else(|| "U".to_owned());
             let confidence = confidence.or(Some(0.8));
-            let created_at = created_at.unwrap_or_else(current_utc_timestamp);
+            let created_at = created_at.unwrap_or_else(time_util::utc_timestamp);
             let source = if source.is_empty() {
                 vec!["DOC kg graph node add".to_owned()]
             } else {
@@ -464,60 +465,6 @@ pub(crate) fn execute_node(
             Ok(format!("- node {id} ({removed_edges} edges removed)\n"))
         }
     }
-}
-
-fn current_utc_timestamp() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    let remaining = secs % 86400;
-    let hours = remaining / 3600;
-    let minutes = (remaining % 3600) / 60;
-    let seconds = remaining % 60;
-
-    let days_since_epoch = secs / 86400;
-    let (year, month, day) = days_to_date(days_since_epoch as i64);
-
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
-        year, month, day, hours, minutes, seconds
-    )
-}
-
-fn days_to_date(days: i64) -> (i64, u32, u32) {
-    let mut year = 1970;
-    let mut remaining_days = days;
-
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-
-    let month_days = if is_leap_year(year) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1;
-    for &days_in_month in &month_days {
-        if remaining_days < days_in_month as i64 {
-            break;
-        }
-        remaining_days -= days_in_month as i64;
-        month += 1;
-    }
-
-    (year, month, (remaining_days + 1) as u32)
-}
-
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 pub(crate) fn execute_edge(

@@ -58,15 +58,31 @@ pub fn import_csv_into_graph(
     Ok(summary)
 }
 
-fn read_nodes_csv(path: &str) -> Result<Vec<Node>> {
+fn read_csv_records(
+    path: &str,
+    entity: &str,
+) -> Result<(csv::StringRecord, Vec<(usize, csv::StringRecord)>)> {
     let mut reader = ReaderBuilder::new()
         .trim(csv::Trim::All)
         .from_path(path)
-        .with_context(|| format!("failed to open nodes CSV: {path}"))?;
+        .with_context(|| format!("failed to open {} CSV: {path}", entity))?;
     let headers = reader.headers()?.clone();
+    let records = reader
+        .records()
+        .enumerate()
+        .map(|(idx, r)| {
+            let record =
+                r.with_context(|| format!("failed to read {} CSV row {}", entity, idx + 1))?;
+            Ok((idx, record))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((headers, records))
+}
+
+fn read_nodes_csv(path: &str) -> Result<Vec<Node>> {
+    let (headers, records) = read_csv_records(path, "nodes")?;
     let mut nodes = Vec::new();
-    for (idx, record) in reader.records().enumerate() {
-        let record = record.with_context(|| format!("failed to read nodes CSV row {}", idx + 1))?;
+    for (idx, record) in records {
         let mut node = Node {
             id: field(&headers, &record, "id")?,
             r#type: field(&headers, &record, "type")?,
@@ -98,14 +114,9 @@ fn read_nodes_csv(path: &str) -> Result<Vec<Node>> {
 }
 
 fn read_edges_csv(path: &str) -> Result<Vec<Edge>> {
-    let mut reader = ReaderBuilder::new()
-        .trim(csv::Trim::All)
-        .from_path(path)
-        .with_context(|| format!("failed to open edges CSV: {path}"))?;
-    let headers = reader.headers()?.clone();
+    let (headers, records) = read_csv_records(path, "edges")?;
     let mut edges = Vec::new();
-    for (idx, record) in reader.records().enumerate() {
-        let record = record.with_context(|| format!("failed to read edges CSV row {}", idx + 1))?;
+    for (idx, record) in records {
         let source_id = field(&headers, &record, "source_id")?;
         let relation = field(&headers, &record, "relation")?;
         let target_id = field(&headers, &record, "target_id")?;
@@ -127,14 +138,9 @@ fn read_edges_csv(path: &str) -> Result<Vec<Edge>> {
 }
 
 fn read_notes_csv(path: &str) -> Result<Vec<Note>> {
-    let mut reader = ReaderBuilder::new()
-        .trim(csv::Trim::All)
-        .from_path(path)
-        .with_context(|| format!("failed to open notes CSV: {path}"))?;
-    let headers = reader.headers()?.clone();
+    let (headers, records) = read_csv_records(path, "notes")?;
     let mut notes = Vec::new();
-    for (idx, record) in reader.records().enumerate() {
-        let record = record.with_context(|| format!("failed to read notes CSV row {}", idx + 1))?;
+    for (idx, record) in records {
         let id = field(&headers, &record, "id")?;
         let node_id = field(&headers, &record, "node_id")?;
         if id.is_empty() || node_id.is_empty() {
@@ -155,29 +161,51 @@ fn read_notes_csv(path: &str) -> Result<Vec<Note>> {
     Ok(notes)
 }
 
+macro_rules! merge_items {
+    ($graph:expr, $items:expr, $strategy:expr, $summary:expr,
+     $storage:ident,
+     $added:ident, $updated:ident, $skipped:ident,
+     $entity:expr,
+     $find:expr,
+     $key_of:expr,
+     $validate:expr) =>
+    {
+        let prefer_new = $strategy.is_prefer_new();
+        for item in $items {
+            let key = $key_of(&item);
+            let idx = $find(&item);
+            if let Some(idx) = idx {
+                if prefer_new {
+                    $graph.$storage[idx] = item;
+                    $summary.$updated += 1;
+                } else {
+                    if differs(&$graph.$storage[idx], &item) {
+                        $summary.conflicts.push(format!("{} {}",
+                            $entity, key));
+                    }
+                    $summary.$skipped += 1;
+                }
+            } else if $validate(&item) {
+                $graph.$storage.push(item);
+                $summary.$added += 1;
+            } else {
+                $summary.$skipped += 1;
+            }
+        }
+    };
+}
+
 fn merge_nodes(
     graph: &mut GraphFile,
     nodes: Vec<Node>,
     strategy: CsvStrategy,
     summary: &mut CsvImportSummary,
 ) -> Result<()> {
-    let prefer_new = strategy.is_prefer_new();
-    for node in nodes {
-        if let Some(existing) = graph.node_by_id_mut(&node.id) {
-            if prefer_new {
-                *existing = node;
-                summary.nodes_updated += 1;
-            } else {
-                if differs(existing, &node) {
-                    summary.conflicts.push(format!("node {}", node.id));
-                }
-                summary.nodes_skipped += 1;
-            }
-        } else {
-            graph.nodes.push(node);
-            summary.nodes_added += 1;
-        }
-    }
+    merge_items!(graph, nodes, strategy, summary,
+        nodes, nodes_added, nodes_updated, nodes_skipped, "node",
+        |item: &Node| graph.nodes.iter().position(|n| n.id == item.id),
+        |item: &Node| item.id.clone(),
+        |_: &Node| true);
     Ok(())
 }
 
@@ -187,34 +215,16 @@ fn merge_edges(
     strategy: CsvStrategy,
     summary: &mut CsvImportSummary,
 ) -> Result<()> {
-    let prefer_new = strategy.is_prefer_new();
-    for edge in edges {
-        let key = format!("{} {} {}", edge.source_id, edge.relation, edge.target_id);
-        let pos = graph
-            .edges
-            .iter()
-            .position(|e| format!("{} {} {}", e.source_id, e.relation, e.target_id) == key);
-        if let Some(idx) = pos {
-            if prefer_new {
-                graph.edges[idx] = edge;
-                summary.edges_updated += 1;
-            } else {
-                if differs(&graph.edges[idx], &edge) {
-                    summary.conflicts.push(format!("edge {key}"));
-                }
-                summary.edges_skipped += 1;
-            }
-        } else {
-            if graph.node_by_id(&edge.source_id).is_none()
-                || graph.node_by_id(&edge.target_id).is_none()
-            {
-                summary.edges_skipped += 1;
-                continue;
-            }
-            graph.edges.push(edge);
-            summary.edges_added += 1;
-        }
-    }
+    merge_items!(graph, edges, strategy, summary,
+        edges, edges_added, edges_updated, edges_skipped, "edge",
+        |item: &Edge| graph.edges.iter().position(|e| {
+            e.source_id == item.source_id
+                && e.relation == item.relation
+                && e.target_id == item.target_id
+        }),
+        |item: &Edge| format!("{} {} {}", item.source_id, item.relation, item.target_id),
+        |item: &Edge| graph.node_by_id(&item.source_id).is_some()
+            && graph.node_by_id(&item.target_id).is_some());
     Ok(())
 }
 
@@ -224,28 +234,11 @@ fn merge_notes(
     strategy: CsvStrategy,
     summary: &mut CsvImportSummary,
 ) -> Result<()> {
-    let prefer_new = strategy.is_prefer_new();
-    for note in notes {
-        let pos = graph.notes.iter().position(|n| n.id == note.id);
-        if let Some(idx) = pos {
-            if prefer_new {
-                graph.notes[idx] = note;
-                summary.notes_updated += 1;
-            } else {
-                if differs(&graph.notes[idx], &note) {
-                    summary.conflicts.push(format!("note {}", note.id));
-                }
-                summary.notes_skipped += 1;
-            }
-        } else {
-            if graph.node_by_id(&note.node_id).is_none() {
-                summary.notes_skipped += 1;
-                continue;
-            }
-            graph.notes.push(note);
-            summary.notes_added += 1;
-        }
-    }
+    merge_items!(graph, notes, strategy, summary,
+        notes, notes_added, notes_updated, notes_skipped, "note",
+        |item: &Note| graph.notes.iter().position(|n| n.id == item.id),
+        |item: &Note| item.id.clone(),
+        |item: &Note| graph.node_by_id(&item.node_id).is_some());
     Ok(())
 }
 
@@ -307,5 +300,163 @@ fn differs<T: Serialize>(left: &T, right: &T) -> bool {
     match (serde_json::to_value(left), serde_json::to_value(right)) {
         (Ok(l), Ok(r)) => l != r,
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn import_nodes_csv_adds_nodes() {
+        let dir = std::env::temp_dir().join("kg_test_csv_nodes");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("nodes.csv");
+        fs::write(&path, "id,type,name,description\nn:1,Concept,Test,desc\n").unwrap();
+        let mut graph = GraphFile::new("test");
+        let args = CsvImportArgs {
+            nodes_path: Some(path.to_str().unwrap()),
+            edges_path: None,
+            notes_path: None,
+            strategy: CsvStrategy::PreferNew,
+        };
+        let summary = import_csv_into_graph(&mut graph, args).unwrap();
+        assert_eq!(summary.nodes_added, 1);
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.nodes[0].id, "n:1");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_edges_csv_adds_edges() {
+        let dir = std::env::temp_dir().join("kg_test_csv_edges");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("edges.csv");
+        fs::write(&path, "source_id,relation,target_id\nn:a,GRELATES,n:b\n").unwrap();
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(Node {
+            id: "n:a".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "A".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        graph.nodes.push(Node {
+            id: "n:b".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "B".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        let args = CsvImportArgs {
+            nodes_path: None,
+            edges_path: Some(path.to_str().unwrap()),
+            notes_path: None,
+            strategy: CsvStrategy::PreferNew,
+        };
+        let summary = import_csv_into_graph(&mut graph, args).unwrap();
+        assert_eq!(summary.edges_added, 1);
+        assert_eq!(graph.edges.len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_notes_csv_adds_notes() {
+        let dir = std::env::temp_dir().join("kg_test_csv_notes");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("notes.csv");
+        fs::write(&path, "id,node_id,body\nnote:1,n:a,hello\n").unwrap();
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(Node {
+            id: "n:a".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "A".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        let args = CsvImportArgs {
+            nodes_path: None,
+            edges_path: None,
+            notes_path: Some(path.to_str().unwrap()),
+            strategy: CsvStrategy::PreferNew,
+        };
+        let summary = import_csv_into_graph(&mut graph, args).unwrap();
+        assert_eq!(summary.notes_added, 1);
+        assert_eq!(graph.notes.len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_csv_skips_edges_with_missing_nodes() {
+        let dir = std::env::temp_dir().join("kg_test_csv_skip");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("edges.csv");
+        fs::write(&path, "source_id,relation,target_id\nn:x,GRELATES,n:y\n").unwrap();
+        let mut graph = GraphFile::new("test");
+        let args = CsvImportArgs {
+            nodes_path: None,
+            edges_path: Some(path.to_str().unwrap()),
+            notes_path: None,
+            strategy: CsvStrategy::PreferNew,
+        };
+        let summary = import_csv_into_graph(&mut graph, args).unwrap();
+        assert_eq!(summary.edges_added, 0);
+        assert_eq!(summary.edges_skipped, 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn merge_summary_lines_formats_correctly() {
+        let summary = CsvImportSummary {
+            nodes_added: 2,
+            nodes_updated: 1,
+            nodes_skipped: 0,
+            ..Default::default()
+        };
+        let lines = merge_summary_lines(&summary);
+        assert!(lines[0].contains("+2 ~1 !0"));
+    }
+
+    #[test]
+    fn import_csv_rejects_missing_columns() {
+        let dir = std::env::temp_dir().join("kg_test_csv_bad");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("nodes.csv");
+        fs::write(&path, "bad_column,other\nn:1,val\n").unwrap();
+        let mut graph = GraphFile::new("test");
+        let args = CsvImportArgs {
+            nodes_path: Some(path.to_str().unwrap()),
+            edges_path: None,
+            notes_path: None,
+            strategy: CsvStrategy::PreferNew,
+        };
+        let result = import_csv_into_graph(&mut graph, args);
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_nodes_csv_requires_non_empty_id() {
+        let dir = std::env::temp_dir().join("kg_test_csv_empty_id");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("nodes.csv");
+        fs::write(&path, "id,type,name\n,Concept,Test\n").unwrap();
+        let mut graph = GraphFile::new("test");
+        let args = CsvImportArgs {
+            nodes_path: Some(path.to_str().unwrap()),
+            edges_path: None,
+            notes_path: None,
+            strategy: CsvStrategy::PreferNew,
+        };
+        let result = import_csv_into_graph(&mut graph, args);
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn differs_detects_different_values() {
+        assert!(differs(&"hello", &"world"));
+        assert!(!differs(&42u32, &42u32));
     }
 }

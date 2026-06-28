@@ -103,10 +103,7 @@ pub(crate) fn execute_edge_gaps(graph: &GraphFile, args: &crate::cli::EdgeGapsAr
 
 pub(crate) fn execute_kql(graph: &GraphFile, args: KqlArgs) -> Result<String> {
     if args.json {
-        Ok(
-            serde_json::to_string_pretty(&kql::query(graph, &args.query)?)
-                .unwrap_or_else(|_| "{}".to_owned()),
-        )
+        Ok(serde_json::to_string_pretty(&kql::query(graph, &args.query)?)?)
     } else {
         kql::render_query(graph, &args.query)
     }

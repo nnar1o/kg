@@ -100,3 +100,41 @@ pub(crate) fn render_node_json(node: &Node) -> String {
     let payload = NodeGetResponse { node: node.clone() };
     serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{GraphFile, NodeProperties};
+
+    fn sample_node(id: &str) -> Node {
+        Node {
+            id: id.to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Test".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        }
+    }
+
+    #[test]
+    fn render_node_json_includes_id_and_type() {
+        let json = render_node_json(&sample_node("concept:test"));
+        assert!(json.contains("\"id\": \"concept:test\""));
+        assert!(json.contains("\"type\": \"Concept\""));
+    }
+
+    #[test]
+    fn render_find_json_with_index_empty_result() {
+        let graph = GraphFile::new("test");
+        let json = render_find_json_with_index(&graph, &["nonexistent".to_owned()], 10, false, crate::output::FindMode::Fuzzy, false, None, None);
+        assert!(json.contains("\"total\": 0"));
+        assert!(json.contains("\"nodes\": []"));
+    }
+
+    #[test]
+    fn render_find_json_with_index_multi_query() {
+        let graph = GraphFile::new("test");
+        let json = render_find_json_with_index(&graph, &["a".to_owned(), "b".to_owned()], 5, false, crate::output::FindMode::Fuzzy, false, None, None);
+        assert_eq!(json.matches("\"query\"").count(), 2);
+    }
+}

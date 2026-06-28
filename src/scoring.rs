@@ -9,6 +9,13 @@ use crate::graph::{Edge, EdgeProperties, GraphFile};
 const METADATA_NODE_TYPE: &str = "^";
 use crate::text_norm;
 
+const JACCARD_WEIGHT: f64 = 0.35;
+const CONTAINMENT_WEIGHT: f64 = 0.65;
+const LOUVAIN_MAX_ITERATIONS: usize = 32;
+const MIN_RESOLUTION: f64 = 0.05;
+const EPSILON: f64 = 1e-12;
+const MIN_IDF_VALUE: f64 = 0.05;
+
 pub(crate) struct ScoreAllConfig {
     pub min_desc_len: usize,
     pub desc_weight: f64,
@@ -65,6 +72,9 @@ struct NodeProfile {
     bundle_tokens: HashSet<String>,
 }
 
+/// Compute pairwise similarity scores for all non-metadata nodes in the source graph,
+/// cache the result to disk, and append derived cluster nodes/edges.
+/// Scores are a weighted blend of description-repeat and attribute-bundle similarity.
 pub(crate) fn compute_all_pair_scores_to_cache(
     source_graph: &GraphFile,
     source_path: &Path,
@@ -240,6 +250,11 @@ fn append_cluster_nodes_and_edges(
     clusters.len()
 }
 
+/// Deterministic label-propagation community detection seeded by `seed`.
+/// Each node is initialised with its own unique label; then iteratively every node
+/// adopts the label that maximises the sum of edge scores (raised to `resolution` power)
+/// among its neighbours. The initial processing order is rotated by `seed` for
+/// deterministic variation. Returns a map from node id to community label (usize).
 fn detect_communities(
     node_ids: &[String],
     adjacency: &HashMap<String, Vec<(String, f64)>>,
@@ -260,9 +275,9 @@ fn detect_communities(
     let shift = (seed as usize) % sorted.len();
     let mut order = sorted.clone();
     order.rotate_left(shift);
-    let gamma = resolution.max(0.05);
+    let gamma = resolution.max(MIN_RESOLUTION);
 
-    for _ in 0..32 {
+    for _ in 0..LOUVAIN_MAX_ITERATIONS {
         let mut changed = false;
         for node in &order {
             let neighbors = adjacency.get(node).cloned().unwrap_or_default();
@@ -280,8 +295,8 @@ fn detect_communities(
             let mut best_label = current;
             let mut best_score = *community_weight.get(&current).unwrap_or(&0.0);
             for (label, score) in community_weight {
-                let better = score > best_score + 1e-12
-                    || ((score - best_score).abs() <= 1e-12 && label < best_label);
+                let better = score > best_score + EPSILON
+                    || ((score - best_score).abs() <= EPSILON && label < best_label);
                 if better {
                     best_label = label;
                     best_score = score;
@@ -300,6 +315,8 @@ fn detect_communities(
     labels
 }
 
+/// Returns the median pairwise similarity between `node_id` and its `members`,
+/// considering only the `top_k` strongest edges. The result is clamped to [0, 1].
 fn membership_strength(
     node_id: &str,
     members: &[String],
@@ -432,7 +449,7 @@ fn build_idf(token_sets: &[&HashSet<String>], doc_count: usize) -> HashMap<Strin
     for (token, count) in df {
         let c = count as f64;
         let value = ((n + 1.0) / (c + 1.0)).ln() + 1.0;
-        idf.insert(token, value.max(0.05));
+        idf.insert(token, value.max(MIN_IDF_VALUE));
     }
     idf
 }
@@ -470,13 +487,19 @@ fn overlap_score(left: &HashSet<String>, right: &HashSet<String>) -> f64 {
     let intersect = left.intersection(right).count() as f64;
     let union = left.union(right).count() as f64;
     let min_size = left.len().min(right.len()) as f64;
+    blend_jaccard_containment(intersect, union, min_size)
+}
+
+/// Blend Jaccard similarity and containment (overlap coefficient) into a single score.
+/// `intersect`, `union`, and `min_sum` may be counts or weighted sums.
+fn blend_jaccard_containment(intersect: f64, union: f64, min_sum: f64) -> f64 {
     let jaccard = if union == 0.0 { 0.0 } else { intersect / union };
-    let containment = if min_size == 0.0 {
+    let containment = if min_sum == 0.0 {
         0.0
     } else {
-        intersect / min_size
+        intersect / min_sum
     };
-    clamp_01(0.35 * jaccard + 0.65 * containment)
+    clamp_01(JACCARD_WEIGHT * jaccard + CONTAINMENT_WEIGHT * containment)
 }
 
 fn weighted_overlap_score(
@@ -495,13 +518,7 @@ fn weighted_overlap_score(
     let right_sum: f64 = right.iter().map(weight).sum();
     let min_sum = left_sum.min(right_sum);
 
-    let jaccard = if union == 0.0 { 0.0 } else { intersect / union };
-    let containment = if min_sum == 0.0 {
-        0.0
-    } else {
-        intersect / min_sum
-    };
-    clamp_01(0.35 * jaccard + 0.65 * containment)
+    blend_jaccard_containment(intersect, union, min_sum)
 }
 
 fn weighted_score(

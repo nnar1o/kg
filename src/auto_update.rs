@@ -476,107 +476,53 @@ fn should_skip_directory(path: &Path) -> bool {
     )
 }
 
+const KNOWN_FILENAMES: &[&str] = &[
+    "README",
+    "README.md",
+    "README.markdown",
+    "LICENSE",
+    "COPYING",
+    "CHANGELOG.md",
+    "Cargo.toml",
+    "Cargo.lock",
+    "package.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "package-lock.json",
+    "pyproject.toml",
+    "Pipfile",
+    "Pipfile.lock",
+    "Gemfile",
+    "Gemfile.lock",
+    "Makefile",
+    "CMakeLists.txt",
+    "Dockerfile",
+    "justfile",
+    ".gitignore",
+    ".gitattributes",
+    ".editorconfig",
+];
+
+const KNOWN_EXTENSIONS: &[&str] = &[
+    "md", "markdown", "txt", "rst", "adoc", "json", "yaml", "yml", "toml", "xml", "html", "htm",
+    "css", "scss", "less", "rs", "c", "h", "cc", "cpp", "cxx", "hpp", "java", "kt", "kts", "js",
+    "jsx", "ts", "tsx", "py", "rb", "go", "php", "swift", "scala", "sh", "bash", "zsh", "fish",
+    "sql", "proto", "graphql", "gql", "lua", "cs", "fs", "hs", "ml", "elm", "dart", "pl", "pm",
+    "ex", "exs", "clj", "edn", "r", "ini", "cfg", "conf", "csv", "log", "lock",
+];
+
 fn is_known_scannable_file(path: &Path) -> bool {
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("");
-    matches!(
-        name,
-        "README"
-            | "README.md"
-            | "README.markdown"
-            | "LICENSE"
-            | "COPYING"
-            | "CHANGELOG.md"
-            | "Cargo.toml"
-            | "Cargo.lock"
-            | "package.json"
-            | "pnpm-lock.yaml"
-            | "yarn.lock"
-            | "package-lock.json"
-            | "pyproject.toml"
-            | "Pipfile"
-            | "Pipfile.lock"
-            | "Gemfile"
-            | "Gemfile.lock"
-            | "Makefile"
-            | "CMakeLists.txt"
-            | "Dockerfile"
-            | "justfile"
-            | ".gitignore"
-            | ".gitattributes"
-            | ".editorconfig"
-    ) || matches!(
-        path.extension()
+    KNOWN_FILENAMES.contains(&name)
+        || path
+            .extension()
             .and_then(|value| value.to_str())
             .map(|ext| ext.to_ascii_lowercase())
-            .as_deref(),
-        Some(
-            "md" | "markdown"
-                | "txt"
-                | "rst"
-                | "adoc"
-                | "json"
-                | "yaml"
-                | "yml"
-                | "toml"
-                | "xml"
-                | "html"
-                | "htm"
-                | "css"
-                | "scss"
-                | "less"
-                | "rs"
-                | "c"
-                | "h"
-                | "cc"
-                | "cpp"
-                | "cxx"
-                | "hpp"
-                | "java"
-                | "kt"
-                | "kts"
-                | "js"
-                | "jsx"
-                | "ts"
-                | "tsx"
-                | "py"
-                | "rb"
-                | "go"
-                | "php"
-                | "swift"
-                | "scala"
-                | "sh"
-                | "bash"
-                | "zsh"
-                | "fish"
-                | "sql"
-                | "proto"
-                | "graphql"
-                | "gql"
-                | "lua"
-                | "cs"
-                | "fs"
-                | "hs"
-                | "ml"
-                | "elm"
-                | "dart"
-                | "pl"
-                | "pm"
-                | "ex"
-                | "exs"
-                | "clj"
-                | "edn"
-                | "r"
-                | "ini"
-                | "cfg"
-                | "conf"
-                | "csv"
-                | "log"
-                | "lock"
-        )
-    )
+            .as_deref()
+            .is_some_and(|ext| KNOWN_EXTENSIONS.contains(&ext))
 }
 
 fn upsert_generated_node(
@@ -702,7 +648,7 @@ fn ensure_generated_edge(
         let edge = &mut graph.edges[edge_index_pos];
         if edge.relation != relation {
             edge.relation = relation.to_owned();
-            summary.edges_added += 1;
+            summary.edges_updated += 1;
         }
         return;
     }
@@ -720,7 +666,7 @@ fn ensure_generated_edge(
     }) {
         if edge.relation != relation {
             edge.relation = relation.to_owned();
-            summary.edges_added += 1;
+            summary.edges_updated += 1;
         }
         edge_index.insert(source_id, target_id, relation, edge_index_pos);
         return;

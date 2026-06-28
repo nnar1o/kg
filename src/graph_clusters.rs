@@ -158,3 +158,71 @@ pub(crate) fn render_clusters(graph: &GraphFile, args: &ClustersArgs) -> String 
     }
     format!("{}\n", lines.join("\n"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{Edge, EdgeProperties, GraphFile, Node, NodeProperties};
+
+    fn cluster_graph() -> GraphFile {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(Node {
+            id: "@:cluster_a".to_owned(),
+            r#type: "@".to_owned(),
+            name: "Cluster A".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        graph.nodes.push(Node {
+            id: "n:1".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Normal".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        graph.edges.push(Edge {
+            source_id: "@:cluster_a".to_owned(),
+            relation: "HAS".to_owned(),
+            target_id: "n:1".to_owned(),
+            properties: EdgeProperties {
+                detail: "0.85".to_owned(),
+                ..EdgeProperties::default()
+            },
+        });
+        graph
+    }
+
+    #[test]
+    fn render_clusters_no_clusters() {
+        let graph = GraphFile::new("test");
+        let args = ClustersArgs { limit: 10, json: false, skill: None };
+        let out = render_clusters(&graph, &args);
+        assert_eq!(out, "= clusters (0)\n");
+    }
+
+    #[test]
+    fn render_clusters_with_members() {
+        let graph = cluster_graph();
+        let args = ClustersArgs { limit: 10, json: false, skill: None };
+        let out = render_clusters(&graph, &args);
+        assert!(out.contains("cluster_a"));
+        assert!(out.contains("n:1:0.850"));
+    }
+
+    #[test]
+    fn render_clusters_json_output() {
+        let graph = cluster_graph();
+        let args = ClustersArgs { limit: 10, json: true, skill: None };
+        let out = render_clusters(&graph, &args);
+        assert!(out.contains("\"id\": \"@:cluster_a\""));
+    }
+
+    #[test]
+    fn render_clusters_gardener_mode_emits_actions() {
+        let graph = cluster_graph();
+        let args = ClustersArgs { limit: 10, json: false, skill: Some(crate::cli::ClusterSkill::Gardener) };
+        let out = render_clusters(&graph, &args);
+        assert!(out.contains("action:"));
+        assert!(out.contains("cluster_a"));
+    }
+}

@@ -270,3 +270,191 @@ impl std::fmt::Display for SchemaViolation {
         write!(f, "{}", self.message)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{Node, NodeProperties};
+
+    fn empty_schema() -> GraphSchema {
+        GraphSchema::default()
+    }
+
+    fn sample_node(id: &str, type_: &str) -> Node {
+        Node {
+            id: id.to_owned(),
+            r#type: type_.to_owned(),
+            name: String::new(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        }
+    }
+
+    #[test]
+    fn default_schema_allows_any_node_type() {
+        let schema = empty_schema();
+        let node = sample_node("test:1", "Anything");
+        assert!(schema.validate_node_add(&node).is_empty());
+    }
+
+    #[test]
+    fn schema_rejects_disallowed_node_type() {
+        let schema = GraphSchema {
+            node_types: NodeTypeSchema {
+                allowed: vec!["Concept".to_owned()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let node = sample_node("test:bad", "UnknownType");
+        let violations = schema.validate_node_add(&node);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].kind, ViolationKind::InvalidType);
+    }
+
+    #[test]
+    fn schema_requires_description_field() {
+        let schema = GraphSchema {
+            node_types: NodeTypeSchema {
+                required_fields: HashMap::from([("Concept".to_owned(), vec!["description".to_owned()])]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut node = sample_node("concept:test", "Concept");
+        node.properties.description = "".to_owned();
+        let violations = schema.validate_node_add(&node);
+        assert!(!violations.is_empty());
+        assert_eq!(violations[0].kind, ViolationKind::MissingRequiredField);
+    }
+
+    #[test]
+    fn schema_accepts_node_with_required_description() {
+        let schema = GraphSchema {
+            node_types: NodeTypeSchema {
+                required_fields: HashMap::from([("Concept".to_owned(), vec!["description".to_owned()])]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut node = sample_node("concept:test", "Concept");
+        node.properties.description = "some description".to_owned();
+        assert!(schema.validate_node_add(&node).is_empty());
+    }
+
+    #[test]
+    fn schema_rejects_edge_with_disallowed_relation() {
+        let schema = GraphSchema {
+            relations: RelationsSchema {
+                allowed: vec!["GRELATES".to_owned()],
+            },
+            ..Default::default()
+        };
+        let violations = schema.validate_edge_add("n:a", "Node", "GBAD", "n:b", "Node");
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].kind, ViolationKind::InvalidRelation);
+    }
+
+    #[test]
+    fn schema_accepts_edge_with_allowed_relation() {
+        let schema = GraphSchema {
+            relations: RelationsSchema {
+                allowed: vec!["GRELATES".to_owned()],
+            },
+            ..Default::default()
+        };
+        assert!(schema.validate_edge_add("n:a", "Node", "GRELATES", "n:b", "Node").is_empty());
+    }
+
+    #[test]
+    fn schema_enforces_edge_source_type_rule() {
+        let schema = GraphSchema {
+            edge_rules: vec![EdgeRule {
+                relation: "GCONTAINS".to_owned(),
+                source_types: vec!["Dir".to_owned()],
+                target_types: vec![],
+            }],
+            ..Default::default()
+        };
+        let violations = schema.validate_edge_add("n:a", "File", "GCONTAINS", "n:b", "Dir");
+        assert!(!violations.is_empty());
+        assert_eq!(violations[0].kind, ViolationKind::EdgeTypeConstraint);
+    }
+
+    #[test]
+    fn schema_enforces_edge_target_type_rule() {
+        let schema = GraphSchema {
+            edge_rules: vec![EdgeRule {
+                relation: "GCONTAINS".to_owned(),
+                source_types: vec![],
+                target_types: vec!["File".to_owned()],
+            }],
+            ..Default::default()
+        };
+        let violations = schema.validate_edge_add("n:a", "Dir", "GCONTAINS", "n:b", "Dir");
+        assert!(!violations.is_empty());
+        assert_eq!(violations[0].kind, ViolationKind::EdgeTypeConstraint);
+    }
+
+    #[test]
+    fn schema_rejects_id_prefix_mismatch() {
+        let schema = GraphSchema {
+            id_patterns: IdPatternsSchema {
+                prefix_to_type: HashMap::from([("concept".to_owned(), "Concept".to_owned())]),
+                enforce_prefix_match: true,
+            },
+            ..Default::default()
+        };
+        let node = sample_node("concept:test", "Person");
+        let violations = schema.validate_node_add(&node);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].kind, ViolationKind::IdPrefixMismatch);
+    }
+
+    #[test]
+    fn schema_global_uniqueness_detects_duplicate_ids() {
+        let schema = GraphSchema {
+            uniqueness: vec![UniquenessConstraint {
+                scope: "global".to_owned(),
+                fields: vec!["id".to_owned()],
+            }],
+            ..Default::default()
+        };
+        let nodes = vec![
+            sample_node("dup", "A"),
+            sample_node("dup", "B"),
+        ];
+        let violations = schema.validate_uniqueness(&nodes);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].kind, ViolationKind::UniquenessViolation);
+    }
+
+    #[test]
+    fn schema_global_uniqueness_detects_duplicate_type_name_pairs() {
+        let schema = GraphSchema {
+            uniqueness: vec![UniquenessConstraint {
+                scope: "global".to_owned(),
+                fields: vec!["type".to_owned(), "name".to_owned()],
+            }],
+            ..Default::default()
+        };
+        let mut n1 = sample_node("n:a", "Concept");
+        n1.name = "same".to_owned();
+        let mut n2 = sample_node("n:b", "Concept");
+        n2.name = "same".to_owned();
+        let violations = schema.validate_uniqueness(&[n1, n2]);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].kind, ViolationKind::UniquenessViolation);
+    }
+
+    #[test]
+    fn schema_violation_displays_message() {
+        let v = SchemaViolation {
+            kind: ViolationKind::InvalidType,
+            message: "test message".to_owned(),
+            entity_id: None,
+            entity_type: None,
+        };
+        assert_eq!(format!("{}", v), "test message");
+    }
+}

@@ -131,3 +131,97 @@ impl VectorStore {
         results
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{GraphFile, Node, NodeProperties};
+
+    #[test]
+    fn vector_store_new_creates_empty_store() {
+        let store = VectorStore::new(128);
+        assert_eq!(store.dimension, 128);
+        assert!(store.vectors.is_empty());
+    }
+
+    #[test]
+    fn cosine_similarity_identical_vectors() {
+        let a = vec![1.0, 2.0, 3.0];
+        let score = VectorStore::cosine_similarity(&a, &a);
+        assert!((score - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_vectors() {
+        let a = vec![1.0, 0.0];
+        let b = vec![0.0, 1.0];
+        let score = VectorStore::cosine_similarity(&a, &b);
+        assert!((score - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_similarity_zero_norm_returns_zero() {
+        let a = vec![0.0, 0.0];
+        let b = vec![1.0, 1.0];
+        assert_eq!(VectorStore::cosine_similarity(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn cosine_similarity_different_lengths_returns_zero() {
+        let a = vec![1.0, 2.0];
+        let b = vec![1.0];
+        assert_eq!(VectorStore::cosine_similarity(&a, &b), 0.0);
+    }
+
+    #[test]
+    fn search_filters_by_node_ids_and_min_score() {
+        let mut store = VectorStore::new(2);
+        store.vectors.insert("n:1".to_owned(), vec![1.0, 0.0]);
+        store.vectors.insert("n:2".to_owned(), vec![0.0, 1.0]);
+        store.vectors.insert("n:3".to_owned(), vec![1.0, 1.0]);
+        let query = vec![1.0, 0.0];
+        let results = store.search(&query, &["n:1".to_owned(), "n:2".to_owned()], 10, 0.5);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "n:1");
+    }
+
+    #[test]
+    fn save_and_load_roundtrip() {
+        let dir = std::env::temp_dir().join("kg_test_vectors");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("vectors.json");
+        let mut store = VectorStore::new(3);
+        store.vectors.insert("n:1".to_owned(), vec![1.0, 2.0, 3.0]);
+        store.save(&path).unwrap();
+        let loaded = VectorStore::load(&path).unwrap();
+        assert_eq!(loaded.dimension, 3);
+        assert!(loaded.vectors.contains_key("n:1"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_jsonl_adds_vectors_from_file() {
+        let dir = std::env::temp_dir().join("kg_test_import_jsonl");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("data.jsonl");
+        std::fs::write(&path, r#"{"id":"n:1","vector":[0.1,0.2]}"#).unwrap();
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(Node {
+            id: "n:1".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Test".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        let store = VectorStore::import_jsonl(&path, &graph).unwrap();
+        assert_eq!(store.dimension, 2);
+        assert!(store.vectors.contains_key("n:1"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_returns_error_for_missing_file() {
+        let result = VectorStore::load(Path::new("/nonexistent/vectors.json"));
+        assert!(result.is_err());
+    }
+}

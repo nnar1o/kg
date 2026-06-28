@@ -25,7 +25,9 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
+
+const FEEDBACK_FIND_TTL_MS: u128 = 10 * 60 * 1000;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct KgScriptArgs {
@@ -728,6 +730,109 @@ impl KgMcpServer {
         let mut log_lines = String::new();
         let mut items = Vec::with_capacity(entries.len());
         let mut updates: Vec<FeedbackUpdate> = Vec::new();
+        let mut stats_updates: Vec<(Vec<String>, String)> = Vec::new();
+
+        // Phase 1: brief lock to snapshot finds and cleanup old entries
+        let finds_snapshot: HashMap<String, FindContext> = {
+            let mut state = self.feedback_state.lock().map_err(|_| {
+                McpError::internal_error(
+                    "kg feedback state lock poisoned",
+                    Some(json!({ "reason": "previous tool panicked" })),
+                )
+            })?;
+            cleanup_old_finds(&mut state.finds, now_ms, FEEDBACK_FIND_TTL_MS);
+            state.finds.clone()
+        };
+
+        // Phase 2: process entries without holding the lock
+        for (line, parsed) in entries {
+            let source = if line.contains("passive=1") {
+                "passive"
+            } else {
+                "active"
+            };
+            match parsed {
+                Some(parsed) => {
+                    let (graph, queries, selected) =
+                        if let Some(ctx) = finds_snapshot.get(&parsed.uid) {
+                            let selected = match (parsed.action.as_str(), parsed.pick) {
+                                ("PICK", Some(n)) if n >= 1 && n <= ctx.candidate_ids.len() => {
+                                    Some(ctx.candidate_ids[n - 1].clone())
+                                }
+                                ("YES", None) if ctx.candidate_ids.len() == 1 => {
+                                    Some(ctx.candidate_ids[0].clone())
+                                }
+                                _ => None,
+                            };
+                            (Some(ctx.graph.clone()), Some(ctx.queries.clone()), selected)
+                        } else {
+                            (None, None, None)
+                        };
+
+                    let graph_s = graph.clone().unwrap_or_else(|| "-".to_owned());
+                    let queries_v = queries.clone().unwrap_or_default();
+                    let selected_s = selected.clone().unwrap_or_else(|| "-".to_owned());
+                    let uid = parsed.uid.clone();
+                    let action = parsed.action.clone();
+                    let delta = feedback_delta(parsed.action.as_str());
+                    let pick = parsed.pick;
+
+                    stats_updates.push((queries_v.clone(), action.clone()));
+
+                    let log_line = format!(
+                        "ts_ms={}\tuid={}\taction={}\tpick={}\tselected={}\tgraph={}\tqueries={}\tsource={}\n",
+                        now_ms,
+                        uid,
+                        action,
+                        parsed
+                            .pick
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "-".to_owned()),
+                        selected_s,
+                        graph_s,
+                        queries_v.join(" | ").replace('\t', " "),
+                        source,
+                    );
+                    log_lines.push_str(&log_line);
+
+                    items.push(json!({
+                        "line": line,
+                        "status": "ok",
+                        "uid": uid,
+                        "action": action.clone(),
+                        "pick": pick,
+                        "selected": selected_s,
+                        "graph": graph_s,
+                        "queries": queries_v,
+                        "source": source,
+                    }));
+
+                    if let (Some(graph), Some(selected), Some(delta)) = (graph, selected, delta)
+                    {
+                        if !graph.is_empty() && graph != "-" {
+                            let index = items.len().saturating_sub(1);
+                            updates.push(FeedbackUpdate {
+                                item_index: index,
+                                graph,
+                                node_id: selected,
+                                action,
+                                delta,
+                                ts_ms: now_ms,
+                            });
+                        }
+                    }
+                }
+                None => {
+                    items.push(json!({
+                        "line": line,
+                        "status": "error",
+                        "error": "invalid feedback line",
+                    }));
+                }
+            }
+        }
+
+        // Phase 3: re-acquire lock briefly to update feedback stats
         {
             let mut state = self.feedback_state.lock().map_err(|_| {
                 McpError::internal_error(
@@ -735,93 +840,8 @@ impl KgMcpServer {
                     Some(json!({ "reason": "previous tool panicked" })),
                 )
             })?;
-            cleanup_old_finds(&mut state.finds, now_ms, 10 * 60 * 1000);
-
-            for (line, parsed) in entries {
-                let source = if line.contains("passive=1") {
-                    "passive"
-                } else {
-                    "active"
-                };
-                match parsed {
-                    Some(parsed) => {
-                        let (graph, queries, selected) =
-                            if let Some(ctx) = state.finds.get(&parsed.uid) {
-                                let selected = match (parsed.action.as_str(), parsed.pick) {
-                                    ("PICK", Some(n)) if n >= 1 && n <= ctx.candidate_ids.len() => {
-                                        Some(ctx.candidate_ids[n - 1].clone())
-                                    }
-                                    ("YES", None) if ctx.candidate_ids.len() == 1 => {
-                                        Some(ctx.candidate_ids[0].clone())
-                                    }
-                                    _ => None,
-                                };
-                                (Some(ctx.graph.clone()), Some(ctx.queries.clone()), selected)
-                            } else {
-                                (None, None, None)
-                            };
-
-                        let graph_s = graph.clone().unwrap_or_else(|| "-".to_owned());
-                        let queries_v = queries.clone().unwrap_or_default();
-                        let selected_s = selected.clone().unwrap_or_else(|| "-".to_owned());
-                        let uid = parsed.uid.clone();
-                        let action = parsed.action.clone();
-                        let delta = feedback_delta(parsed.action.as_str());
-                        let pick = parsed.pick;
-
-                        update_feedback_stats(&mut state, &queries_v, &action);
-
-                        let log_line = format!(
-                            "ts_ms={}\tuid={}\taction={}\tpick={}\tselected={}\tgraph={}\tqueries={}\tsource={}\n",
-                            now_ms,
-                            uid,
-                            action,
-                            parsed
-                                .pick
-                                .map(|n| n.to_string())
-                                .unwrap_or_else(|| "-".to_owned()),
-                            selected_s,
-                            graph_s,
-                            queries_v.join(" | ").replace('\t', " "),
-                            source,
-                        );
-                        log_lines.push_str(&log_line);
-
-                        items.push(json!({
-                            "line": line,
-                            "status": "ok",
-                            "uid": uid,
-                            "action": action.clone(),
-                            "pick": pick,
-                            "selected": selected_s,
-                            "graph": graph_s,
-                            "queries": queries_v,
-                            "source": source,
-                        }));
-
-                        if let (Some(graph), Some(selected), Some(delta)) = (graph, selected, delta)
-                        {
-                            if !graph.is_empty() && graph != "-" {
-                                let index = items.len().saturating_sub(1);
-                                updates.push(FeedbackUpdate {
-                                    item_index: index,
-                                    graph,
-                                    node_id: selected,
-                                    action,
-                                    delta,
-                                    ts_ms: now_ms,
-                                });
-                            }
-                        }
-                    }
-                    None => {
-                        items.push(json!({
-                            "line": line,
-                            "status": "error",
-                            "error": "invalid feedback line",
-                        }));
-                    }
-                }
+            for (queries, action) in &stats_updates {
+                update_feedback_stats(&mut state, queries, action);
             }
         }
 
@@ -936,7 +956,7 @@ impl KgMcpServer {
                     Some(json!({ "reason": "previous tool panicked" })),
                 )
             })?;
-            cleanup_old_finds(&mut state.finds, Self::now_ms(), 10 * 60 * 1000);
+            cleanup_old_finds(&mut state.finds, Self::now_ms(), FEEDBACK_FIND_TTL_MS);
             state.finds.insert(
                 uid.clone(),
                 FindContext {
@@ -1055,7 +1075,7 @@ impl KgMcpServer {
                     Some(json!({ "reason": "previous tool panicked" })),
                 )
             })?;
-            cleanup_old_finds(&mut state.finds, Self::now_ms(), 10 * 60 * 1000);
+            cleanup_old_finds(&mut state.finds, Self::now_ms(), FEEDBACK_FIND_TTL_MS);
             state.finds.insert(
                 uid.clone(),
                 FindContext {
@@ -1236,27 +1256,13 @@ impl KgMcpServer {
                 match result {
                     Ok(tool_result) => {
                         let stdout = Self::render_text_content(&tool_result);
-                        output.push_str("> ");
-                        output.push_str(trimmed);
-                        output.push('\n');
-                        output.push_str(&stdout);
-                        steps.push(json!({
-                            "cmd": trimmed,
-                            "kind": "kg",
-                            "ok": true,
-                            "stdout": stdout,
-                            "requires_feedback": tool_result
-                                .structured_content
-                                .as_ref()
-                                .and_then(|v| v.get("requires_feedback"))
-                                .cloned(),
-                        }));
-                        if let Some(req) = tool_result
+                        let req = tool_result
                             .structured_content
                             .as_ref()
                             .and_then(|v| v.get("requires_feedback"))
-                            .cloned()
-                        {
+                            .cloned();
+                        push_command_step(&mut output, &mut steps, trimmed, &stdout, req.clone());
+                        if let Some(req) = req {
                             if req
                                 .get("mode")
                                 .and_then(|v| v.as_str())
@@ -1340,27 +1346,13 @@ impl KgMcpServer {
                     match result {
                         Ok(tool_result) => {
                             let stdout = Self::render_text_content(&tool_result);
-                            output.push_str("> ");
-                            output.push_str(trimmed);
-                            output.push('\n');
-                            output.push_str(&stdout);
-                            steps.push(json!({
-                                "cmd": trimmed,
-                                "kind": "kg",
-                                "ok": true,
-                                "stdout": stdout,
-                                "requires_feedback": tool_result
-                                    .structured_content
-                                    .as_ref()
-                                    .and_then(|v| v.get("requires_feedback"))
-                                    .cloned(),
-                            }));
-                            if let Some(req) = tool_result
+                            let req = tool_result
                                 .structured_content
                                 .as_ref()
                                 .and_then(|v| v.get("requires_feedback"))
-                                .cloned()
-                            {
+                                .cloned();
+                            push_command_step(&mut output, &mut steps, trimmed, &stdout, req.clone());
+                            if let Some(req) = req {
                                 requires_feedback.push(req);
                             }
                         }
@@ -1392,16 +1384,7 @@ impl KgMcpServer {
             match self.execute_kg_for("kg", args.clone(), request_debug) {
                 Ok(tool_result) => {
                     let stdout = Self::render_text_content(&tool_result);
-                    output.push_str("> ");
-                    output.push_str(trimmed);
-                    output.push('\n');
-                    output.push_str(&stdout);
-                    steps.push(json!({
-                        "cmd": trimmed,
-                        "kind": "kg",
-                        "ok": true,
-                        "stdout": stdout,
-                    }));
+                    push_command_step(&mut output, &mut steps, trimmed, &stdout, None);
                 }
                 Err(err) => {
                     if mode == "strict" {
@@ -2422,6 +2405,29 @@ fn parse_feedback_line(line: &str) -> Option<ParsedFeedback> {
 
 fn cleanup_old_finds(finds: &mut HashMap<String, FindContext>, now_ms: u128, ttl_ms: u128) {
     finds.retain(|_, ctx| now_ms.saturating_sub(ctx.created_at_ms) <= ttl_ms);
+}
+
+fn push_command_step(
+    output: &mut String,
+    steps: &mut Vec<Value>,
+    command: &str,
+    stdout: &str,
+    requires_feedback: Option<Value>,
+) {
+    output.push_str("> ");
+    output.push_str(command);
+    output.push('\n');
+    output.push_str(stdout);
+    let mut entry = json!({
+        "cmd": command,
+        "kind": "kg",
+        "ok": true,
+        "stdout": stdout,
+    });
+    if let Some(rf) = requires_feedback {
+        entry["requires_feedback"] = rf;
+    }
+    steps.push(entry);
 }
 
 #[cfg(test)]

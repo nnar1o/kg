@@ -66,11 +66,12 @@ pub(crate) struct GraphDiffResponse {
     changed_notes: Vec<EntityDiff>,
 }
 
-pub(crate) fn render_graph_diff_json_from_files(
+fn render_graph_diff_inner(
     left: &str,
     right: &str,
     left_graph: &GraphFile,
     right_graph: &GraphFile,
+    json: bool,
 ) -> String {
     use std::collections::{HashMap, HashSet};
 
@@ -172,54 +173,127 @@ pub(crate) fn render_graph_diff_json_from_files(
     changed_edges.sort();
     changed_notes.sort();
 
-    let changed_nodes = changed_nodes
-        .into_iter()
-        .map(|id| EntityDiff {
-            diffs: left_node_map
-                .get(id.as_str())
-                .zip(right_node_map.get(id.as_str()))
-                .map(|(left_node, right_node)| diff_serialized_values_json(*left_node, *right_node))
-                .unwrap_or_default(),
-            id,
-        })
-        .collect();
-    let changed_edges = changed_edges
-        .into_iter()
-        .map(|id| EntityDiff {
-            diffs: left_edge_map
-                .get(id.as_str())
-                .zip(right_edge_map.get(id.as_str()))
-                .map(|(left_edge, right_edge)| diff_serialized_values_json(*left_edge, *right_edge))
-                .unwrap_or_default(),
-            id,
-        })
-        .collect();
-    let changed_notes = changed_notes
-        .into_iter()
-        .map(|id| EntityDiff {
-            diffs: left_note_map
-                .get(id.as_str())
-                .zip(right_note_map.get(id.as_str()))
-                .map(|(left_note, right_note)| diff_serialized_values_json(*left_note, *right_note))
-                .unwrap_or_default(),
-            id,
-        })
-        .collect();
+    if json {
+        let changed_nodes = changed_nodes
+            .into_iter()
+            .map(|id| EntityDiff {
+                diffs: left_node_map
+                    .get(id.as_str())
+                    .zip(right_node_map.get(id.as_str()))
+                    .map(|(left_node, right_node)| {
+                        diff_serialized_values_json(*left_node, *right_node)
+                    })
+                    .unwrap_or_default(),
+                id,
+            })
+            .collect();
+        let changed_edges = changed_edges
+            .into_iter()
+            .map(|id| EntityDiff {
+                diffs: left_edge_map
+                    .get(id.as_str())
+                    .zip(right_edge_map.get(id.as_str()))
+                    .map(|(left_edge, right_edge)| {
+                        diff_serialized_values_json(*left_edge, *right_edge)
+                    })
+                    .unwrap_or_default(),
+                id,
+            })
+            .collect();
+        let changed_notes = changed_notes
+            .into_iter()
+            .map(|id| EntityDiff {
+                diffs: left_note_map
+                    .get(id.as_str())
+                    .zip(right_note_map.get(id.as_str()))
+                    .map(|(left_note, right_note)| {
+                        diff_serialized_values_json(*left_note, *right_note)
+                    })
+                    .unwrap_or_default(),
+                id,
+            })
+            .collect();
 
-    let payload = GraphDiffResponse {
-        left: left.to_owned(),
-        right: right.to_owned(),
-        added_nodes,
-        removed_nodes,
-        changed_nodes,
-        added_edges,
-        removed_edges,
-        changed_edges,
-        added_notes,
-        removed_notes,
-        changed_notes,
-    };
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
+        let payload = GraphDiffResponse {
+            left: left.to_owned(),
+            right: right.to_owned(),
+            added_nodes,
+            removed_nodes,
+            changed_nodes,
+            added_edges,
+            removed_edges,
+            changed_edges,
+            added_notes,
+            removed_notes,
+            changed_notes,
+        };
+        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned())
+    } else {
+        let mut lines = vec![format!("= diff {left} -> {right}")];
+        lines.push(format!("+ nodes ({})", added_nodes.len()));
+        for id in added_nodes {
+            lines.push(format!("+ node {id}"));
+        }
+        lines.push(format!("- nodes ({})", removed_nodes.len()));
+        for id in removed_nodes {
+            lines.push(format!("- node {id}"));
+        }
+        lines.push(format!("~ nodes ({})", changed_nodes.len()));
+        for id in changed_nodes {
+            if let (Some(left_node), Some(right_node)) = (
+                left_node_map.get(id.as_str()),
+                right_node_map.get(id.as_str()),
+            ) {
+                lines.extend(render_entity_diff_lines("node", &id, left_node, right_node));
+            } else {
+                lines.push(format!("~ node {id}"));
+            }
+        }
+        lines.push(format!("+ edges ({})", added_edges.len()));
+        for edge in added_edges {
+            lines.push(format!("+ edge {edge}"));
+        }
+        lines.push(format!("- edges ({})", removed_edges.len()));
+        for edge in removed_edges {
+            lines.push(format!("- edge {edge}"));
+        }
+        lines.push(format!("~ edges ({})", changed_edges.len()));
+        for edge in changed_edges {
+            if let (Some(left_edge), Some(right_edge)) = (
+                left_edge_map.get(edge.as_str()),
+                right_edge_map.get(edge.as_str()),
+            ) {
+                lines.extend(render_entity_diff_lines(
+                    "edge", &edge, left_edge, right_edge,
+                ));
+            } else {
+                lines.push(format!("~ edge {edge}"));
+            }
+        }
+        lines.push(format!("+ notes ({})", added_notes.len()));
+        for note_id in added_notes {
+            lines.push(format!("+ note {note_id}"));
+        }
+        lines.push(format!("- notes ({})", removed_notes.len()));
+        for note_id in removed_notes {
+            lines.push(format!("- note {note_id}"));
+        }
+        lines.push(format!("~ notes ({})", changed_notes.len()));
+        for note_id in changed_notes {
+            if let (Some(left_note), Some(right_note)) = (
+                left_note_map.get(note_id.as_str()),
+                right_note_map.get(note_id.as_str()),
+            ) {
+                lines.extend(render_entity_diff_lines(
+                    "note", &note_id, left_note, right_note,
+                ));
+            } else {
+                lines.push(format!("~ note {note_id}"));
+            }
+        }
+
+        format!("{}\n", lines.join("\n"))
+    }
 }
 
 pub(crate) fn render_graph_diff_from_files(
@@ -228,172 +302,16 @@ pub(crate) fn render_graph_diff_from_files(
     left_graph: &GraphFile,
     right_graph: &GraphFile,
 ) -> String {
-    use std::collections::{HashMap, HashSet};
+    render_graph_diff_inner(left, right, left_graph, right_graph, false)
+}
 
-    let left_nodes: HashSet<String> = left_graph.nodes.iter().map(|n| n.id.clone()).collect();
-    let right_nodes: HashSet<String> = right_graph.nodes.iter().map(|n| n.id.clone()).collect();
-
-    let left_node_map: HashMap<String, &Node> =
-        left_graph.nodes.iter().map(|n| (n.id.clone(), n)).collect();
-    let right_node_map: HashMap<String, &Node> = right_graph
-        .nodes
-        .iter()
-        .map(|n| (n.id.clone(), n))
-        .collect();
-
-    let left_edges: HashSet<String> = left_graph
-        .edges
-        .iter()
-        .map(|e| format!("{} {} {}", e.source_id, e.relation, e.target_id))
-        .collect();
-    let right_edges: HashSet<String> = right_graph
-        .edges
-        .iter()
-        .map(|e| format!("{} {} {}", e.source_id, e.relation, e.target_id))
-        .collect();
-
-    let left_edge_map: HashMap<String, &Edge> = left_graph
-        .edges
-        .iter()
-        .map(|e| (format!("{} {} {}", e.source_id, e.relation, e.target_id), e))
-        .collect();
-    let right_edge_map: HashMap<String, &Edge> = right_graph
-        .edges
-        .iter()
-        .map(|e| (format!("{} {} {}", e.source_id, e.relation, e.target_id), e))
-        .collect();
-
-    let left_notes: HashSet<String> = left_graph.notes.iter().map(|n| n.id.clone()).collect();
-    let right_notes: HashSet<String> = right_graph.notes.iter().map(|n| n.id.clone()).collect();
-
-    let left_note_map: HashMap<String, &Note> =
-        left_graph.notes.iter().map(|n| (n.id.clone(), n)).collect();
-    let right_note_map: HashMap<String, &Note> = right_graph
-        .notes
-        .iter()
-        .map(|n| (n.id.clone(), n))
-        .collect();
-
-    let mut added_nodes: Vec<String> = right_nodes.difference(&left_nodes).cloned().collect();
-    let mut removed_nodes: Vec<String> = left_nodes.difference(&right_nodes).cloned().collect();
-    let mut added_edges: Vec<String> = right_edges.difference(&left_edges).cloned().collect();
-    let mut removed_edges: Vec<String> = left_edges.difference(&right_edges).cloned().collect();
-    let mut added_notes: Vec<String> = right_notes.difference(&left_notes).cloned().collect();
-    let mut removed_notes: Vec<String> = left_notes.difference(&right_notes).cloned().collect();
-
-    let mut changed_nodes: Vec<String> = left_nodes
-        .intersection(&right_nodes)
-        .filter_map(|id| {
-            let left_node = left_node_map.get(id.as_str())?;
-            let right_node = right_node_map.get(id.as_str())?;
-            if eq_serialized(*left_node, *right_node) {
-                None
-            } else {
-                Some(id.clone())
-            }
-        })
-        .collect();
-
-    let mut changed_edges: Vec<String> = left_edges
-        .intersection(&right_edges)
-        .filter_map(|key| {
-            let left_edge = left_edge_map.get(key.as_str())?;
-            let right_edge = right_edge_map.get(key.as_str())?;
-            if eq_serialized(*left_edge, *right_edge) {
-                None
-            } else {
-                Some(key.clone())
-            }
-        })
-        .collect();
-
-    let mut changed_notes: Vec<String> = left_notes
-        .intersection(&right_notes)
-        .filter_map(|id| {
-            let left_note = left_note_map.get(id.as_str())?;
-            let right_note = right_note_map.get(id.as_str())?;
-            if eq_serialized(*left_note, *right_note) {
-                None
-            } else {
-                Some(id.clone())
-            }
-        })
-        .collect();
-
-    added_nodes.sort();
-    removed_nodes.sort();
-    added_edges.sort();
-    removed_edges.sort();
-    added_notes.sort();
-    removed_notes.sort();
-    changed_nodes.sort();
-    changed_edges.sort();
-    changed_notes.sort();
-
-    let mut lines = vec![format!("= diff {left} -> {right}")];
-    lines.push(format!("+ nodes ({})", added_nodes.len()));
-    for id in added_nodes {
-        lines.push(format!("+ node {id}"));
-    }
-    lines.push(format!("- nodes ({})", removed_nodes.len()));
-    for id in removed_nodes {
-        lines.push(format!("- node {id}"));
-    }
-    lines.push(format!("~ nodes ({})", changed_nodes.len()));
-    for id in changed_nodes {
-        if let (Some(left_node), Some(right_node)) = (
-            left_node_map.get(id.as_str()),
-            right_node_map.get(id.as_str()),
-        ) {
-            lines.extend(render_entity_diff_lines("node", &id, left_node, right_node));
-        } else {
-            lines.push(format!("~ node {id}"));
-        }
-    }
-    lines.push(format!("+ edges ({})", added_edges.len()));
-    for edge in added_edges {
-        lines.push(format!("+ edge {edge}"));
-    }
-    lines.push(format!("- edges ({})", removed_edges.len()));
-    for edge in removed_edges {
-        lines.push(format!("- edge {edge}"));
-    }
-    lines.push(format!("~ edges ({})", changed_edges.len()));
-    for edge in changed_edges {
-        if let (Some(left_edge), Some(right_edge)) = (
-            left_edge_map.get(edge.as_str()),
-            right_edge_map.get(edge.as_str()),
-        ) {
-            lines.extend(render_entity_diff_lines(
-                "edge", &edge, left_edge, right_edge,
-            ));
-        } else {
-            lines.push(format!("~ edge {edge}"));
-        }
-    }
-    lines.push(format!("+ notes ({})", added_notes.len()));
-    for note_id in added_notes {
-        lines.push(format!("+ note {note_id}"));
-    }
-    lines.push(format!("- notes ({})", removed_notes.len()));
-    for note_id in removed_notes {
-        lines.push(format!("- note {note_id}"));
-    }
-    lines.push(format!("~ notes ({})", changed_notes.len()));
-    for note_id in changed_notes {
-        if let (Some(left_note), Some(right_note)) = (
-            left_note_map.get(note_id.as_str()),
-            right_note_map.get(note_id.as_str()),
-        ) {
-            lines.extend(render_entity_diff_lines(
-                "note", &note_id, left_note, right_note,
-            ));
-        } else {
-            lines.push(format!("~ note {note_id}"));
-        }
-    }
-
-    format!("{}\n", lines.join("\n"))
+pub(crate) fn render_graph_diff_json_from_files(
+    left: &str,
+    right: &str,
+    left_graph: &GraphFile,
+    right_graph: &GraphFile,
+) -> String {
+    render_graph_diff_inner(left, right, left_graph, right_graph, true)
 }
 
 fn eq_serialized<T: Serialize>(left: &T, right: &T) -> bool {
@@ -439,7 +357,35 @@ fn diff_serialized_values_json<T: Serialize>(left: &T, right: &T) -> Vec<DiffEnt
     }
 }
 
-fn collect_value_diffs_json(path: &str, left: &Value, right: &Value, out: &mut Vec<DiffEntry>) {
+trait DiffOutput {
+    fn push_diff(&mut self, path: String, left: &Value, right: &Value);
+}
+
+struct StringDiffOutput<'a>(&'a mut Vec<String>);
+
+impl DiffOutput for StringDiffOutput<'_> {
+    fn push_diff(&mut self, path: String, left: &Value, right: &Value) {
+        self.0.push(format!(
+            "{path}: {} -> {}",
+            format_value(left),
+            format_value(right)
+        ));
+    }
+}
+
+struct JsonDiffOutput<'a>(&'a mut Vec<DiffEntry>);
+
+impl DiffOutput for JsonDiffOutput<'_> {
+    fn push_diff(&mut self, path: String, left: &Value, right: &Value) {
+        self.0.push(DiffEntry {
+            path,
+            left: left.clone(),
+            right: right.clone(),
+        });
+    }
+}
+
+fn collect_value_diffs_inner(path: &str, left: &Value, right: &Value, out: &mut impl DiffOutput) {
     if left == right {
         return;
     }
@@ -462,7 +408,7 @@ fn collect_value_diffs_json(path: &str, left: &Value, right: &Value, out: &mut V
                 } else {
                     format!("{path}.{key}")
                 };
-                collect_value_diffs_json(&next_path, left_value, right_value, out);
+                collect_value_diffs_inner(&next_path, left_value, right_value, out);
             }
         }
         (Value::Array(_), Value::Array(_)) => {
@@ -471,70 +417,25 @@ fn collect_value_diffs_json(path: &str, left: &Value, right: &Value, out: &mut V
             } else {
                 format!("{path}[]")
             };
-            out.push(DiffEntry {
-                path: label,
-                left: left.clone(),
-                right: right.clone(),
-            });
+            out.push_diff(label, left, right);
         }
         _ => {
-            let label = if path.is_empty() { "<root>" } else { path };
-            out.push(DiffEntry {
-                path: label.to_owned(),
-                left: left.clone(),
-                right: right.clone(),
-            });
+            let label = if path.is_empty() {
+                "<root>".to_owned()
+            } else {
+                path.to_owned()
+            };
+            out.push_diff(label, left, right);
         }
     }
 }
 
 fn collect_value_diffs(path: &str, left: &Value, right: &Value, out: &mut Vec<String>) {
-    if left == right {
-        return;
-    }
-    match (left, right) {
-        (Value::Object(left_obj), Value::Object(right_obj)) => {
-            use std::collections::BTreeSet;
+    collect_value_diffs_inner(path, left, right, &mut StringDiffOutput(out))
+}
 
-            let mut keys: BTreeSet<&str> = BTreeSet::new();
-            for key in left_obj.keys() {
-                keys.insert(key.as_str());
-            }
-            for key in right_obj.keys() {
-                keys.insert(key.as_str());
-            }
-            for key in keys {
-                let left_value = left_obj.get(key).unwrap_or(&Value::Null);
-                let right_value = right_obj.get(key).unwrap_or(&Value::Null);
-                let next_path = if path.is_empty() {
-                    key.to_owned()
-                } else {
-                    format!("{path}.{key}")
-                };
-                collect_value_diffs(&next_path, left_value, right_value, out);
-            }
-        }
-        (Value::Array(_), Value::Array(_)) => {
-            let label = if path.is_empty() {
-                "<root>[]".to_owned()
-            } else {
-                format!("{path}[]")
-            };
-            out.push(format!(
-                "{label}: {} -> {}",
-                format_value(left),
-                format_value(right)
-            ));
-        }
-        _ => {
-            let label = if path.is_empty() { "<root>" } else { path };
-            out.push(format!(
-                "{label}: {} -> {}",
-                format_value(left),
-                format_value(right)
-            ));
-        }
-    }
+fn collect_value_diffs_json(path: &str, left: &Value, right: &Value, out: &mut Vec<DiffEntry>) {
+    collect_value_diffs_inner(path, left, right, &mut JsonDiffOutput(out))
 }
 
 fn format_value(value: &Value) -> String {

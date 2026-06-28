@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::graph::GraphFile;
+use crate::graph::{Edge, GraphFile};
 
 pub struct ValidationReport {
     pub errors: Vec<String>,
@@ -539,21 +539,31 @@ pub fn canonicalize_node_id_for_type(id: &str, node_type: &str) -> Result<String
     ))
 }
 
-pub fn format_edge_source_type_error(
-    source_type: &str,
+pub fn format_edge_type_error(
+    direction: &str,
+    node_type: &str,
     relation: &str,
-    allowed_source_types: &[impl AsRef<str>],
+    allowed_types: &[impl AsRef<str>],
 ) -> String {
     format!(
-        "{} cannot be source of {} (allowed: {})",
-        source_type,
+        "{} cannot be {} of {} (allowed: {})",
+        node_type,
+        direction,
         relation,
-        allowed_source_types
+        allowed_types
             .iter()
             .map(|value| value.as_ref())
             .collect::<Vec<_>>()
             .join(", ")
     )
+}
+
+pub fn format_edge_source_type_error(
+    source_type: &str,
+    relation: &str,
+    allowed_source_types: &[impl AsRef<str>],
+) -> String {
+    format_edge_type_error("source", source_type, relation, allowed_source_types)
 }
 
 pub fn format_edge_target_type_error(
@@ -561,35 +571,23 @@ pub fn format_edge_target_type_error(
     relation: &str,
     allowed_target_types: &[impl AsRef<str>],
 ) -> String {
-    format!(
-        "{} cannot be target of {} (allowed: {})",
-        target_type,
-        relation,
-        allowed_target_types
-            .iter()
-            .map(|value| value.as_ref())
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
+    format_edge_type_error("target", target_type, relation, allowed_target_types)
 }
 
-pub fn validate_graph(
-    graph: &GraphFile,
-    cwd: &Path,
-    deep: bool,
-    base_dir: Option<&str>,
-) -> ValidationReport {
-    let mut errors = Vec::new();
-    let mut warnings = Vec::new();
-
-    let type_to_prefix: HashMap<&str, &str> = TYPE_TO_PREFIX.iter().copied().collect();
-    let type_to_code: HashMap<&str, &str> = TYPE_TO_CODE.iter().copied().collect();
-    // -- metadata --
+fn validate_metadata(graph: &GraphFile, errors: &mut Vec<String>) {
     if graph.metadata.name.trim().is_empty() {
         errors.push("metadata.name missing".to_owned());
     }
+}
 
-    // -- nodes --
+fn validate_nodes<'a>(
+    graph: &'a GraphFile,
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> HashMap<&'a str, &'a str> {
+    let type_to_prefix: HashMap<&str, &str> = TYPE_TO_PREFIX.iter().copied().collect();
+    let type_to_code: HashMap<&str, &str> = TYPE_TO_CODE.iter().copied().collect();
+
     let mut id_counts = HashMap::<&str, usize>::new();
     for node in &graph.nodes {
         *id_counts.entry(node.id.as_str()).or_insert(0) += 1;
@@ -699,12 +697,46 @@ pub fn validate_graph(
         }
     }
 
-    // -- edges --
-    let node_type_map: HashMap<&str, &str> = graph
+    graph
         .nodes
         .iter()
         .map(|node| (node.id.as_str(), node.r#type.as_str()))
-        .collect();
+        .collect()
+}
+
+fn validate_edge_type_rules(edge: &Edge, src_type: &str, tgt_type: &str, errors: &mut Vec<String>) {
+    if !VALID_TYPES.contains(&src_type) || !VALID_TYPES.contains(&tgt_type) {
+        return;
+    }
+    let Some((valid_src, valid_tgt)) = edge_type_rule(edge.relation.as_str()) else {
+        return;
+    };
+    if !valid_src.is_empty() && !valid_src.contains(&src_type) {
+        errors.push(format!(
+            "edge {} {} {} invalid: {}",
+            edge.source_id,
+            edge.relation,
+            edge.target_id,
+            format_edge_source_type_error(src_type, edge.relation.as_str(), valid_src)
+        ));
+    }
+    if !valid_tgt.is_empty() && !valid_tgt.contains(&tgt_type) {
+        errors.push(format!(
+            "edge {} {} {} invalid: {}",
+            edge.source_id,
+            edge.relation,
+            edge.target_id,
+            format_edge_target_type_error(tgt_type, edge.relation.as_str(), valid_tgt)
+        ));
+    }
+}
+
+fn validate_edges<'a>(
+    graph: &'a GraphFile,
+    node_type_map: &HashMap<&'a str, &'a str>,
+    errors: &mut Vec<String>,
+    _warnings: &mut Vec<String>,
+) -> HashSet<&'a str> {
     let node_ids: HashSet<&str> = node_type_map.keys().copied().collect();
     let mut touched = HashSet::new();
     let mut edge_keys = HashSet::new();
@@ -759,36 +791,7 @@ pub fn validate_graph(
             node_type_map.get(edge.source_id.as_str()),
             node_type_map.get(edge.target_id.as_str()),
         ) {
-            if VALID_TYPES.contains(src_type) && VALID_TYPES.contains(tgt_type) {
-                if let Some((valid_src, valid_tgt)) = edge_type_rule(edge.relation.as_str()) {
-                    if !valid_src.is_empty() && !valid_src.contains(src_type) {
-                        errors.push(format!(
-                            "edge {} {} {} invalid: {}",
-                            edge.source_id,
-                            edge.relation,
-                            edge.target_id,
-                            format_edge_source_type_error(
-                                src_type,
-                                edge.relation.as_str(),
-                                valid_src
-                            )
-                        ));
-                    }
-                    if !valid_tgt.is_empty() && !valid_tgt.contains(tgt_type) {
-                        errors.push(format!(
-                            "edge {} {} {} invalid: {}",
-                            edge.source_id,
-                            edge.relation,
-                            edge.target_id,
-                            format_edge_target_type_error(
-                                tgt_type,
-                                edge.relation.as_str(),
-                                valid_tgt
-                            )
-                        ));
-                    }
-                }
-            }
+            validate_edge_type_rules(edge, src_type, tgt_type, errors);
         }
 
         touched.insert(edge.source_id.as_str());
@@ -799,12 +802,30 @@ pub fn validate_graph(
         }
     }
 
-    // orphan nodes = errors (not connected to any edge)
+    touched
+}
+
+fn validate_orphan_nodes(graph: &GraphFile, touched: &HashSet<&str>, errors: &mut Vec<String>) {
     for node in &graph.nodes {
         if !touched.contains(node.id.as_str()) {
             errors.push(format!("orphan node: {}", node.id));
         }
     }
+}
+
+pub fn validate_graph(
+    graph: &GraphFile,
+    cwd: &Path,
+    deep: bool,
+    base_dir: Option<&str>,
+) -> ValidationReport {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    validate_metadata(graph, &mut errors);
+    let node_type_map = validate_nodes(graph, &mut errors, &mut warnings);
+    let touched = validate_edges(graph, &node_type_map, &mut errors, &mut warnings);
+    validate_orphan_nodes(graph, &touched, &mut errors);
 
     // deep: verify source files exist on disk
     if deep {

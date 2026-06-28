@@ -32,6 +32,7 @@ fn escape_js_string(s: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
+        .replace("</", "<\\/")
 }
 
 fn format_note(note: &Note) -> String {
@@ -69,16 +70,26 @@ fn node_color(node_type: &str) -> &'static str {
     }
 }
 
-fn render_html(graph: &GraphFile, title: &str) -> String {
-    let mut notes_by_node: HashMap<&str, Vec<String>> = HashMap::new();
+// ---------------------------------------------------------------------------
+// Data preparation helpers
+// ---------------------------------------------------------------------------
+
+fn prepare_notes_map<'a>(graph: &'a GraphFile) -> HashMap<&'a str, Vec<String>> {
+    let mut notes_by_node: HashMap<&'a str, Vec<String>> = HashMap::new();
     for note in &graph.notes {
         notes_by_node
             .entry(note.node_id.as_str())
             .or_default()
             .push(format_note(note));
     }
+    notes_by_node
+}
 
-    let nodes_js = graph
+fn prepare_nodes_js<'a>(
+    graph: &'a GraphFile,
+    notes_by_node: &HashMap<&'a str, Vec<String>>,
+) -> String {
+    graph
         .nodes
         .iter()
         .map(|n| {
@@ -127,9 +138,11 @@ fn render_html(graph: &GraphFile, title: &str) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join(",\n");
+        .join(",\n")
+}
 
-    let edges_js = graph
+fn prepare_edges_js(graph: &GraphFile) -> String {
+    graph
         .edges
         .iter()
         .enumerate()
@@ -143,8 +156,10 @@ fn render_html(graph: &GraphFile, title: &str) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join(",\n");
+        .join(",\n")
+}
 
+fn prepare_type_checkboxes(graph: &GraphFile) -> String {
     let mut types: Vec<String> = graph
         .nodes
         .iter()
@@ -153,17 +168,7 @@ fn render_html(graph: &GraphFile, title: &str) -> String {
         .into_iter()
         .collect();
     types.sort();
-
-    let mut relations: Vec<String> = graph
-        .edges
-        .iter()
-        .map(|e| e.relation.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    relations.sort();
-
-    let type_checkboxes = types
+    types
         .iter()
         .map(|t| {
             let color = node_color(t);
@@ -172,9 +177,19 @@ fn render_html(graph: &GraphFile, title: &str) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+}
 
-    let rel_checkboxes = relations
+fn prepare_rel_checkboxes(graph: &GraphFile) -> String {
+    let mut relations: Vec<String> = graph
+        .edges
+        .iter()
+        .map(|e| e.relation.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    relations.sort();
+    relations
         .iter()
         .map(|r| {
             format!(
@@ -182,8 +197,10 @@ fn render_html(graph: &GraphFile, title: &str) -> String {
             )
         })
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+}
 
+fn prepare_top_hubs_js(graph: &GraphFile) -> String {
     let mut degree_map: HashMap<&str, usize> = HashMap::new();
     for n in &graph.nodes {
         degree_map.insert(n.id.as_str(), 0);
@@ -203,26 +220,38 @@ fn render_html(graph: &GraphFile, title: &str) -> String {
         .collect();
     hubs.sort_by(|a, b| b.1.cmp(&a.1));
 
-    let top_hubs_js: String = hubs
+    hubs
         .into_iter()
         .take(10)
-        .map(|(id, deg)| {
-            let node = graph.nodes.iter().find(|n| n.id.as_str() == id).unwrap();
+        .filter_map(|(id, deg)| {
+            let node = graph.nodes.iter().find(|n| n.id.as_str() == id)?;
             let color = node_color(&node.r#type);
             let label = escape_js_string(&node.name);
             let nid = escape_js_string(id);
             let ntype = escape_js_string(&node.r#type);
-            format!(
+            Some(format!(
                 r#"{{id:"{nid}",label:"{label}",type_:"{ntype}",color:"{color}",degree:{deg}}}"#
-            )
+            ))
         })
         .collect::<Vec<_>>()
-        .join(",");
+        .join(",")
+}
 
-    let graph_name_escaped = escape_js_string(&graph.metadata.name);
-    let node_count = graph.nodes.len();
-    let edge_count = graph.edges.len();
+// ---------------------------------------------------------------------------
+// HTML template rendering
+// ---------------------------------------------------------------------------
 
+fn render_html_template(
+    title: &str,
+    graph_name_escaped: &str,
+    node_count: usize,
+    edge_count: usize,
+    nodes_js: &str,
+    edges_js: &str,
+    type_checkboxes: &str,
+    rel_checkboxes: &str,
+    top_hubs_js: &str,
+) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -380,6 +409,12 @@ const rawNodes = [
 const rawEdges = [
 {edges_js}
 ];
+
+function escapeHtml(str) {{
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(str));
+  return div.innerHTML;
+}}
 
 function showToast(msg, ms) {{
   var t = document.getElementById('toast');
@@ -578,28 +613,28 @@ function showDetail(node) {{
   outE.forEach(function(e) {{
     if (e.style('display') === 'none') return;
     var tgt = e.target().data();
-    edgesHtml += '<div class="d-edge"><span class="d-edge-dir">&#8594;</span><span class="d-edge-rel">' + e.data('relation') + '</span><span class="d-edge-node" onclick="window._focusNode(\'' + tgt.id + '\')">' + tgt.label + '</span></div>';
+    edgesHtml += '<div class="d-edge"><span class="d-edge-dir">&#8594;</span><span class="d-edge-rel">' + escapeHtml(e.data('relation')) + '</span><span class="d-edge-node" onclick="window._focusNode(\'' + escapeHtml(tgt.id) + '\')">' + escapeHtml(tgt.label) + '</span></div>';
   }});
   inE.forEach(function(e) {{
     if (e.style('display') === 'none') return;
     var src = e.source().data();
-    edgesHtml += '<div class="d-edge"><span class="d-edge-dir">&#8592;</span><span class="d-edge-rel">' + e.data('relation') + '</span><span class="d-edge-node" onclick="window._focusNode(\'' + src.id + '\')">' + src.label + '</span></div>';
+    edgesHtml += '<div class="d-edge"><span class="d-edge-dir">&#8592;</span><span class="d-edge-rel">' + escapeHtml(e.data('relation')) + '</span><span class="d-edge-node" onclick="window._focusNode(\'' + escapeHtml(src.id) + '\')">' + escapeHtml(src.label) + '</span></div>';
   }});
 
   var factsHtml = d.facts.length
-    ? d.facts.map(function(f) {{ return '<div class="d-fact">' + f + '</div>'; }}).join('')
+    ? d.facts.map(function(f) {{ return '<div class="d-fact">' + escapeHtml(f) + '</div>'; }}).join('')
     : '<span style="color:#444">&#8212;</span>';
-  var aliasesHtml = d.aliases.length ? d.aliases.map(function(a) {{ return '<span class="d-pill">' + a + '</span>'; }}).join('') : '';
-  var sourcesHtml = d.sources.length ? d.sources.map(function(s) {{ return '<span class="d-pill">' + s + '</span>'; }}).join('') : '';
-  var notesHtml = d.notes.length ? d.notes.map(function(n) {{ return '<div class="d-note">' + n + '</div>'; }}).join('') : '';
-  var confHtml = d.confidence ? '<div class="d-conf">Confidence: ' + d.confidence + '</div>' : '';
+  var aliasesHtml = d.aliases.length ? d.aliases.map(function(a) {{ return '<span class="d-pill">' + escapeHtml(a) + '</span>'; }}).join('') : '';
+  var sourcesHtml = d.sources.length ? d.sources.map(function(s) {{ return '<span class="d-pill">' + escapeHtml(s) + '</span>'; }}).join('') : '';
+  var notesHtml = d.notes.length ? d.notes.map(function(n) {{ return '<div class="d-note">' + escapeHtml(n) + '</div>'; }}).join('') : '';
+  var confHtml = d.confidence ? '<div class="d-conf">Confidence: ' + escapeHtml(d.confidence) + '</div>' : '';
   var degree = outE.length + inE.length;
 
   document.getElementById('detail-content').innerHTML =
-    '<div class="d-id">' + d.id + '</div>' +
-    '<span class="d-type" style="background:' + d.color + '">' + d.type + ' &#183; ' + degree + ' conn</span>' +
-    '<div class="d-name">' + d.label + '</div>' +
-    (d.desc ? '<div class="d-desc">' + d.desc + '</div>' : '') +
+    '<div class="d-id">' + escapeHtml(d.id) + '</div>' +
+    '<span class="d-type" style="background:' + d.color + '">' + escapeHtml(d.type) + ' &#183; ' + degree + ' conn</span>' +
+    '<div class="d-name">' + escapeHtml(d.label) + '</div>' +
+    (d.desc ? '<div class="d-desc">' + escapeHtml(d.desc) + '</div>' : '') +
     confHtml +
     (aliasesHtml ? '<div class="d-section">Aliases</div>' + aliasesHtml : '') +
     '<div class="d-section">Facts (' + d.facts.length + ')</div>' + factsHtml +
@@ -712,7 +747,7 @@ document.getElementById('btn-fwd').addEventListener('click', goFwd);
     var el = document.createElement('div');
     el.className = 'hub-item';
     el.dataset.id = hub.id;
-    el.innerHTML = '<span class="hub-dot" style="background:' + hub.color + '"></span><span class="hub-name">' + hub.label + '</span><span class="hub-deg">' + hub.degree + '</span>';
+    el.innerHTML = '<span class="hub-dot" style="background:' + hub.color + '"></span><span class="hub-name">' + escapeHtml(hub.label) + '</span><span class="hub-deg">' + hub.degree + '</span>';
     el.addEventListener('click', function() {{ focusNode(hub.id); }});
     list.appendChild(el);
   }});
@@ -750,5 +785,33 @@ cy.ready(function() {{ setTimeout(function() {{ cy.fit(undefined, 40); }}, 600);
         type_checkboxes = type_checkboxes,
         rel_checkboxes = rel_checkboxes,
         top_hubs_js = top_hubs_js,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Main render entry point
+// ---------------------------------------------------------------------------
+
+fn render_html(graph: &GraphFile, title: &str) -> String {
+    let notes_by_node = prepare_notes_map(graph);
+    let nodes_js = prepare_nodes_js(graph, &notes_by_node);
+    let edges_js = prepare_edges_js(graph);
+    let type_checkboxes = prepare_type_checkboxes(graph);
+    let rel_checkboxes = prepare_rel_checkboxes(graph);
+    let top_hubs_js = prepare_top_hubs_js(graph);
+    let graph_name_escaped = escape_js_string(&graph.metadata.name);
+    let node_count = graph.nodes.len();
+    let edge_count = graph.edges.len();
+
+    render_html_template(
+        title,
+        &graph_name_escaped,
+        node_count,
+        edge_count,
+        &nodes_js,
+        &edges_js,
+        &type_checkboxes,
+        &rel_checkboxes,
+        &top_hubs_js,
     )
 }

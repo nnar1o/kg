@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::Result;
+use crate::time_util;
 
 #[derive(Debug, Clone)]
 pub struct AccessLogEntry {
@@ -19,7 +20,7 @@ pub struct AccessLogEntry {
 impl AccessLogEntry {
     pub fn new(query: String, results: usize, duration_ms: u128) -> Self {
         Self {
-            timestamp: chrono_now(),
+            timestamp: time_util::chrono_now(),
             query,
             results,
             duration_ms,
@@ -29,7 +30,7 @@ impl AccessLogEntry {
 
     pub fn node_get(id: String, duration_ms: u128) -> Self {
         Self {
-            timestamp: chrono_now(),
+            timestamp: time_util::chrono_now(),
             query: format!("GET {}", id),
             results: 1,
             duration_ms,
@@ -50,61 +51,6 @@ impl AccessLogEntry {
             )
         }
     }
-}
-
-fn chrono_now() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap();
-    let secs = now.as_secs();
-    let remaining = secs % 86400;
-    let hours = remaining / 3600;
-    let minutes = (remaining % 3600) / 60;
-    let seconds = remaining % 60;
-    let millis = now.subsec_millis();
-
-    let days_since_epoch = secs / 86400;
-    let (year, month, day) = days_to_date(days_since_epoch as i64);
-
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
-        year, month, day, hours, minutes, seconds, millis
-    )
-}
-
-fn days_to_date(days: i64) -> (i64, u32, u32) {
-    let mut year = 1970;
-    let mut remaining_days = days;
-
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-
-    let month_days = if is_leap_year(year) {
-        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    } else {
-        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    };
-
-    let mut month = 1;
-    for &days_in_month in &month_days {
-        if remaining_days < days_in_month as i64 {
-            break;
-        }
-        remaining_days -= days_in_month as i64;
-        month += 1;
-    }
-
-    (year, month, (remaining_days + 1) as u32)
-}
-
-fn is_leap_year(year: i64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 pub fn access_log_path(graph_path: &Path) -> PathBuf {

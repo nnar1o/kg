@@ -518,3 +518,211 @@ pub fn compute_quality_snapshot(
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{Edge, EdgeProperties, GraphFile, Node, NodeProperties};
+
+    fn empty_graph() -> GraphFile {
+        GraphFile::new("test")
+    }
+
+    fn graph_with_nodes() -> GraphFile {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(Node {
+            id: "n:1".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Alpha".to_owned(),
+            properties: NodeProperties {
+                description: "some desc".to_owned(),
+                ..NodeProperties::default()
+            },
+            source_files: vec![],
+        });
+        graph.nodes.push(Node {
+            id: "n:2".to_owned(),
+            r#type: "Concept".to_owned(),
+            name: "Alpha Clone".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        graph.nodes.push(Node {
+            id: "n:3".to_owned(),
+            r#type: "DataStore".to_owned(),
+            name: "DB".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        graph.nodes.push(Node {
+            id: "n:4".to_owned(),
+            r#type: "Process".to_owned(),
+            name: "Worker".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        graph.edges.push(Edge {
+            source_id: "n:1".to_owned(),
+            relation: "GRELATES".to_owned(),
+            target_id: "n:2".to_owned(),
+            properties: EdgeProperties::default(),
+        });
+        graph
+    }
+
+    #[test]
+    fn filtered_nodes_excludes_metadata() {
+        let mut graph = GraphFile::new("test");
+        graph.nodes.push(Node {
+            id: "^".to_owned(),
+            r#type: "^".to_owned(),
+            name: "meta".to_owned(),
+            properties: NodeProperties::default(),
+            source_files: vec![],
+        });
+        let result = filtered_nodes(&graph, &[], false);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filtered_nodes_filters_by_type() {
+        let graph = graph_with_nodes();
+        let result = filtered_nodes(&graph, &["DataStore".to_owned()], false);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].id, "n:3");
+    }
+
+    #[test]
+    fn render_stats_basic() {
+        let graph = graph_with_nodes();
+        let args = StatsArgs {
+            include_features: false,
+            by_type: false,
+            by_relation: false,
+            show_sources: false,
+        };
+        let output = render_stats(&graph, &args);
+        assert!(output.contains("nodes: 4"));
+        assert!(output.contains("edges: 1"));
+    }
+
+    #[test]
+    fn render_stats_by_type() {
+        let graph = graph_with_nodes();
+        let args = StatsArgs {
+            include_features: false,
+            by_type: true,
+            by_relation: false,
+            show_sources: false,
+        };
+        let output = render_stats(&graph, &args);
+        assert!(output.contains("Concept: 2"));
+        assert!(output.contains("DataStore: 1"));
+    }
+
+    #[test]
+    fn render_duplicates_no_duplicates() {
+        let graph = empty_graph();
+        let args = DuplicatesArgs {
+            node_types: vec![],
+            threshold: 0.85,
+            limit: 50,
+            include_features: false,
+            json: false,
+        };
+        let output = render_duplicates(&graph, &args);
+        assert_eq!(output, "= duplicates (0)\n");
+    }
+
+    #[test]
+    fn render_duplicates_finds_similar_names() {
+        let graph = graph_with_nodes();
+        let args = DuplicatesArgs {
+            node_types: vec![],
+            threshold: 0.5,
+            limit: 50,
+            include_features: false,
+            json: false,
+        };
+        let output = render_duplicates(&graph, &args);
+        assert!(output.contains("duplicates ("));
+        assert!(output.contains("Alpha"));
+    }
+
+    #[test]
+    fn render_duplicates_json_no_duplicates() {
+        let graph = empty_graph();
+        let args = DuplicatesArgs {
+            node_types: vec![],
+            threshold: 0.85,
+            limit: 50,
+            include_features: false,
+            json: true,
+        };
+        let output = render_duplicates_json(&graph, &args);
+        assert!(output.contains("\"total\": 0"));
+    }
+
+    #[test]
+    fn render_edge_gaps_detects_datastore_gaps() {
+        let graph = graph_with_nodes();
+        let args = EdgeGapsArgs {
+            node_types: vec![],
+            relation: None,
+            limit: 50,
+            json: false,
+        };
+        let output = render_edge_gaps(&graph, &args);
+        assert!(output.contains("datastore-missing-stored-in: 1"));
+        assert!(output.contains("process-missing-incoming: 1"));
+    }
+
+    #[test]
+    fn render_edge_gaps_none_when_edges_present() {
+        let mut graph = graph_with_nodes();
+        graph.edges.push(Edge {
+            source_id: "n:1".to_owned(),
+            relation: "STORED_IN".to_owned(),
+            target_id: "n:3".to_owned(),
+            properties: EdgeProperties::default(),
+        });
+        graph.edges.push(Edge {
+            source_id: "n:1".to_owned(),
+            relation: "GRELATES".to_owned(),
+            target_id: "n:4".to_owned(),
+            properties: EdgeProperties::default(),
+        });
+        let args = EdgeGapsArgs {
+            node_types: vec![],
+            relation: None,
+            limit: 50,
+            json: false,
+        };
+        let output = render_edge_gaps(&graph, &args);
+        assert!(output.contains("datastore-missing-stored-in: 0"));
+        assert!(output.contains("process-missing-incoming: 0"));
+    }
+
+    #[test]
+    fn edge_counts_tracks_connections() {
+        let graph = graph_with_nodes();
+        let counts = edge_counts(&graph);
+        assert_eq!(*counts.get("n:1").unwrap_or(&0), 1);
+        assert_eq!(*counts.get("n:2").unwrap_or(&0), 1);
+    }
+
+    #[test]
+    fn render_missing_descriptions_lists_nodes_without_desc() {
+        let graph = graph_with_nodes();
+        let args = MissingDescriptionsArgs {
+            limit: 30,
+            node_types: vec![],
+            include_features: false,
+            json: false,
+        };
+        let output = render_missing_descriptions(&graph, &args);
+        assert!(output.contains("n:2"));
+        assert!(output.contains("n:3"));
+        assert!(!output.contains("n:1"));
+    }
+}
