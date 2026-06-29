@@ -16,8 +16,14 @@ mod config;
 mod document_sections;
 mod event_log;
 mod export_html;
+mod facts;
+mod find_render;
 pub mod graph;
+mod graph_clusters;
+mod graph_diff;
+mod graph_list_render;
 mod graph_lock;
+mod graph_merge;
 mod import_csv;
 mod import_markdown;
 mod index;
@@ -33,11 +39,6 @@ mod text_norm;
 mod time_util;
 mod validate;
 mod vectors;
-mod graph_diff;
-mod graph_merge;
-mod graph_clusters;
-mod find_render;
-mod graph_list_render;
 
 // Re-export the core graph types for embedding (e.g. kg-mcp).
 pub use cache_paths::cache_root_for_cwd;
@@ -71,17 +72,18 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
 use cli::{
-    AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, Command,
-    DiffAsOfArgs, EdgeCommand, ExportDotArgs, ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs,
-    FeedbackLogArgs, FeedbackSummaryArgs, FindMode as CliFindMode, GraphCommand, HistoryArgs,
-    ImportCsvArgs, ImportMarkdownArgs, MergeStrategy, NodeCommand, NoteAddArgs, NoteCommand,
-    NoteListArgs, ScoreAllArgs, SplitArgs, TemporalSource, TimelineArgs, UpdateArgs, VectorCommand,
+    AsOfArgs, AuditArgs, BaselineArgs, CheckArgs, Cli, Command, DiffAsOfArgs, EdgeCommand,
+    ExportDotArgs, ExportGraphmlArgs, ExportMdArgs, ExportMermaidArgs, FeedbackLogArgs,
+    FeedbackSummaryArgs, FindMode as CliFindMode, GraphCommand, HistoryArgs, ImportCsvArgs,
+    ImportMarkdownArgs, MergeStrategy, NodeCommand, NoteAddArgs, NoteCommand, NoteListArgs,
+    ScoreAllArgs, SplitArgs, TemporalSource, TimelineArgs, UpdateArgs, VectorCommand,
 };
 use serde::{Deserialize, Serialize};
 // (graph types are re-exported above)
 use storage::{GraphStore, graph_store};
 
 use app::graph_annotate::execute_annotate;
+use app::graph_facts::execute_facts;
 use app::graph_node_edge::{GraphCommandContext, execute_edge, execute_node};
 use app::graph_note::{GraphNoteContext, execute_note};
 use app::graph_query_quality::{
@@ -101,13 +103,13 @@ use schema::{GraphSchema, SchemaViolation};
 use validate::validate_graph;
 
 // Import extracted module functions.
+use graph_clusters::execute_clusters;
 use graph_diff::{
     render_graph_diff, render_graph_diff_from_files, render_graph_diff_json,
     render_graph_diff_json_from_files,
 };
-use graph_merge::merge_graphs;
-use graph_clusters::execute_clusters;
 use graph_list_render::{render_graph_list, render_graph_list_json};
+use graph_merge::merge_graphs;
 
 static EVENT_LOG_MODE: AtomicU8 = AtomicU8::new(0);
 
@@ -510,6 +512,7 @@ fn execute(cli: Cli, cwd: &Path, graph_root: &Path) -> Result<String> {
                 ),
                 GraphCommand::Kql(args) => execute_kql(&graph_file, args),
                 GraphCommand::Annotate(args) => Ok(execute_annotate(&graph_file, &args)),
+                GraphCommand::Facts(args) => Ok(execute_facts(&graph_file, &args)),
                 GraphCommand::ExportJson(args) => execute_export_json(&graph, &graph_file, args),
                 GraphCommand::ImportJson(args) => {
                     execute_import_json(&path, &graph, store.as_ref(), args)
@@ -599,6 +602,7 @@ fn graph_command_mutates(command: &GraphCommand) -> bool {
         | GraphCommand::AccessPaths(_)
         | GraphCommand::Kql(_)
         | GraphCommand::Annotate(_)
+        | GraphCommand::Facts(_)
         | GraphCommand::ExportJson(_)
         | GraphCommand::ExportDot(_)
         | GraphCommand::ExportMermaid(_)

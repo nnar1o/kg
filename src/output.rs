@@ -11,6 +11,7 @@ use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 use crate::annotate;
+use crate::facts;
 use crate::graph::{Edge, GraphFile, Node, Note};
 use crate::index::Bm25Index;
 use crate::text_norm;
@@ -597,6 +598,34 @@ pub fn render_annotate_with_index(
 ) -> String {
     let selected = annotate::collect_annotations(graph, text, index);
     format!("{}\n", annotate::render_annotated_text(text, &selected))
+}
+
+pub fn render_facts(graph: &GraphFile, text: &str, limit: usize, json: bool) -> String {
+    render_facts_with_index(graph, text, limit, json, None)
+}
+
+pub fn render_facts_with_index(
+    graph: &GraphFile,
+    text: &str,
+    limit: usize,
+    json: bool,
+    index: Option<&Bm25Index>,
+) -> String {
+    let matches = facts::collect_facts(graph, text, limit, index);
+    if json {
+        return serde_json::to_string_pretty(&matches).unwrap_or_else(|_| "[]".to_owned());
+    }
+
+    let rendered = matches
+        .into_iter()
+        .map(|item| format!("{}: {}", item.node_id, item.fact))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if rendered.is_empty() {
+        String::new()
+    } else {
+        format!("{rendered}\n")
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1308,7 +1337,11 @@ fn render_node_block_with_query(
     for fact in node.properties.key_facts.iter().take(facts_to_show) {
         lines.push(format!("- {}", escape_cli_text(fact)));
     }
-    let omitted = node.properties.key_facts.len().saturating_sub(facts_to_show);
+    let omitted = node
+        .properties
+        .key_facts
+        .len()
+        .saturating_sub(facts_to_show);
     if omitted > 0 && (full || !is_metadata) {
         lines.push(format!("... {omitted} more facts omitted"));
     }
@@ -2619,6 +2652,27 @@ mod tests {
 
         let rendered = render_annotate(&graph, "stable id");
         assert!(rendered.contains("stable id [kg stable id @K:stable_ids]"));
+    }
+
+    #[test]
+    fn render_annotate_keeps_multiword_alias_with_leading_stopword() {
+        let mut graph = GraphFile::new("test");
+        let mut node = make_node(
+            "feature:defrost",
+            "Defrost system",
+            "",
+            &[],
+            &["No frost"],
+            0.5,
+            0.0,
+            0,
+        );
+        node.r#type = "Feature".to_owned();
+        graph.nodes.push(node);
+
+        let rendered = render_annotate(&graph, "Mam lodowke no frost na 230V.");
+        assert!(rendered.contains("no frost [kg no frost @F:defrost]"));
+        assert!(!rendered.contains("frost [kg frost @F:defrost]"));
     }
 
     #[test]

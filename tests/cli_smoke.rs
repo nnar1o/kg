@@ -1,6 +1,7 @@
 use std::process::Command;
 
 use assert_cmd::cargo::cargo_bin;
+use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
@@ -180,4 +181,45 @@ fn kg_graph_annotate_renders_inline_matches() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("fridge [kg fridge @K:refrigerator]"));
     assert!(stdout.contains("lodowka [kg lodowka @K:refrigerator]"));
+}
+
+#[test]
+fn kg_graph_facts_json_returns_ranked_fact_matches() {
+    let dir = tempdir().expect("tempdir");
+    let graph_root = dir.path().join(".kg").join("graphs");
+    std::fs::create_dir_all(&graph_root).expect("create graph root");
+    std::fs::write(
+        graph_root.join("fridge.json"),
+        include_str!("../graph-example-fridge.json"),
+    )
+    .expect("write fixture");
+
+    let output = Command::new(cargo_bin("kg"))
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .args([
+            "graph",
+            "fridge",
+            "facts",
+            "230V fridge lodowka",
+            "--limit",
+            "3",
+            "--json",
+        ])
+        .output()
+        .expect("run kg facts");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let payload: Value = serde_json::from_str(&stdout).expect("parse json");
+    let matches = payload.as_array().expect("facts array");
+    let first = matches.first().expect("at least one fact match");
+
+    assert_eq!(first["node_id"].as_str(), Some("concept:refrigerator"));
+    assert!(
+        first["fact"]
+            .as_str()
+            .is_some_and(|fact| fact.contains("230V"))
+    );
+    assert!(first["score"].is_number());
 }

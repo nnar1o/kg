@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenSpan {
     pub raw: String,
@@ -39,6 +40,7 @@ pub fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn tokenize_spans(raw: &str) -> Vec<TokenSpan> {
     let mut out = Vec::new();
     let mut current = String::new();

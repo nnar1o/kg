@@ -205,6 +205,8 @@ pub enum GraphCommand {
     Kql(KqlArgs),
     #[command(about = "Annotate free text with graph matches")]
     Annotate(AnnotateArgs),
+    #[command(about = "List graph facts relevant to free text")]
+    Facts(FactsArgs),
     #[command(name = "export-json", about = "Export graph to JSON file")]
     ExportJson(ExportJsonArgs),
     #[command(name = "import-json", about = "Import graph from JSON file")]
@@ -352,6 +354,16 @@ pub struct KqlArgs {
 pub struct AnnotateArgs {
     #[arg(help = "Text to annotate")]
     pub text: String,
+}
+
+#[derive(Debug, Args)]
+pub struct FactsArgs {
+    #[arg(help = "Text to extract relevant facts for")]
+    pub text: String,
+    #[arg(long, default_value_t = 20)]
+    pub limit: usize,
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]

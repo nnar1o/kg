@@ -88,6 +88,13 @@ struct AnnotateContext<'a> {
     normalized_terms_cache: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone)]
+struct RawTokenSpan {
+    start: usize,
+    end: usize,
+    normalized: Option<String>,
+}
+
 impl<'a> AnnotateContext<'a> {
     fn new(graph: &'a GraphFile, index: Option<&Bm25Index>) -> Self {
         Self {
@@ -99,7 +106,7 @@ impl<'a> AnnotateContext<'a> {
     }
 
     fn collect_annotations(&mut self, text: &str) -> Vec<AnnotationCandidate> {
-        let spans = text_norm::tokenize_spans(text);
+        let spans = raw_token_spans(text);
         if spans.is_empty() || self.graph.nodes.is_empty() {
             return Vec::new();
         }
@@ -108,22 +115,26 @@ impl<'a> AnnotateContext<'a> {
 
         for start in 0..spans.len() {
             let mut normalized_terms = Vec::new();
-            let mut span_start = spans[start].start;
+            let span_start = spans[start].start;
 
             for token in spans.iter().skip(start).take(self.config.max_span_tokens) {
-                if text_norm::is_colloquial_filler(&token.normalized) {
+                if token
+                    .normalized
+                    .as_deref()
+                    .is_some_and(text_norm::is_colloquial_filler)
+                {
                     break;
                 }
 
-                if normalized_terms.is_empty() {
-                    span_start = token.start;
+                if let Some(normalized) = &token.normalized {
+                    normalized_terms.push(normalized.clone());
                 }
-                normalized_terms.push(token.normalized.clone());
 
                 let span_end = token.end;
                 let matched = &text[span_start..span_end];
+                let raw_terms = raw_alphanumeric_terms(matched);
                 let mut query_terms = text_norm::expand_query_terms(matched);
-                if query_terms.is_empty() {
+                if query_terms.is_empty() || normalized_terms.is_empty() || raw_terms.is_empty() {
                     continue;
                 }
                 query_terms.sort();
@@ -140,9 +151,13 @@ impl<'a> AnnotateContext<'a> {
                     let Some(node) = self.graph.node_by_id(&node_id) else {
                         continue;
                     };
-                    if let Some(score) =
-                        self.score_annotation_candidate(node, &normalized_terms, bm25_score, rank)
-                    {
+                    if let Some(score) = self.score_annotation_candidate(
+                        node,
+                        &normalized_terms,
+                        &raw_terms,
+                        bm25_score,
+                        rank,
+                    ) {
                         let candidate = AnnotationCandidate {
                             start: span_start,
                             end: span_end,
@@ -171,6 +186,7 @@ impl<'a> AnnotateContext<'a> {
         &mut self,
         node: &Node,
         candidate_terms: &[String],
+        raw_candidate_terms: &[String],
         bm25_score: f32,
         rank: usize,
     ) -> Option<i64> {
@@ -179,6 +195,7 @@ impl<'a> AnnotateContext<'a> {
 
         for (field, value) in annotation_field_values(node) {
             let normalized = self.normalized_value(&value);
+            let raw_field_terms = raw_alphanumeric_terms(&value);
             if normalized.is_empty() {
                 continue;
             }
@@ -191,7 +208,10 @@ impl<'a> AnnotateContext<'a> {
                 continue;
             }
 
-            let match_score = if exact_candidate == normalized {
+            let match_score = if exact_candidate == normalized
+                && (raw_candidate_terms == raw_field_terms
+                    || candidate_terms.len() == raw_candidate_terms.len())
+            {
                 Some(FieldMatch {
                     score: field.exact_score(),
                 })
@@ -332,6 +352,44 @@ fn contains_subsequence(haystack: &[String], needle: &[String]) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle)
+}
+
+fn raw_token_spans(raw: &str) -> Vec<RawTokenSpan> {
+    let mut spans = Vec::new();
+    let mut start: Option<usize> = None;
+
+    let flush = |end: usize, start: &mut Option<usize>, spans: &mut Vec<RawTokenSpan>| {
+        let Some(token_start) = start.take() else {
+            return;
+        };
+        let normalized = text_norm::normalize_text(&raw[token_start..end]);
+        spans.push(RawTokenSpan {
+            start: token_start,
+            end,
+            normalized: (!normalized.is_empty()).then_some(normalized),
+        });
+    };
+
+    for (idx, ch) in raw.char_indices() {
+        if ch.is_alphanumeric() {
+            if start.is_none() {
+                start = Some(idx);
+            }
+        } else {
+            flush(idx, &mut start, &mut spans);
+        }
+    }
+    flush(raw.len(), &mut start, &mut spans);
+
+    spans
+}
+
+fn raw_alphanumeric_terms(value: &str) -> Vec<String> {
+    value
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(|term| term.to_lowercase())
+        .collect()
 }
 
 fn annotation_field_values(node: &Node) -> Vec<(AnnotateField, String)> {
