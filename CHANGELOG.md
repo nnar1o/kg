@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.22] - 2026-07-22
+
+### Changed
+- rewrite `kg_help` and SCL cheat-sheet to be SCL-first: short verb-first commands shown as primary syntax, canonical CLI shown as fallback
+- expand README SCL quickstart with full verb table, examples, IDs, relations, and tips
+- update `get_help` domain sections (node, edge, graph, feedback, batch, script) to lead with SCL examples
+
 ## [0.2.19] - 2026-06-26
 
 ### Changed

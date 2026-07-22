@@ -168,8 +168,7 @@ macro_rules! merge_items {
      $entity:expr,
      $find:expr,
      $key_of:expr,
-     $validate:expr) =>
-    {
+     $validate:expr) => {
         let prefer_new = $strategy.is_prefer_new();
         for item in $items {
             let key = $key_of(&item);
@@ -180,8 +179,7 @@ macro_rules! merge_items {
                     $summary.$updated += 1;
                 } else {
                     if differs(&$graph.$storage[idx], &item) {
-                        $summary.conflicts.push(format!("{} {}",
-                            $entity, key));
+                        $summary.conflicts.push(format!("{} {}", $entity, key));
                     }
                     $summary.$skipped += 1;
                 }
@@ -201,11 +199,20 @@ fn merge_nodes(
     strategy: CsvStrategy,
     summary: &mut CsvImportSummary,
 ) -> Result<()> {
-    merge_items!(graph, nodes, strategy, summary,
-        nodes, nodes_added, nodes_updated, nodes_skipped, "node",
+    merge_items!(
+        graph,
+        nodes,
+        strategy,
+        summary,
+        nodes,
+        nodes_added,
+        nodes_updated,
+        nodes_skipped,
+        "node",
         |item: &Node| graph.nodes.iter().position(|n| n.id == item.id),
         |item: &Node| item.id.clone(),
-        |_: &Node| true);
+        |_: &Node| true
+    );
     Ok(())
 }
 
@@ -215,8 +222,16 @@ fn merge_edges(
     strategy: CsvStrategy,
     summary: &mut CsvImportSummary,
 ) -> Result<()> {
-    merge_items!(graph, edges, strategy, summary,
-        edges, edges_added, edges_updated, edges_skipped, "edge",
+    merge_items!(
+        graph,
+        edges,
+        strategy,
+        summary,
+        edges,
+        edges_added,
+        edges_updated,
+        edges_skipped,
+        "edge",
         |item: &Edge| graph.edges.iter().position(|e| {
             e.source_id == item.source_id
                 && e.relation == item.relation
@@ -224,7 +239,8 @@ fn merge_edges(
         }),
         |item: &Edge| format!("{} {} {}", item.source_id, item.relation, item.target_id),
         |item: &Edge| graph.node_by_id(&item.source_id).is_some()
-            && graph.node_by_id(&item.target_id).is_some());
+            && graph.node_by_id(&item.target_id).is_some()
+    );
     Ok(())
 }
 
@@ -234,11 +250,20 @@ fn merge_notes(
     strategy: CsvStrategy,
     summary: &mut CsvImportSummary,
 ) -> Result<()> {
-    merge_items!(graph, notes, strategy, summary,
-        notes, notes_added, notes_updated, notes_skipped, "note",
+    merge_items!(
+        graph,
+        notes,
+        strategy,
+        summary,
+        notes,
+        notes_added,
+        notes_updated,
+        notes_skipped,
+        "note",
         |item: &Note| graph.notes.iter().position(|n| n.id == item.id),
         |item: &Note| item.id.clone(),
-        |item: &Note| graph.node_by_id(&item.node_id).is_some());
+        |item: &Note| graph.node_by_id(&item.node_id).is_some()
+    );
     Ok(())
 }
 

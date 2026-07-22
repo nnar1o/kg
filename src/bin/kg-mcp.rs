@@ -25,13 +25,33 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const FEEDBACK_FIND_TTL_MS: u128 = 10 * 60 * 1000;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct KgScriptArgs {
-    #[schemars(description = "Script with one or more kg commands separated by ';' or newlines")]
+    #[schemars(description = "SCL commands (short, verb-first English). One or more lines separated by ';' or newlines.\n\n\
+        find <query>                    search nodes by text\n\
+        get <id>                         fetch one node by id\n\
+        add <id> --name \"Name\"           create a node (type from id prefix)\n\
+        modify <id> --field value       update node fields\n\
+        remove <id>                      delete a node\n\
+        connect <src> <REL> <dst>       create an edge (alias: add edge)\n\
+        disconnect <src> <REL> <dst>   delete an edge (alias: remove edge)\n\
+        list nodes|edges|types|relations|graphs\n\
+        stats                             show graph statistics\n\
+        help [verb]                       get help for a verb or all\n\
+        use <graph>                       switch active graph\n\
+        strict                            disable defaults for following lines\n\
+        feedback <uid> yes|no|nil|pick <n>\n\n\
+        IDs: <type>:snake_case   e.g. concept:fridge, bug:door_seal\n\
+        Relations: HAS USES STORED_IN TRIGGERS CREATED_BY AFFECTED_BY\n\
+                   AVAILABLE_IN DOCUMENTED_IN DEPENDS_ON TRANSITIONS\n\
+                   DECIDED_BY GOVERNED_BY READS_FROM\n\
+        Flags after positional args. Quote multiword values.\n\
+        Lines starting with '#' are comments.\n\n\
+        Fallback: canonical CLI syntax (kg <graph> node find ...) also works.")]
     script: String,
     /// best_effort (default) or strict
     #[serde(default)]
@@ -46,7 +66,9 @@ struct EmptyArgs {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct KgHelpArgs {
-    #[schemars(description = "Help domain: node, edge, graph, schema, kql, feedback, batch, script, all")]
+    #[schemars(
+        description = "Help domain: node, edge, graph, schema, kql, feedback, batch, script, all"
+    )]
     domain: String,
 }
 
@@ -191,34 +213,98 @@ struct PendingFindFeedback {
     candidate_ids: Vec<String>,
 }
 
+fn scl_cheat_sheet() -> String {
+    let mut s = String::new();
+    s.push_str("# SCL — Simple Command Language (verb-first, short English)\n");
+    s.push_str("# Use natural short commands. The active graph is set automatically.\n\n");
+    s.push_str("## Core verbs\n");
+    s.push_str("  find <query>                    search nodes by text\n");
+    s.push_str("  get <id>                         fetch one node by id\n");
+    s.push_str("  add <id> --name \"Name\"           create a node (type inferred from id prefix)\n");
+    s.push_str("  modify <id> --name \"New\"         update node fields\n");
+    s.push_str("  remove <id>                      delete a node\n");
+    s.push_str("  connect <src> <REL> <dst>        create an edge (alias: add edge)\n");
+    s.push_str("  disconnect <src> <REL> <dst>    delete an edge (alias: remove edge)\n");
+    s.push_str("  list nodes|edges|types|relations|graphs\n");
+    s.push_str("  stats                             show graph statistics\n");
+    s.push_str("  help [verb]                       get help for a verb or all\n");
+    s.push_str("  use <graph>                       switch active graph\n");
+    s.push_str("  strict                            disable defaults for following lines\n");
+    s.push_str("  feedback <uid> yes|no|nil|pick <n>\n");
+    s.push_str("\n");
+    s.push_str("## Quick examples\n");
+    s.push_str("  find compressor\n");
+    s.push_str("  find \"defrost cycle\"\n");
+    s.push_str("  get concept:fridge\n");
+    s.push_str("  add concept:smart_fridge --name \"Smart Fridge\" --description \"Connected refrigerator\"\n");
+    s.push_str("  modify concept:smart_fridge --importance 0.9\n");
+    s.push_str("  remove concept:old_idea\n");
+    s.push_str("  connect process:compressor_control TRIGGERS process:auto_defrost\n");
+    s.push_str("  disconnect process:compressor_control TRIGGERS process:auto_defrost\n");
+    s.push_str("  list nodes\n");
+    s.push_str("  stats\n");
+    s.push_str("  use fridge\n");
+    s.push_str("\n");
+    s.push_str("## IDs\n");
+    s.push_str("  Format: <type>:snake_case   e.g. concept:fridge, bug:door_seal\n");
+    s.push_str("\n");
+    s.push_str("## Relations\n");
+    s.push_str("  HAS USES STORED_IN TRIGGERS CREATED_BY AFFECTED_BY\n");
+    s.push_str("  AVAILABLE_IN DOCUMENTED_IN DEPENDS_ON TRANSITIONS\n");
+    s.push_str("  DECIDED_BY GOVERNED_BY READS_FROM\n");
+    s.push_str("\n");
+    s.push_str("## Tips\n");
+    s.push_str("  - Flags go after positional args. Quote multiword values.\n");
+    s.push_str("  - Separate commands with ';' or newlines.\n");
+    s.push_str("  - Lines starting with '#' are comments.\n");
+    s.push_str("  - Canonical CLI syntax (kg <graph> node find ...) also works as fallback.\n");
+    s
+}
+
 fn get_help(domain: &str) -> String {
     let header = |title: &str| format!("# {title}\n");
     let cmd = |s: &str| format!("  {s}");
+
+    // For "all", prepend SCL cheat-sheet before domain help
+    if domain == "all" {
+        return format!(
+            "{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n",
+            scl_cheat_sheet(),
+            get_help("node"),
+            get_help("edge"),
+            get_help("graph"),
+            get_help("schema"),
+            get_help("kql"),
+            get_help("feedback"),
+            get_help("batch"),
+            get_help("script"),
+        );
+    }
 
     match domain {
         "node" => format!(
             "{}{}{}{}{}{}{}",
             header("Node Operations"),
-            "## Find\n  `kg <graph> node find \"<query>\" [--full] [--output-size N] [--limit N] [--skip-feedback]`\n\n  Example:\n    kg fridge node find \"compressor defrost\" --output-size 1200\n\n",
-            "## Get\n  `kg <graph> node get <id> [--full] [--output-size N]`\n\n  Example:\n    kg fridge node get concept:fridge_energy_profile --full\n\n",
-            "## Add\n  `kg <graph> node add <id> --type <T> --name <N> [--description ...] [--domain-area ...] [--provenance U|D|A] [--confidence 0.9] [--importance 0.8] [--created-at ...] [--fact ...] [--alias ...] [--source ...] [--scan true|false]`\n\n  Example:\n    kg fridge node add concept:smart_fridge --type Concept --name \"Smart Fridge\" --description \"Connected refrigerator\" --domain-area kitchen_iot --provenance D --confidence 0.95 --importance 0.9 --created-at 2026-04-10T12:30:00Z --fact \"Tracks items\" --alias fridge --source \"DOC /docs/fridge/manual.pdf ch1\"\n\n  Node types: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug\n  ID format: `type_code:snake_case`\n  Provenance: U=User, D=Documentation, A=AI deduction\n  Source formats: URL <url>, SVN <url>, SOURCECODE <path>, WIKI <url>, CONFLUENCE <url>, CONVERSATION <date>, GIT_COMMIT <repo> <sha>, PULL_REQUEST <url>, ISSUE <id>, DOC <path>, LOG <path>, OTHER <ref>\n\n",
-            "## Modify\n  `kg <graph> node modify <id> [--type ...] [--name ...] [--description ...] [--domain-area ...] [--provenance ...] [--confidence ...] [--importance ...] [--fact ...] [--alias ...] [--source ...]`\n\n  Example:\n    kg fridge node modify concept:smart_fridge --importance 0.95 --fact \"New capability\"\n\n",
-            "## Remove\n  `kg <graph> node remove <id>`\n\n  Example:\n    kg fridge node remove concept:old_idea\n\n",
+            "## Find\n  `find \"<query>\" [--full] [--output-size N] [--limit N] [--skip-feedback]`\n\n  Example:\n    find \"compressor defrost\" --output-size 1200\n  Canonical: `kg <graph> node find \"<query>\" ...`\n\n",
+            "## Get\n  `get <id> [--full] [--output-size N]`\n\n  Example:\n    get concept:fridge_energy_profile --full\n  Canonical: `kg <graph> node get <id> ...`\n\n",
+            "## Add\n  `add <id> --name \"Name\" [--description ...] [--domain-area ...] [--provenance U|D|A] [--confidence 0.9] [--importance 0.8] [--created-at ...] [--fact ...] [--alias ...] [--source ...] [--scan true|false]`\n\n  Example:\n    add concept:smart_fridge --name \"Smart Fridge\" --description \"Connected refrigerator\" --domain-area kitchen_iot --provenance D --confidence 0.95 --importance 0.9 --fact \"Tracks items\" --source \"DOC /docs/fridge/manual.pdf ch1\"\n\n  Node types: Concept, Process, DataStore, Interface, Rule, Feature, Decision, Convention, Note, Bug\n  ID format: `type_code:snake_case`\n  Provenance: U=User, D=Documentation, A=AI deduction\n  Source formats: URL <url>, SVN <url>, SOURCECODE <path>, WIKI <url>, CONFLUENCE <url>, CONVERSATION <date>, GIT_COMMIT <repo> <sha>, PULL_REQUEST <url>, ISSUE <id>, DOC <path>, LOG <path>, OTHER <ref>\n  Canonical: `kg <graph> node add <id> --type <T> --name <N> ...`\n\n",
+            "## Modify\n  `modify <id> [--name ...] [--description ...] [--domain-area ...] [--provenance ...] [--confidence ...] [--importance ...] [--fact ...] [--alias ...] [--source ...]`\n\n  Example:\n    modify concept:smart_fridge --importance 0.95 --fact \"New capability\"\n  Canonical: `kg <graph> node modify <id> ...`\n\n",
+            "## Remove\n  `remove <id>`\n\n  Example:\n    remove concept:old_idea\n  Canonical: `kg <graph> node remove <id>`\n\n",
             "## Batch Add\n  `kg <graph> node add-batch <nodes-json> [--on-conflict skip] [--mode atomic|best_effort]`\n\n",
         ),
         "edge" => format!(
             "{}{}{}{}{}",
             header("Edge Operations"),
             "Relations: HAS, STORED_IN, TRIGGERS, CREATED_BY, AFFECTED_BY, AVAILABLE_IN, DOCUMENTED_IN, DEPENDS_ON, TRANSITIONS, DECIDED_BY, GOVERNED_BY, USES, READS_FROM\n\n",
-            "## Add\n  `kg <graph> edge add <source_id> <relation> <target_id> [--detail \"...\"]`\n\n  Example:\n    kg fridge edge add process:compressor_control TRIGGERS process:auto_defrost --detail \"Triggered after runtime threshold\"\n\n",
+            "## Connect (Add)\n  `connect <source_id> <relation> <target_id> [--detail \"...\"]`\n  Alias: `add edge <source_id> <relation> <target_id>`\n\n  Example:\n    connect process:compressor_control TRIGGERS process:auto_defrost --detail \"Triggered after runtime threshold\"\n  Canonical: `kg <graph> edge add <source_id> <relation> <target_id> ...`\n\n",
             "## Batch Add\n  `kg <graph> edge add-batch <edges-json> [--dry-run] [--mode atomic|best_effort]`\n\n  Use --dry-run to validate without writing.\n\n",
-            "## Remove\n  `kg <graph> edge remove <source_id> <relation> <target_id>`\n\n  Example:\n    kg fridge edge remove process:compressor_control TRIGGERS process:auto_defrost\n\n",
+            "## Disconnect (Remove)\n  `disconnect <source_id> <relation> <target_id>`\n  Alias: `remove edge <source_id> <relation> <target_id>`\n\n  Example:\n    disconnect process:compressor_control TRIGGERS process:auto_defrost\n  Canonical: `kg <graph> edge remove <source_id> <relation> <target_id>`\n\n",
         ),
         "graph" => format!(
             "{}{}{}{}{}{}{}",
             header("Graph Management"),
             "## Create\n  `kg graph create <name>`\n\n  Example:\n    kg graph create my_project\n\n",
-            "## Stats\n  `kg <graph> stats [--by-type] [--by-relation] [--include-features] [--show-sources]`\n\n  Example:\n    kg fridge stats --by-type\n\n",
+            "## Stats\n  `stats [--by-type] [--by-relation] [--include-features] [--show-sources]`\n\n  Example:\n    stats --by-type\n  Canonical: `kg <graph> stats ...`\n\n",
             "## Check\n  `kg <graph> check [--deep] [--errors-only] [--warnings-only] [--base-dir ...]`\n\n  Example:\n    kg fridge check --deep\n\n",
             "## Audit\n  `kg <graph> audit [--deep] [--errors-only]`\n\n  Example:\n    kg fridge audit --deep\n\n",
             "## Quality\n  `kg <graph> quality <cmd> [--type ...] [--limit N] [--include-features] [--threshold ...] [--relation ...] [--sort ...]`\n\n  Commands: missing-descriptions, missing-facts, edge-gaps, duplicates\n\n",
@@ -240,12 +326,12 @@ fn get_help(domain: &str) -> String {
         "feedback" => format!(
             "{}{}{}{}{}{}{}",
             header("Feedback System"),
-            "After `node find` or `node get`, check `structured_content.requires_feedback`.\n\n",
+            "After `find` or `get`, check `structured_content.requires_feedback`.\n\n",
             "## Feedback Lines\n  `uid=<uid> YES` — confirm node is relevant\n  `uid=<uid> NO` — confirm node is NOT relevant\n  `uid=<uid> NIL` — explicitly decline feedback\n  `uid=<uid> PICK <n>` — pick Nth candidate as most relevant (1-indexed)\n\n",
             "Usage in kg script:\n",
-            &cmd("kg fridge node find \"compressor\" --output-size 1200; uid=abc123 YES\n"),
+            &cmd("find \"compressor\" --output-size 1200; uid=abc123 YES\n"),
             "\n",
-            "Passive feedback: When `node get` follows `node find` in same script, PICK is auto-resolved.\n\n",
+            "Passive feedback: When `get` follows `find` in same script, PICK is auto-resolved.\n\n",
         ),
         "batch" => format!(
             "{}{}{}{}{}{}{}",
@@ -253,7 +339,7 @@ fn get_help(domain: &str) -> String {
             "## Node Batch\n  `kg <graph> node add-batch <json-array> [--on-conflict skip] [--mode atomic|best_effort]`\n\n",
             "## Edge Batch\n  `kg <graph> edge add-batch <json-array> [--dry-run] [--mode atomic|best_effort]`\n\n",
             "## Feedback Batch\n  Inline in kg script:\n",
-            &cmd("kg fridge node find \"x\"; uid=a1 YES; uid=a2 PICK 1; uid=a3 NO\n"),
+            &cmd("find \"x\"; uid=a1 YES; uid=a2 PICK 1; uid=a3 NO\n"),
             "\n",
             "Modes:\n  `atomic` (default) — all or nothing\n  `best_effort` — apply valid items, skip failures\n\n",
         ),
@@ -261,25 +347,14 @@ fn get_help(domain: &str) -> String {
             "{}{}{}{}{}{}{}{}{}{}",
             header("Script Syntax"),
             "Commands separated by `;` or newlines. Lines starting with `#` are comments.\n\n",
-            "Structure:\n",
-            &cmd("kg <cmd1>; kg <cmd2>; uid=xxx YES\n"),
+            "SCL (short verb-first) commands:\n",
+            &cmd("find \"query\"; get concept:fridge; uid=xxx YES\n"),
             "\n",
-            "The `kg ` prefix is stripped automatically. You can also write:\n",
+            "Canonical CLI also works (the `kg ` prefix is stripped automatically):\n",
             &cmd("<graph> node find \"query\"; <graph> node get <id>; uid=xxx PICK 1\n"),
             "\n",
             "Feedback lines are buffered and flushed before each non-feedback command.\n",
             "Mode: `best_effort` (default) or `strict` (fail on first error).\n",
-        ),
-        "all" => format!(
-            "{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n---\n{}\n",
-            get_help("node"),
-            get_help("edge"),
-            get_help("graph"),
-            get_help("schema"),
-            get_help("kql"),
-            get_help("feedback"),
-            get_help("batch"),
-            get_help("script"),
         ),
         _ => format!(
             "Unknown domain '{}'. Available: node, edge, graph, schema, kql, feedback, batch, script, all.\n\n{}",
@@ -807,8 +882,7 @@ impl KgMcpServer {
                         "source": source,
                     }));
 
-                    if let (Some(graph), Some(selected), Some(delta)) = (graph, selected, delta)
-                    {
+                    if let (Some(graph), Some(selected), Some(delta)) = (graph, selected, delta) {
                         if !graph.is_empty() && graph != "-" {
                             let index = items.len().saturating_sub(1);
                             updates.push(FeedbackUpdate {
@@ -1134,7 +1208,7 @@ impl KgMcpServer {
     fn kg(&self, Parameters(args): Parameters<KgScriptArgs>) -> Result<CallToolResult, McpError> {
         let request_debug = args.debug;
         let mode = self.parse_mode(args.mode)?;
-        let commands = split_script(&args.script);
+        let commands = kg::scl::split_script(&args.script);
         let mut output = String::new();
         let mut steps: Vec<serde_json::Value> = Vec::new();
         let mut requires_feedback: Vec<serde_json::Value> = Vec::new();
@@ -1201,7 +1275,182 @@ impl KgMcpServer {
 
             flush_feedback(self, &mut steps, &mut output, &mut feedback_buffer)?;
 
-            let tokens = match tokenize_command(trimmed) {
+            // ---- SCL dispatch: try parsing as SCL before falling through to CLI ----
+            let mut scl_ctx = kg::scl::Ctx {
+                graph: kg::resolve_default_graph(&self.cwd).unwrap_or_else(|| "default".to_owned()),
+                strict: false,
+            };
+            // Handle `strict` and `use <graph>` directives (normally handled by parse_script)
+            if trimmed == "strict" {
+                scl_ctx.strict = true;
+                output.push_str("> strict mode enabled for subsequent lines\n");
+                steps.push(json!({ "cmd": trimmed, "kind": "scl_directive", "ok": true }));
+                continue;
+            }
+            if let Some(graph_name) = trimmed.strip_prefix("use ") {
+                let g = graph_name.trim();
+                if !g.is_empty() && !g.contains(char::is_whitespace) {
+                    scl_ctx.graph = g.to_owned();
+                    output.push_str(&format!("> using graph: {}\n", g));
+                    steps.push(json!({ "cmd": trimmed, "kind": "scl_directive", "ok": true }));
+                    continue;
+                }
+            }
+            let mut scl_handled = false;
+            match kg::scl::parse_line(trimmed, &scl_ctx) {
+                Ok(Some(canonical)) => {
+                    scl_handled = true;
+                    match &canonical {
+                        kg::scl::CanonicalLine::Help { topic } => {
+                            let help_text = match topic {
+                                Some(t) if t == "scl" => scl_cheat_sheet(),
+                                Some(t) => format!("{}\n\n{}", scl_cheat_sheet(), get_help(t)),
+                                None => format!("{}\n\n{}", scl_cheat_sheet(), get_help("all")),
+                            };
+                            output.push_str(&help_text);
+                            steps.push(json!({
+                                "cmd": trimmed,
+                                "kind": "scl_help",
+                                "ok": true,
+                            }));
+                        }
+                        kg::scl::CanonicalLine::ListTypes => {
+                            let prefixes: Vec<String> = kg::TYPE_TO_PREFIX.iter()
+                                .map(|(t, p)| format!("  {} → {}", t, p))
+                                .collect();
+                            let text = format!(
+                                "Valid node types:\n  {}\n\nType-to-prefix mapping:\n{}",
+                                kg::VALID_TYPES.join(", "),
+                                prefixes.join("\n"),
+                            );
+                            output.push_str(&text);
+                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_types", "ok": true }));
+                        }
+                        kg::scl::CanonicalLine::ListRelations => {
+                            let rules: Vec<String> = kg::EDGE_TYPE_RULES.iter()
+                                .map(|(r, srcs, tgts)| {
+                                    let s = if srcs.is_empty() { "any".to_string() } else { srcs.join(", ") };
+                                    let t = if tgts.is_empty() { "any".to_string() } else { tgts.join(", ") };
+                                    format!("  {}: {} → {}", r, s, t)
+                                })
+                                .collect();
+                            let text = format!(
+                                "Valid relations:\n  {}\n\nEdge type rules:\n{}",
+                                kg::VALID_RELATIONS.join(", "),
+                                rules.join("\n"),
+                            );
+                            output.push_str(&text);
+                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_relations", "ok": true }));
+                        }
+                        kg::scl::CanonicalLine::ListGraphs => {
+                            let graph_root = kg::default_graph_root(&self.cwd);
+                            let mut graphs: Vec<String> = Vec::new();
+                            if let Ok(entries) = std::fs::read_dir(&graph_root) {
+                                for entry in entries.flatten() {
+                                    if let Some(name) = entry.path().file_stem().and_then(|s| s.to_str()) {
+                                        graphs.push(name.to_owned());
+                                    }
+                                }
+                            }
+                            graphs.sort();
+                            let text = if graphs.is_empty() {
+                                "No graphs found.".to_string()
+                            } else {
+                                format!("Available graphs:\n  {}", graphs.join("\n  "))
+                            };
+                            output.push_str(&text);
+                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_graphs", "ok": true }));
+                        }
+                        kg::scl::CanonicalLine::ListNodes => {
+                            let text = "Use `find . --limit N` to search nodes, or `stats` for node type counts.\n\
+                                        For a full list, use KQL: `MATCH (n) RETURN n`.";
+                            output.push_str(text);
+                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_nodes", "ok": true }));
+                        }
+                        kg::scl::CanonicalLine::ListEdges => {
+                            let text = "Use `stats` or KQL queries to explore edges.\n\
+                                        For a full list, use KQL: `MATCH (n)-[r]->(m) RETURN r`.";
+                            output.push_str(text);
+                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_edges", "ok": true }));
+                        }
+                        kg::scl::CanonicalLine::Feedback { uid, verdict, pick } => {
+                            let action = verdict.to_ascii_uppercase();
+                            let line = match pick {
+                                Some(n) => format!("uid={} PICK {}", uid, n),
+                                None => format!("uid={} {}", uid, action),
+                            };
+                            feedback_buffer.push(line);
+                            // Feedback lines are buffered; the loop will continue to next command.
+                        }
+                        _ => {
+                            // NodeFind/NodeGet/NodeAdd/NodeModify/NodeRemove/EdgeAdd/EdgeRemove/Stats
+                            let os_args = canonical.to_args(&scl_ctx);
+                            let args: Vec<String> = os_args.iter()
+                                .map(|os| os.to_string_lossy().to_string())
+                                .collect();
+                            match self.execute_kg_for("kg", args, request_debug) {
+                                Ok(tool_result) => {
+                                    let stdout = Self::render_text_content(&tool_result);
+                                    push_command_step(&mut output, &mut steps, trimmed, &stdout, None);
+                                }
+                                Err(err) => {
+                                    if mode == "strict" {
+                                        return Err(err);
+                                    }
+                                    let msg = err.to_string();
+                                    output.push_str("> ");
+                                    output.push_str(trimmed);
+                                    output.push('\n');
+                                    output.push_str(&format!("ERROR: {msg}\n"));
+                                    steps.push(json!({
+                                        "cmd": trimmed,
+                                        "kind": "kg",
+                                        "ok": false,
+                                        "error": msg,
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // Unknown verb → fall through to existing CLI path
+                }
+                Err(err) if err.category == kg::scl::category::UNKNOWN_VERB => {
+                    // Unknown verb → fall through to existing CLI path
+                }
+                Err(err) => {
+                    // Structured SCL error per spec §7
+                    let error_json = json!({
+                        "ok": false,
+                        "error": err.category,
+                        "message": err.message,
+                        "input": err.input,
+                        "expected_grammar": err.expected_grammar,
+                        "fix_example": err.fix_example,
+                        "canonical_equivalent": err.canonical_equivalent,
+                    });
+                    if mode == "strict" {
+                        return Err(McpError::invalid_params("SCL error", Some(error_json)));
+                    }
+                    output.push_str("> ");
+                    output.push_str(trimmed);
+                    output.push('\n');
+                    output.push_str(&format!("SCL ERROR: {}\n", err.message));
+                    steps.push(json!({
+                        "cmd": trimmed,
+                        "kind": "scl",
+                        "ok": false,
+                        "scl_error": error_json,
+                    }));
+                }
+            }
+            if scl_handled {
+                continue;
+            }
+            // ---- end SCL dispatch ----
+
+            let tokens = match kg::scl::tokenize_command(trimmed) {
                 Ok(tokens) => tokens,
                 Err(err) => {
                     if mode == "strict" {
@@ -1351,7 +1600,13 @@ impl KgMcpServer {
                                 .as_ref()
                                 .and_then(|v| v.get("requires_feedback"))
                                 .cloned();
-                            push_command_step(&mut output, &mut steps, trimmed, &stdout, req.clone());
+                            push_command_step(
+                                &mut output,
+                                &mut steps,
+                                trimmed,
+                                &stdout,
+                                req.clone(),
+                            );
                             if let Some(req) = req {
                                 requires_feedback.push(req);
                             }
@@ -1502,7 +1757,6 @@ impl KgMcpServer {
             meta: None,
         })
     }
-
 }
 
 #[prompt_router]
@@ -1742,132 +1996,6 @@ fn default_graph_root(cwd: &Path) -> PathBuf {
         Some(home) => home.join(".kg").join("graphs"),
         None => cwd.join(".kg").join("graphs"),
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum QuoteMode {
-    None,
-    Single,
-    Double,
-}
-
-fn split_script(script: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut buf = String::new();
-    let mut mode = QuoteMode::None;
-    let mut escape = false;
-
-    for ch in script.chars() {
-        if escape {
-            buf.push(ch);
-            escape = false;
-            continue;
-        }
-
-        match mode {
-            QuoteMode::None => match ch {
-                '\\' => {
-                    buf.push(ch);
-                    escape = true;
-                }
-                '\'' => {
-                    mode = QuoteMode::Single;
-                    buf.push(ch);
-                }
-                '"' => {
-                    mode = QuoteMode::Double;
-                    buf.push(ch);
-                }
-                ';' | '\n' => {
-                    parts.push(std::mem::take(&mut buf));
-                }
-                _ => buf.push(ch),
-            },
-            QuoteMode::Single => {
-                if ch == '\'' {
-                    mode = QuoteMode::None;
-                }
-                buf.push(ch);
-            }
-            QuoteMode::Double => match ch {
-                '\\' => {
-                    buf.push(ch);
-                    escape = true;
-                }
-                '"' => {
-                    mode = QuoteMode::None;
-                    buf.push(ch);
-                }
-                _ => buf.push(ch),
-            },
-        }
-    }
-
-    parts.push(buf);
-    parts
-}
-
-fn tokenize_command(cmd: &str) -> Result<Vec<String>, String> {
-    let mut tokens = Vec::new();
-    let mut buf = String::new();
-    let mut mode = QuoteMode::None;
-    let mut escape = false;
-
-    for ch in cmd.chars() {
-        if escape {
-            buf.push(ch);
-            escape = false;
-            continue;
-        }
-
-        match mode {
-            QuoteMode::None => {
-                if ch.is_whitespace() {
-                    if !buf.is_empty() {
-                        tokens.push(std::mem::take(&mut buf));
-                    }
-                } else if ch == '\\' {
-                    escape = true;
-                } else if ch == '\'' {
-                    mode = QuoteMode::Single;
-                } else if ch == '"' {
-                    mode = QuoteMode::Double;
-                } else {
-                    buf.push(ch);
-                }
-            }
-            QuoteMode::Single => {
-                if ch == '\'' {
-                    mode = QuoteMode::None;
-                } else {
-                    buf.push(ch);
-                }
-            }
-            QuoteMode::Double => {
-                if ch == '"' {
-                    mode = QuoteMode::None;
-                } else if ch == '\\' {
-                    escape = true;
-                } else {
-                    buf.push(ch);
-                }
-            }
-        }
-    }
-
-    if escape {
-        buf.push('\\');
-    }
-
-    if mode != QuoteMode::None {
-        return Err("unterminated quote".to_owned());
-    }
-
-    if !buf.is_empty() {
-        tokens.push(buf);
-    }
-
-    Ok(tokens)
 }
 
 fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>> {
@@ -2330,8 +2458,15 @@ fn parse_find_candidate_ids(rendered: &str) -> Vec<String> {
 fn is_read_only_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "kg_node_find" | "kg_node_get" | "kg_stats" | "kg_check" | "kg_gap_summary"
-            | "kg_quality" | "kg_access_log" | "kg_access_stats" | "kg_schema"
+        "kg_node_find"
+            | "kg_node_get"
+            | "kg_stats"
+            | "kg_check"
+            | "kg_gap_summary"
+            | "kg_quality"
+            | "kg_access_log"
+            | "kg_access_stats"
+            | "kg_schema"
             | "kg_help"
     )
 }
@@ -2454,50 +2589,6 @@ mod tests {
         let json_path = cwd.join(".kg/graphs/fridge.json");
         let path = if kg_path.exists() { kg_path } else { json_path };
         kg::GraphFile::load(&path).expect("load graph")
-    }
-
-    #[test]
-    fn split_script_handles_semicolons_and_newlines() {
-        let script = "a;b\nc";
-        let parts = split_script(script);
-        assert_eq!(parts, vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn split_script_respects_quotes() {
-        let script = "a; \"b;c\"; 'd;e'";
-        let parts = split_script(script);
-        assert_eq!(parts.len(), 3);
-        assert_eq!(parts[1].trim(), "\"b;c\"");
-        assert_eq!(parts[2].trim(), "'d;e'");
-    }
-
-    #[test]
-    fn split_script_allows_escaped_delimiter() {
-        let script = "a\\;b;c";
-        let parts = split_script(script);
-        assert_eq!(parts, vec!["a\\;b", "c"]);
-    }
-
-    #[test]
-    fn tokenize_command_parses_quotes_and_escapes() {
-        let cmd = "fridge node find \"smart fridge\"";
-        let tokens = tokenize_command(cmd).expect("tokenize");
-        assert_eq!(tokens, vec!["fridge", "node", "find", "smart fridge"]);
-    }
-
-    #[test]
-    fn tokenize_command_handles_escaped_semicolon() {
-        let cmd = "note\\;extra";
-        let tokens = tokenize_command(cmd).expect("tokenize");
-        assert_eq!(tokens, vec!["note;extra"]);
-    }
-
-    #[test]
-    fn tokenize_command_errors_on_unterminated_quote() {
-        let cmd = "fridge node find \"smart";
-        let err = tokenize_command(cmd).unwrap_err();
-        assert_eq!(err, "unterminated quote");
     }
 
     #[test]
@@ -2766,7 +2857,6 @@ mod tests {
             .expect("error text");
         assert!(error_text.contains("node get") || error_text.contains("missing node id"));
     }
-
 }
 
 #[tokio::main]

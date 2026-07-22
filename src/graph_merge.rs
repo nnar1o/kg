@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
+use crate::append_event_snapshot;
 use crate::cli::MergeStrategy;
 use crate::graph_lock;
 use crate::storage::GraphStore;
-use crate::append_event_snapshot;
 
 pub(crate) fn merge_graphs(
     store: &dyn GraphStore,

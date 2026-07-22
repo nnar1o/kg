@@ -316,7 +316,10 @@ mod tests {
     fn schema_requires_description_field() {
         let schema = GraphSchema {
             node_types: NodeTypeSchema {
-                required_fields: HashMap::from([("Concept".to_owned(), vec!["description".to_owned()])]),
+                required_fields: HashMap::from([(
+                    "Concept".to_owned(),
+                    vec!["description".to_owned()],
+                )]),
                 ..Default::default()
             },
             ..Default::default()
@@ -332,7 +335,10 @@ mod tests {
     fn schema_accepts_node_with_required_description() {
         let schema = GraphSchema {
             node_types: NodeTypeSchema {
-                required_fields: HashMap::from([("Concept".to_owned(), vec!["description".to_owned()])]),
+                required_fields: HashMap::from([(
+                    "Concept".to_owned(),
+                    vec!["description".to_owned()],
+                )]),
                 ..Default::default()
             },
             ..Default::default()
@@ -363,7 +369,11 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(schema.validate_edge_add("n:a", "Node", "GRELATES", "n:b", "Node").is_empty());
+        assert!(
+            schema
+                .validate_edge_add("n:a", "Node", "GRELATES", "n:b", "Node")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -420,10 +430,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let nodes = vec![
-            sample_node("dup", "A"),
-            sample_node("dup", "B"),
-        ];
+        let nodes = vec![sample_node("dup", "A"), sample_node("dup", "B")];
         let violations = schema.validate_uniqueness(&nodes);
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].kind, ViolationKind::UniquenessViolation);

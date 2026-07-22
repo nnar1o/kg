@@ -220,8 +220,7 @@ fn prepare_top_hubs_js(graph: &GraphFile) -> String {
         .collect();
     hubs.sort_by(|a, b| b.1.cmp(&a.1));
 
-    hubs
-        .into_iter()
+    hubs.into_iter()
         .take(10)
         .filter_map(|(id, deg)| {
             let node = graph.nodes.iter().find(|n| n.id.as_str() == id)?;

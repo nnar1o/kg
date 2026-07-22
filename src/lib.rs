@@ -37,6 +37,7 @@ mod scoring;
 mod storage;
 mod text_norm;
 mod time_util;
+pub mod scl;
 mod validate;
 mod vectors;
 
@@ -52,6 +53,9 @@ pub(crate) use find_render::render_node_json;
 // Re-export for tests and cross-module access.
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use graph_clusters::{find_latest_score_snapshot, render_clusters};
+
+// Re-export config helpers for MCP server.
+pub use config::resolve_default_graph;
 
 // Re-export validation constants for schema tools.
 pub use validate::{

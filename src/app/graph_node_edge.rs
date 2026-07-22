@@ -6,7 +6,6 @@ use anyhow::{Result, anyhow, bail};
 use csv::ReaderBuilder;
 
 use crate::access_log;
-use crate::time_util;
 use crate::cli::{
     AddEdgeArgs, AddEdgeBatchArgs, AddNodeArgs, EdgeCommand, ModifyNodeArgs, NodeCommand,
     RemoveEdgeArgs,
@@ -16,6 +15,7 @@ use crate::ops::{add_edge, add_node, modify_node, remove_edge, remove_node};
 use crate::output;
 use crate::schema::GraphSchema;
 use crate::storage::{GraphStore, load_graph_index};
+use crate::time_util;
 use crate::vectors;
 
 pub(crate) struct GraphCommandContext<'a> {

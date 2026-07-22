@@ -7,3 +7,4 @@
 *.pub
 !*.pub.reguide
 /tasks/adaptive-output-fixes-20260515/
+.slim/deepwork/

@@ -1,21 +1,18 @@
-# kg v0.2.14
+# kg v0.2.22
 
-`kg-mcp` now handles batch writes much closer to single-command behavior and reports failures in a way that is actionable for MCP clients.
-
-This release focuses on reliability and diagnostics for batch node/feedback operations.
+`kg_help` and the SCL cheat-sheet are now SCL-first: short verb-first commands are the primary syntax shown to LLMs, with canonical CLI as fallback.
 
 ## Highlights
 
-- apply schema validation in `kg_node_add_batch`, matching single `node add` expectations
-- normalize explicit batch `sources` using the same rules as single add
-- fix feedback batch accounting so graph update failures are counted and reported as real failures
-- standardize batch summaries to `OK`/`ERROR` with per-item failure lines (no more confusing `Error: OK (...)`)
+- rewrite `scl_cheat_sheet()` with quick examples, core verbs, IDs, relations, and tips
+- rewrite `get_help()` domain sections (node, edge, graph, feedback, batch, script) to lead with SCL syntax
+- expand README SCL quickstart with a full verb table and practical examples
 
 ## Why this release matters
 
-- batch and single-node add behavior is now consistent for schema-enforced projects
-- MCP clients can show precise failure diagnostics without losing successful items
-- operators can trust batch feedback status counters when partial graph updates fail
+- LLMs using `kg-mcp` now see natural short-English commands first, reducing friction and canonical-CLI memorization
+- help text is consistent with the SCL language the parser already accepts
+- README onboarding matches the actual MCP tool surface
 
 ## Installation
 

@@ -2,8 +2,8 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use crate::time_util;
+use anyhow::{Context, Result};
 
 fn is_kg_graph(path: &Path) -> bool {
     path.extension().and_then(|ext| ext.to_str()) == Some("kg")

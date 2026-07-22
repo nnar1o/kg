@@ -5,8 +5,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::Result;
 use crate::time_util;
+use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct AccessLogEntry {

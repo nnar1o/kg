@@ -195,7 +195,11 @@ mod tests {
     #[test]
     fn render_clusters_no_clusters() {
         let graph = GraphFile::new("test");
-        let args = ClustersArgs { limit: 10, json: false, skill: None };
+        let args = ClustersArgs {
+            limit: 10,
+            json: false,
+            skill: None,
+        };
         let out = render_clusters(&graph, &args);
         assert_eq!(out, "= clusters (0)\n");
     }
@@ -203,7 +207,11 @@ mod tests {
     #[test]
     fn render_clusters_with_members() {
         let graph = cluster_graph();
-        let args = ClustersArgs { limit: 10, json: false, skill: None };
+        let args = ClustersArgs {
+            limit: 10,
+            json: false,
+            skill: None,
+        };
         let out = render_clusters(&graph, &args);
         assert!(out.contains("cluster_a"));
         assert!(out.contains("n:1:0.850"));
@@ -212,7 +220,11 @@ mod tests {
     #[test]
     fn render_clusters_json_output() {
         let graph = cluster_graph();
-        let args = ClustersArgs { limit: 10, json: true, skill: None };
+        let args = ClustersArgs {
+            limit: 10,
+            json: true,
+            skill: None,
+        };
         let out = render_clusters(&graph, &args);
         assert!(out.contains("\"id\": \"@:cluster_a\""));
     }
@@ -220,7 +232,11 @@ mod tests {
     #[test]
     fn render_clusters_gardener_mode_emits_actions() {
         let graph = cluster_graph();
-        let args = ClustersArgs { limit: 10, json: false, skill: Some(crate::cli::ClusterSkill::Gardener) };
+        let args = ClustersArgs {
+            limit: 10,
+            json: false,
+            skill: Some(crate::cli::ClusterSkill::Gardener),
+        };
         let out = render_clusters(&graph, &args);
         assert!(out.contains("action:"));
         assert!(out.contains("cluster_a"));

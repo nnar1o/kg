@@ -44,9 +44,9 @@ pub(crate) fn render_graph_list_json(store: &dyn GraphStore) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
-    use anyhow::{bail, Result};
     use crate::graph::GraphFile;
+    use anyhow::{Result, bail};
+    use std::path::{Path, PathBuf};
 
     struct MockStore {
         graphs: Vec<(String, PathBuf)>,
@@ -55,17 +55,30 @@ mod tests {
     impl MockStore {
         fn new(graphs: Vec<(&str, &str)>) -> Self {
             Self {
-                graphs: graphs.into_iter().map(|(n, p)| (n.to_owned(), PathBuf::from(p))).collect(),
+                graphs: graphs
+                    .into_iter()
+                    .map(|(n, p)| (n.to_owned(), PathBuf::from(p)))
+                    .collect(),
             }
         }
     }
 
     impl GraphStore for MockStore {
-        fn create_graph(&self, _graph_name: &str) -> Result<PathBuf> { bail!("unused") }
-        fn resolve_graph_path(&self, _graph: &str) -> Result<PathBuf> { bail!("unused") }
-        fn list_graphs(&self) -> Result<Vec<(String, PathBuf)>> { Ok(self.graphs.clone()) }
-        fn load_graph(&self, _path: &Path) -> Result<GraphFile> { bail!("unused") }
-        fn save_graph(&self, _path: &Path, _graph: &GraphFile) -> Result<()> { bail!("unused") }
+        fn create_graph(&self, _graph_name: &str) -> Result<PathBuf> {
+            bail!("unused")
+        }
+        fn resolve_graph_path(&self, _graph: &str) -> Result<PathBuf> {
+            bail!("unused")
+        }
+        fn list_graphs(&self) -> Result<Vec<(String, PathBuf)>> {
+            Ok(self.graphs.clone())
+        }
+        fn load_graph(&self, _path: &Path) -> Result<GraphFile> {
+            bail!("unused")
+        }
+        fn save_graph(&self, _path: &Path, _graph: &GraphFile) -> Result<()> {
+            bail!("unused")
+        }
     }
 
     #[test]

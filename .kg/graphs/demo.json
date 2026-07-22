@@ -1,0 +1,168 @@
+{
+  "metadata": {
+    "name": "Demo Fridge Graph",
+    "schema_version": 2,
+    "version": "1.0",
+    "description": "Maly graf testowy do pokazania annotate i facts.",
+    "node_count": 4,
+    "edge_count": 2
+  },
+  "nodes": [
+    {
+      "id": "concept:refrigerator",
+      "type": "Concept",
+      "name": "Refrigerator",
+      "properties": {
+        "description": "Urzadzenie do chlodzenia zywnosci.",
+        "domain_area": "",
+        "provenance": "",
+        "confidence": null,
+        "created_at": "",
+        "importance": 0.5,
+        "key_facts": [
+          "Zasilanie: 230V AC",
+          "Zakres temperatury chlodziarki: 2-8C",
+          "Uzywa czynnika R600a"
+        ],
+        "alias": [
+          "Fridge",
+          "Lodowka",
+          "Chlodziarka"
+        ],
+        "valid_from": "",
+        "valid_to": "",
+        "scan": null,
+        "scan_ignore_unknown": null,
+        "feedback_score": 0.0,
+        "feedback_count": 0,
+        "feedback_last_ts_ms": null
+      },
+      "source_files": [
+        "demo.md"
+      ]
+    },
+    {
+      "id": "component:compressor",
+      "type": "Component",
+      "name": "Compressor",
+      "properties": {
+        "description": "Sprezarka odpowiada za obieg czynnika chlodniczego.",
+        "domain_area": "",
+        "provenance": "",
+        "confidence": null,
+        "created_at": "",
+        "importance": 0.5,
+        "key_facts": [
+          "Sprezarka kompresuje czynnik chlodniczy",
+          "Typowe napiecie pracy: 230V",
+          "Generuje halas podczas startu"
+        ],
+        "alias": [
+          "Sprezarka"
+        ],
+        "valid_from": "",
+        "valid_to": "",
+        "scan": null,
+        "scan_ignore_unknown": null,
+        "feedback_score": 0.0,
+        "feedback_count": 0,
+        "feedback_last_ts_ms": null
+      },
+      "source_files": [
+        "demo.md"
+      ]
+    },
+    {
+      "id": "feature:defrost",
+      "type": "Feature",
+      "name": "Defrost system",
+      "properties": {
+        "description": "System automatycznego odszraniania.",
+        "domain_area": "",
+        "provenance": "",
+        "confidence": null,
+        "created_at": "",
+        "importance": 0.5,
+        "key_facts": [
+          "System no frost ogranicza szron",
+          "Automatyczne odszranianie parownika"
+        ],
+        "alias": [
+          "No frost",
+          "Odszranianie"
+        ],
+        "valid_from": "",
+        "valid_to": "",
+        "scan": null,
+        "scan_ignore_unknown": null,
+        "feedback_score": 0.0,
+        "feedback_count": 0,
+        "feedback_last_ts_ms": null
+      },
+      "source_files": [
+        "demo.md"
+      ]
+    },
+    {
+      "id": "^:graph_info",
+      "type": "^",
+      "name": "Graph Metadata",
+      "properties": {
+        "description": "Internal graph metadata for cross-graph linking",
+        "domain_area": "internal_metadata",
+        "provenance": "A",
+        "confidence": null,
+        "created_at": "",
+        "importance": 1.0,
+        "key_facts": [
+          "graph_uuid=08b0bc9eb9b45ad21345",
+          "schema_version=2"
+        ],
+        "alias": [],
+        "valid_from": "",
+        "valid_to": "",
+        "scan": null,
+        "scan_ignore_unknown": null,
+        "feedback_score": 0.0,
+        "feedback_count": 0,
+        "feedback_last_ts_ms": null
+      },
+      "source_files": [
+        "DOC .kg/internal/graph_info"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source_id": "concept:refrigerator",
+      "relation": "HAS",
+      "target_id": "component:compressor",
+      "properties": {
+        "detail": "Lodowka zawiera sprezarke.",
+        "valid_from": "",
+        "valid_to": "",
+        "feedback_score": 0.0,
+        "feedback_count": 0,
+        "feedback_last_ts_ms": null,
+        "bidirectional": false,
+        "score_components": {}
+      }
+    },
+    {
+      "source_id": "concept:refrigerator",
+      "relation": "USES",
+      "target_id": "feature:defrost",
+      "properties": {
+        "detail": "Lodowka moze uzywac systemu no frost.",
+        "valid_from": "",
+        "valid_to": "",
+        "feedback_score": 0.0,
+        "feedback_count": 0,
+        "feedback_last_ts_ms": null,
+        "bidirectional": false,
+        "score_components": {}
+      }
+    }
+  ],
+  "notes": []
+}

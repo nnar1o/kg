@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -317,15 +317,7 @@ fn mcp_kg_help_returns_content_for_all_domains() {
     let (_dir, mut client) = setup();
 
     let domains = [
-        "node",
-        "edge",
-        "graph",
-        "schema",
-        "kql",
-        "feedback",
-        "batch",
-        "script",
-        "all",
+        "node", "edge", "graph", "schema", "kql", "feedback", "batch", "script", "all",
     ];
 
     for domain in &domains {
@@ -381,11 +373,7 @@ fn mcp_kg_script_full_crud_cycle() {
     // 2. Add node
     let script = r#"kg crud_graph node add concept:crud_test --type Concept --name "CRUD Test Node" --description "Integration test node" --domain-area testing --provenance U --confidence 0.9 --importance 0.8 --created-at "2026-06-26T12:00:00Z" --source "test fixture""#;
     let output = run_kg_text(&mut client, script);
-    assert!(
-        !output.contains("ERROR"),
-        "step 2 — add node: {}",
-        output
-    );
+    assert!(!output.contains("ERROR"), "step 2 — add node: {}", output);
 
     // 3. Find node — should find our node
     let output = run_kg_text(&mut client, r#"kg crud_graph node find "CRUD Test Node""#);
@@ -437,11 +425,7 @@ fn mcp_kg_error_includes_detail_in_message() {
 
     // Create a graph first
     let output = run_kg_text(&mut client, "kg graph create error_test");
-    assert!(
-        output.contains("created"),
-        "graph creation: {}",
-        output
-    );
+    assert!(output.contains("created"), "graph creation: {}", output);
 
     // Try to add a node with importance=8 (invalid — must be 0..1)
     let script = r#"kg error_test node add concept:bad_importance --type Concept --name "Bad" --description "test" --domain-area testing --provenance U --confidence 0.9 --importance 8 --created-at "2026-06-26T12:00:00Z" --source "test""#;

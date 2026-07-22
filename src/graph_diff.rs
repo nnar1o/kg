@@ -4,11 +4,7 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
-pub(crate) fn render_graph_diff(
-    store: &dyn GraphStore,
-    left: &str,
-    right: &str,
-) -> Result<String> {
+pub(crate) fn render_graph_diff(store: &dyn GraphStore, left: &str, right: &str) -> Result<String> {
     let left_path = store.resolve_graph_path(left)?;
     let right_path = store.resolve_graph_path(right)?;
     let left_graph = store.load_graph(&left_path)?;

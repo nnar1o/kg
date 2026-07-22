@@ -192,7 +192,7 @@ pub fn canonical_type_code_for(node_type: &str) -> Option<&'static str> {
         .map(|(_, code)| *code)
 }
 
-fn type_for_prefix(prefix: &str) -> Option<&'static str> {
+pub(crate) fn type_for_prefix(prefix: &str) -> Option<&'static str> {
     TYPE_TO_PREFIX
         .iter()
         .find(|(_, known_prefix)| *known_prefix == prefix)

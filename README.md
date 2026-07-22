@@ -75,6 +75,59 @@ After that:
 
 Full MCP setup and reference: [`docs/mcp.md`](docs/mcp.md)
 
+## SCL quickstart
+
+`kg` understands short, verb-first English commands (SCL — Simple Command Language).
+The active graph is resolved from your config automatically.
+
+```text
+find "compressor defrost"
+get concept:refrigerator
+add concept:smart_fridge --name "Smart Fridge" --description "Connected refrigerator"
+modify concept:smart_fridge --importance 0.9
+remove concept:old_idea
+connect process:compressor_control TRIGGERS process:auto_defrost
+disconnect process:compressor_control TRIGGERS process:auto_defrost
+list nodes
+stats
+use fridge
+help
+```
+
+### Core verbs
+
+| Verb | What it does |
+|------|-------------|
+| `find <query>` | search nodes by text |
+| `get <id>` | fetch one node by id |
+| `add <id> --name "Name"` | create a node (type inferred from id prefix) |
+| `modify <id> --field value` | update node fields |
+| `remove <id>` | delete a node |
+| `connect <src> <REL> <dst>` | create an edge (alias: `add edge`) |
+| `disconnect <src> <REL> <dst>` | delete an edge (alias: `remove edge`) |
+| `list nodes\|edges\|types\|relations\|graphs` | list graph contents |
+| `stats` | show graph statistics |
+| `use <graph>` | switch active graph |
+| `help [verb]` | get help for a verb or all |
+| `feedback <uid> yes\|no\|nil\|pick <n>` | give feedback on search results |
+| `strict` | disable defaults for following lines |
+
+### IDs
+
+Format: `<type>:snake_case` — e.g. `concept:fridge`, `bug:door_seal`, `process:compressor_cycle`.
+
+### Relations
+
+`HAS USES STORED_IN TRIGGERS CREATED_BY AFFECTED_BY AVAILABLE_IN DOCUMENTED_IN DEPENDS_ON TRANSITIONS DECIDED_BY GOVERNED_BY READS_FROM`
+
+### Tips
+
+- Flags go after positional args. Quote multiword values.
+- Separate commands with `;` or newlines. Lines starting with `#` are comments.
+- Use `use <graph>` to switch graphs within a script.
+- Canonical `kg <graph> node find ...` commands still work as fallback.
+- Full SCL reference: [`docs/scl.md`](docs/scl.md)
+
 ## Generate a Graph
 
 This is the first workflow for a new project: ask the assistant to create or extend a graph from your documentation.

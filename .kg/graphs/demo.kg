@@ -1,0 +1,46 @@
+@ ^:graph_info
+N Graph Metadata
+D Internal graph metadata for cross-graph linking
+F graph_uuid=08b0bc9eb9b45ad21345
+F schema_version=2
+V 1
+P A
+- domain_area internal_metadata
+S DOC .kg/internal/graph_info
+
+@ component:compressor
+N Compressor
+D Sprezarka odpowiada za obieg czynnika chlodniczego.
+A Sprezarka
+F Generuje halas podczas startu
+F Sprezarka kompresuje czynnik chlodniczy
+F Typowe napiecie pracy: 230V
+V 0.5
+S demo.md
+
+@ K:refrigerator
+N Refrigerator
+D Urzadzenie do chlodzenia zywnosci.
+A Chlodziarka
+A Fridge
+A Lodowka
+F Uzywa czynnika R600a
+F Zakres temperatury chlodziarki: 2-8C
+F Zasilanie: 230V AC
+V 0.5
+S demo.md
+> H component:compressor
+d Lodowka zawiera sprezarke.
+> USES F:defrost
+d Lodowka moze uzywac systemu no frost.
+
+@ F:defrost
+N Defrost system
+D System automatycznego odszraniania.
+A No frost
+A Odszranianie
+F Automatyczne odszranianie parownika
+F System no frost ogranicza szron
+V 0.5
+S demo.md
+
