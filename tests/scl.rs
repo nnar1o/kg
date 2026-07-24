@@ -94,7 +94,9 @@ fn add_applies_defaults() {
     let _output = scl_dispatch("add concept:test_thing", &mut ctx, dir.path());
 
     let graph = load_fridge(dir.path());
-    let node = graph.node_by_id("concept:test_thing").expect("node should exist");
+    let node = graph
+        .node_by_id("concept:test_thing")
+        .expect("node should exist");
 
     assert_eq!(node.r#type, "Concept", "type inferred from prefix");
     assert_eq!(node.name, "Test Thing", "name humanized from id suffix");
@@ -102,7 +104,9 @@ fn add_applies_defaults() {
     assert_eq!(node.properties.confidence, Some(0.7), "default confidence");
     assert_eq!(node.properties.importance, 0.5, "default importance");
     assert!(
-        node.source_files.iter().any(|s| s == "OTHER concept:test_thing"),
+        node.source_files
+            .iter()
+            .any(|s| s == "OTHER concept:test_thing"),
         "expected synthetic source, got: {:?}",
         node.source_files
     );
@@ -126,7 +130,10 @@ fn add_with_name_override() {
 
     let graph = load_fridge(dir.path());
     let node = graph.node_by_id("concept:x").expect("node should exist");
-    assert_eq!(node.name, "Custom Name", "name should be the explicit value");
+    assert_eq!(
+        node.name, "Custom Name",
+        "name should be the explicit value"
+    );
     assert_ne!(node.name, "X", "should NOT be humanized");
 }
 
@@ -149,11 +156,16 @@ fn add_with_source_override() {
     let graph = load_fridge(dir.path());
     let node = graph.node_by_id("concept:y").expect("node should exist");
     assert!(
-        !node.source_files.iter().any(|s| s.contains("OTHER concept:y")),
+        !node
+            .source_files
+            .iter()
+            .any(|s| s.contains("OTHER concept:y")),
         "synthetic source should NOT be present when --source is given"
     );
     assert!(
-        node.source_files.iter().any(|s| s == "URL https://example.com"),
+        node.source_files
+            .iter()
+            .any(|s| s == "URL https://example.com"),
         "custom source should be present, got: {:?}",
         node.source_files
     );
@@ -171,9 +183,16 @@ fn modify_updates_fields() {
 
     // First add a node via SCL (defaults fill required fields),
     // then modify it.
-    scl_dispatch(r#"add concept:test_thing --domain "testing""#, &mut ctx, dir.path());
+    scl_dispatch(
+        r#"add concept:test_thing --domain "testing""#,
+        &mut ctx,
+        dir.path(),
+    );
     let graph = load_fridge(dir.path());
-    assert!(graph.node_by_id("concept:test_thing").is_some(), "node should exist before modify");
+    assert!(
+        graph.node_by_id("concept:test_thing").is_some(),
+        "node should exist before modify"
+    );
 
     // Modify importance and append a fact
     let _output = scl_dispatch(
@@ -183,7 +202,9 @@ fn modify_updates_fields() {
     );
 
     let graph = load_fridge(dir.path());
-    let node = graph.node_by_id("concept:test_thing").expect("node should exist");
+    let node = graph
+        .node_by_id("concept:test_thing")
+        .expect("node should exist");
     assert_eq!(node.properties.importance, 0.9, "importance updated");
     assert!(
         node.properties.key_facts.iter().any(|f| f == "uses R134a"),
@@ -225,11 +246,8 @@ fn connect_with_invalid_relation_errors() {
     let ctx = fridge_ctx();
     // "OWNS" is accepted as a custom relation token; use a relation with
     // whitespace to trigger the `unknown_relation` error.
-    let err = scl::parse_line(
-        r#"connect concept:refrigerator "BAD REL" process:x"#,
-        &ctx,
-    )
-    .expect_err("should return SclError");
+    let err = scl::parse_line(r#"connect concept:refrigerator "BAD REL" process:x"#, &ctx)
+        .expect_err("should return SclError");
     assert_eq!(err.category, scl::category::UNKNOWN_RELATION);
 }
 
@@ -242,11 +260,8 @@ fn connect_with_edge_type_mismatch_errors() {
     let ctx = fridge_ctx();
     // STORED_IN expects source type Concept/Process/Rule and target type DataStore.
     // Using `process:comp` as target does not match DataStore.
-    let err = scl::parse_line(
-        "connect concept:refrigerator STORED_IN process:comp",
-        &ctx,
-    )
-    .expect_err("should return SclError");
+    let err = scl::parse_line("connect concept:refrigerator STORED_IN process:comp", &ctx)
+        .expect_err("should return SclError");
     assert_eq!(err.category, scl::category::EDGE_TYPE_MISMATCH);
 }
 
@@ -263,7 +278,9 @@ fn remove_deletes_node() {
     // Add a node
     scl_dispatch("add concept:temp_remove_me", &mut ctx, dir.path());
     assert!(
-        load_fridge(dir.path()).node_by_id("concept:temp_remove_me").is_some(),
+        load_fridge(dir.path())
+            .node_by_id("concept:temp_remove_me")
+            .is_some(),
         "node should exist before removal"
     );
 
@@ -271,7 +288,9 @@ fn remove_deletes_node() {
     scl_dispatch("remove concept:temp_remove_me", &mut ctx, dir.path());
 
     assert!(
-        load_fridge(dir.path()).node_by_id("concept:temp_remove_me").is_none(),
+        load_fridge(dir.path())
+            .node_by_id("concept:temp_remove_me")
+            .is_none(),
         "node should be gone after removal"
     );
 }

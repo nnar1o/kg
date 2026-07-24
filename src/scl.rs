@@ -193,7 +193,12 @@ impl std::fmt::Display for SclError {
         write!(
             f,
             "[{}] {}\n  input: {}\n  expected: {}\n  fix: {}\n  canonical: {}",
-            self.category, self.message, self.input, self.expected_grammar, self.fix_example, self.canonical_equivalent
+            self.category,
+            self.message,
+            self.input,
+            self.expected_grammar,
+            self.fix_example,
+            self.canonical_equivalent
         )
     }
 }
@@ -495,11 +500,7 @@ impl CanonicalLine {
                 }
                 args
             }
-            CanonicalLine::EdgeRemove {
-                src,
-                relation,
-                tgt,
-            } => {
+            CanonicalLine::EdgeRemove { src, relation, tgt } => {
                 vec![
                     OsString::from("graph"),
                     OsString::from(&ctx.graph),
@@ -511,9 +512,7 @@ impl CanonicalLine {
                 ]
             }
             CanonicalLine::Stats { graph } => {
-                let g = graph
-                    .as_deref()
-                    .unwrap_or(&ctx.graph);
+                let g = graph.as_deref().unwrap_or(&ctx.graph);
                 vec![
                     OsString::from("graph"),
                     OsString::from(g),
@@ -960,8 +959,8 @@ fn parse_add(tokens: &[String], input: &str, ctx: &Ctx) -> Result<CanonicalLine,
         let flag = &tokens[pos];
         match flag.as_str() {
             "--name" | "--desc" | "--description" | "--domain" | "--domain-area"
-            | "--importance" | "--confidence" | "--provenance" | "--source"
-            | "--fact" | "--alias" => {
+            | "--importance" | "--confidence" | "--provenance" | "--source" | "--fact"
+            | "--alias" => {
                 let (canonical_flag, _is_repeatable) = match flag.as_str() {
                     "--description" => ("--desc", false),
                     "--domain-area" => ("--domain", false),
@@ -1148,8 +1147,8 @@ fn parse_modify(tokens: &[String], input: &str) -> Result<CanonicalLine, SclErro
     while pos < tokens.len() {
         let flag = &tokens[pos];
         match flag.as_str() {
-            "--name" | "--desc" | "--description" | "--importance" | "--confidence"
-            | "--fact" | "--alias" => {
+            "--name" | "--desc" | "--description" | "--importance" | "--confidence" | "--fact"
+            | "--alias" => {
                 let canonical_flag = match flag.as_str() {
                     "--description" => "--desc",
                     _ => flag.as_str(),
@@ -1225,7 +1224,8 @@ fn parse_modify(tokens: &[String], input: &str) -> Result<CanonicalLine, SclErro
             "--source" => {
                 return Err(SclError::new(
                     category::UNKNOWN_VERB,
-                    "--source is not supported for modify; source is a creation-time marker".to_owned(),
+                    "--source is not supported for modify; source is a creation-time marker"
+                        .to_owned(),
                     input.to_owned(),
                     "modify <nodeid> [--name..] [--desc..] [--importance..] [--confidence..] [--fact..] [--alias..]",
                     "modify concept:fridge --importance 0.9",
@@ -1302,7 +1302,10 @@ fn parse_remove(tokens: &[String], input: &str) -> Result<Option<CanonicalLine>,
     // Ambiguous
     Err(SclError::new(
         category::AMBIGUOUS,
-        format!("ambiguous remove: '{}'. Use 'remove <nodeid>' for a node or 'remove edge <src> <relation> <tgt>' for an edge", input),
+        format!(
+            "ambiguous remove: '{}'. Use 'remove <nodeid>' for a node or 'remove edge <src> <relation> <tgt>' for an edge",
+            input
+        ),
         input.to_owned(),
         "remove <nodeid>  or  remove edge <src> <relation> <tgt>",
         "remove concept:fridge  or  remove edge concept:fridge HAS feature:door",
@@ -1355,9 +1358,11 @@ fn parse_connect(tokens: &[String], input: &str) -> Result<CanonicalLine, SclErr
     // Validate edge type rule
     if let Some((valid_src_types, valid_tgt_types)) = validate::edge_type_rule(&relation) {
         // Infer source and target types from id prefixes
-        let src_type = src.split_once(':')
+        let src_type = src
+            .split_once(':')
             .and_then(|(prefix, _)| validate::type_for_prefix(prefix));
-        let tgt_type = tgt.split_once(':')
+        let tgt_type = tgt
+            .split_once(':')
             .and_then(|(prefix, _)| validate::type_for_prefix(prefix));
 
         if let Some(st) = src_type {
@@ -1599,18 +1604,23 @@ mod tests {
             }
         );
         let args = line.to_args(&test_ctx());
-        assert_eq!(args, vec![
-            OsString::from("graph"),
-            OsString::from("fridge"),
-            OsString::from("node"),
-            OsString::from("find"),
-            OsString::from("fridge"),
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("graph"),
+                OsString::from("fridge"),
+                OsString::from("node"),
+                OsString::from("find"),
+                OsString::from("fridge"),
+            ]
+        );
     }
 
     #[test]
     fn search_with_limit() {
-        let line = parse_line("search fridge --limit 5", &test_ctx()).unwrap().unwrap();
+        let line = parse_line("search fridge --limit 5", &test_ctx())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             line,
             CanonicalLine::NodeFind {
@@ -1628,7 +1638,9 @@ mod tests {
 
     #[test]
     fn get_concept_id() {
-        let line = parse_line("get concept:fridge", &test_ctx()).unwrap().unwrap();
+        let line = parse_line("get concept:fridge", &test_ctx())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             line,
             CanonicalLine::NodeGet {
@@ -1642,9 +1654,16 @@ mod tests {
     #[test]
     fn add_with_name() {
         let ctx = test_ctx();
-        let line = parse_line("add concept:fridge --name \"Fridge\"", &ctx).unwrap().unwrap();
+        let line = parse_line("add concept:fridge --name \"Fridge\"", &ctx)
+            .unwrap()
+            .unwrap();
         match &line {
-            CanonicalLine::NodeAdd { id, node_type, name, .. } => {
+            CanonicalLine::NodeAdd {
+                id,
+                node_type,
+                name,
+                ..
+            } => {
                 assert_eq!(id, "concept:fridge");
                 assert_eq!(node_type, "Concept");
                 assert_eq!(name.as_deref(), Some("Fridge"));
@@ -1663,9 +1682,16 @@ mod tests {
     #[test]
     fn create_bug_with_name() {
         let ctx = test_ctx();
-        let line = parse_line("create bug:leak --name \"Leak\"", &ctx).unwrap().unwrap();
+        let line = parse_line("create bug:leak --name \"Leak\"", &ctx)
+            .unwrap()
+            .unwrap();
         match &line {
-            CanonicalLine::NodeAdd { id, node_type, name, .. } => {
+            CanonicalLine::NodeAdd {
+                id,
+                node_type,
+                name,
+                ..
+            } => {
                 assert_eq!(id, "bug:leak");
                 // Bug is a valid type, not in TYPE_TO_PREFIX, but we use prefix verbatim
                 assert_eq!(node_type, "Bug");
@@ -1677,12 +1703,9 @@ mod tests {
 
     #[test]
     fn modify_importance() {
-        let line = parse_line(
-            "modify concept:fridge --importance 0.9",
-            &test_ctx(),
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("modify concept:fridge --importance 0.9", &test_ctx())
+            .unwrap()
+            .unwrap();
         match &line {
             CanonicalLine::NodeModify { id, importance, .. } => {
                 assert_eq!(id, "concept:fridge");
@@ -1707,12 +1730,9 @@ mod tests {
 
     #[test]
     fn connect_edge() {
-        let line = parse_line(
-            "connect concept:fridge USES process:comp",
-            &test_ctx(),
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("connect concept:fridge USES process:comp", &test_ctx())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             line,
             CanonicalLine::EdgeAdd {
@@ -1745,12 +1765,9 @@ mod tests {
 
     #[test]
     fn disconnect_edge() {
-        let line = parse_line(
-            "disconnect concept:fridge HAS feature:door",
-            &test_ctx(),
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("disconnect concept:fridge HAS feature:door", &test_ctx())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             line,
             CanonicalLine::EdgeRemove {
@@ -1851,14 +1868,13 @@ mod tests {
 
     #[test]
     fn quoted_multiword_args() {
-        let line = parse_line(
-            "find \"smart fridge\" --limit 5 --full",
-            &test_ctx(),
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("find \"smart fridge\" --limit 5 --full", &test_ctx())
+            .unwrap()
+            .unwrap();
         match &line {
-            CanonicalLine::NodeFind { query, limit, full, .. } => {
+            CanonicalLine::NodeFind {
+                query, limit, full, ..
+            } => {
                 assert_eq!(query, "smart fridge");
                 assert_eq!(*limit, Some(5));
                 assert!(*full);
@@ -1878,10 +1894,7 @@ mod tests {
         .unwrap();
         match &line {
             CanonicalLine::NodeAdd { source, .. } => {
-                assert_eq!(
-                    source.as_deref(),
-                    Some("DOC /docs/manual.pdf")
-                );
+                assert_eq!(source.as_deref(), Some("DOC /docs/manual.pdf"));
             }
             _ => panic!("expected NodeAdd"),
         }
@@ -1916,11 +1929,7 @@ mod tests {
     #[test]
     fn feedback_inside_script() {
         let mut ctx = test_ctx();
-        let result = parse_script(
-            "find compressor\nfeedback abc123 yes",
-            &mut ctx,
-        )
-        .unwrap();
+        let result = parse_script("find compressor\nfeedback abc123 yes", &mut ctx).unwrap();
         assert_eq!(result.len(), 2);
         assert!(matches!(result[0], CanonicalLine::NodeFind { .. }));
         assert!(matches!(result[1], CanonicalLine::Feedback { .. }));
@@ -1951,11 +1960,7 @@ mod tests {
     fn invalid_relation_for_source_target() {
         let ctx = test_ctx();
         // STORED_IN requires source type Concept/Process/Rule and target DataStore
-        let err = parse_line(
-            "connect concept:fridge STORED_IN process:comp",
-            &ctx,
-        )
-        .unwrap_err();
+        let err = parse_line("connect concept:fridge STORED_IN process:comp", &ctx).unwrap_err();
         // process is not a valid target for STORED_IN (target should be DataStore)
         assert_eq!(err.category, category::EDGE_TYPE_MISMATCH);
     }
@@ -1972,35 +1977,25 @@ mod tests {
     #[test]
     fn remove_disambiguation_edge_3word() {
         // 3 barewords with uppercase relation → EdgeRemove
-        let line = parse_line(
-            "remove concept:fridge HAS feature:door",
-            &test_ctx(),
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("remove concept:fridge HAS feature:door", &test_ctx())
+            .unwrap()
+            .unwrap();
         assert!(matches!(line, CanonicalLine::EdgeRemove { .. }));
     }
 
     #[test]
     fn remove_disambiguation_edge_keyword() {
         // `remove edge <src> <rel> <tgt>` → EdgeRemove
-        let line = parse_line(
-            "remove edge concept:fridge HAS feature:door",
-            &test_ctx(),
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("remove edge concept:fridge HAS feature:door", &test_ctx())
+            .unwrap()
+            .unwrap();
         assert!(matches!(line, CanonicalLine::EdgeRemove { .. }));
     }
 
     #[test]
     fn remove_disambiguation_ambiguous() {
         // 3 barewords where middle is NOT a valid uppercase relation → error
-        let err = parse_line(
-            "remove concept:fridge foo feature:door",
-            &test_ctx(),
-        )
-        .unwrap_err();
+        let err = parse_line("remove concept:fridge foo feature:door", &test_ctx()).unwrap_err();
         assert_eq!(err.category, category::AMBIGUOUS);
     }
 
@@ -2084,14 +2079,16 @@ mod tests {
 
     #[test]
     fn get_with_output_size() {
-        let line = parse_line(
-            "get concept:fridge --full --output-size 500",
-            &test_ctx(),
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("get concept:fridge --full --output-size 500", &test_ctx())
+            .unwrap()
+            .unwrap();
         match &line {
-            CanonicalLine::NodeGet { id, full, output_size, .. } => {
+            CanonicalLine::NodeGet {
+                id,
+                full,
+                output_size,
+                ..
+            } => {
                 assert_eq!(id, "concept:fridge");
                 assert!(*full);
                 assert_eq!(*output_size, Some(500));
@@ -2113,7 +2110,14 @@ mod tests {
         let ctx = test_ctx();
         let line = parse_line("add concept:fridge", &ctx).unwrap().unwrap();
         match &line {
-            CanonicalLine::NodeAdd { name, provenance, confidence, importance, source, .. } => {
+            CanonicalLine::NodeAdd {
+                name,
+                provenance,
+                confidence,
+                importance,
+                source,
+                ..
+            } => {
                 assert_eq!(name.as_deref(), Some("Fridge"));
                 assert_eq!(provenance.as_deref(), Some("A"));
                 assert_eq!(*confidence, Some(0.7));
@@ -2129,14 +2133,16 @@ mod tests {
         let ctx = test_ctx();
         // `as Process` explicitly overrides the inferred type.
         // The id prefix `process` matches the Process type.
-        let line = parse_line(
-            "add process:comp as Process --name \"Compressor\"",
-            &ctx,
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("add process:comp as Process --name \"Compressor\"", &ctx)
+            .unwrap()
+            .unwrap();
         match &line {
-            CanonicalLine::NodeAdd { id, node_type, name, .. } => {
+            CanonicalLine::NodeAdd {
+                id,
+                node_type,
+                name,
+                ..
+            } => {
                 assert_eq!(id, "process:comp");
                 assert_eq!(node_type, "Process");
                 assert_eq!(name.as_deref(), Some("Compressor"));
@@ -2226,7 +2232,9 @@ mod tests {
     #[test]
     fn add_edge_directly() {
         // `add edge` with no connect keyword
-        let line = parse_line("add edge x HAS y", &test_ctx()).unwrap().unwrap();
+        let line = parse_line("add edge x HAS y", &test_ctx())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             line,
             CanonicalLine::EdgeAdd {
@@ -2240,23 +2248,16 @@ mod tests {
 
     #[test]
     fn remove_edge_keyword_only() {
-        let line = parse_line(
-            "remove edge concept:a HAS concept:b",
-            &test_ctx(),
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("remove edge concept:a HAS concept:b", &test_ctx())
+            .unwrap()
+            .unwrap();
         assert!(matches!(line, CanonicalLine::EdgeRemove { .. }));
     }
 
     #[test]
     fn parse_script_with_multiple_commands() {
         let mut ctx = test_ctx();
-        let result = parse_script(
-            "find fridge; get concept:fridge; list types",
-            &mut ctx,
-        )
-        .unwrap();
+        let result = parse_script("find fridge; get concept:fridge; list types", &mut ctx).unwrap();
         assert_eq!(result.len(), 3);
         assert!(matches!(result[0], CanonicalLine::NodeFind { .. }));
         assert!(matches!(result[1], CanonicalLine::NodeGet { .. }));
@@ -2288,12 +2289,9 @@ mod tests {
     #[test]
     fn add_with_domain() {
         let ctx = test_ctx();
-        let line = parse_line(
-            "add concept:fridge --domain kitchen",
-            &ctx,
-        )
-        .unwrap()
-        .unwrap();
+        let line = parse_line("add concept:fridge --domain kitchen", &ctx)
+            .unwrap()
+            .unwrap();
         match &line {
             CanonicalLine::NodeAdd { domain, .. } => {
                 assert_eq!(domain.as_deref(), Some("kitchen"));

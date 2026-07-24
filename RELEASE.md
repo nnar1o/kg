@@ -1,3 +1,15 @@
+# kg v0.2.23
+
+Patch release: fixes `cargo fmt` formatting violations that caused CI failures in v0.2.22. No behavioral changes.
+
+## Installation
+
+```sh
+curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
+```
+
+## Previous: v0.2.22
+
 # kg v0.2.22
 
 `kg_help` and the SCL cheat-sheet are now SCL-first: short verb-first commands are the primary syntax shown to LLMs, with canonical CLI as fallback.

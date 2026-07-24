@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.23] - 2026-07-24
+
+### Fixed
+- fix `cargo fmt` violations that broke CI fmt and test jobs in v0.2.22
+
 ## [0.2.22] - 2026-07-22
 
 ### Changed

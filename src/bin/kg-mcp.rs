@@ -31,7 +31,8 @@ const FEEDBACK_FIND_TTL_MS: u128 = 10 * 60 * 1000;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct KgScriptArgs {
-    #[schemars(description = "SCL commands (short, verb-first English). One or more lines separated by ';' or newlines.\n\n\
+    #[schemars(
+        description = "SCL commands (short, verb-first English). One or more lines separated by ';' or newlines.\n\n\
         find <query>                    search nodes by text\n\
         get <id>                         fetch one node by id\n\
         add <id> --name \"Name\"           create a node (type from id prefix)\n\
@@ -51,7 +52,8 @@ struct KgScriptArgs {
                    DECIDED_BY GOVERNED_BY READS_FROM\n\
         Flags after positional args. Quote multiword values.\n\
         Lines starting with '#' are comments.\n\n\
-        Fallback: canonical CLI syntax (kg <graph> node find ...) also works.")]
+        Fallback: canonical CLI syntax (kg <graph> node find ...) also works."
+    )]
     script: String,
     /// best_effort (default) or strict
     #[serde(default)]
@@ -220,7 +222,9 @@ fn scl_cheat_sheet() -> String {
     s.push_str("## Core verbs\n");
     s.push_str("  find <query>                    search nodes by text\n");
     s.push_str("  get <id>                         fetch one node by id\n");
-    s.push_str("  add <id> --name \"Name\"           create a node (type inferred from id prefix)\n");
+    s.push_str(
+        "  add <id> --name \"Name\"           create a node (type inferred from id prefix)\n",
+    );
     s.push_str("  modify <id> --name \"New\"         update node fields\n");
     s.push_str("  remove <id>                      delete a node\n");
     s.push_str("  connect <src> <REL> <dst>        create an edge (alias: add edge)\n");
@@ -1315,7 +1319,8 @@ impl KgMcpServer {
                             }));
                         }
                         kg::scl::CanonicalLine::ListTypes => {
-                            let prefixes: Vec<String> = kg::TYPE_TO_PREFIX.iter()
+                            let prefixes: Vec<String> = kg::TYPE_TO_PREFIX
+                                .iter()
                                 .map(|(t, p)| format!("  {} → {}", t, p))
                                 .collect();
                             let text = format!(
@@ -1324,13 +1329,24 @@ impl KgMcpServer {
                                 prefixes.join("\n"),
                             );
                             output.push_str(&text);
-                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_types", "ok": true }));
+                            steps.push(
+                                json!({ "cmd": trimmed, "kind": "scl_list_types", "ok": true }),
+                            );
                         }
                         kg::scl::CanonicalLine::ListRelations => {
-                            let rules: Vec<String> = kg::EDGE_TYPE_RULES.iter()
+                            let rules: Vec<String> = kg::EDGE_TYPE_RULES
+                                .iter()
                                 .map(|(r, srcs, tgts)| {
-                                    let s = if srcs.is_empty() { "any".to_string() } else { srcs.join(", ") };
-                                    let t = if tgts.is_empty() { "any".to_string() } else { tgts.join(", ") };
+                                    let s = if srcs.is_empty() {
+                                        "any".to_string()
+                                    } else {
+                                        srcs.join(", ")
+                                    };
+                                    let t = if tgts.is_empty() {
+                                        "any".to_string()
+                                    } else {
+                                        tgts.join(", ")
+                                    };
                                     format!("  {}: {} → {}", r, s, t)
                                 })
                                 .collect();
@@ -1340,14 +1356,18 @@ impl KgMcpServer {
                                 rules.join("\n"),
                             );
                             output.push_str(&text);
-                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_relations", "ok": true }));
+                            steps.push(
+                                json!({ "cmd": trimmed, "kind": "scl_list_relations", "ok": true }),
+                            );
                         }
                         kg::scl::CanonicalLine::ListGraphs => {
                             let graph_root = kg::default_graph_root(&self.cwd);
                             let mut graphs: Vec<String> = Vec::new();
                             if let Ok(entries) = std::fs::read_dir(&graph_root) {
                                 for entry in entries.flatten() {
-                                    if let Some(name) = entry.path().file_stem().and_then(|s| s.to_str()) {
+                                    if let Some(name) =
+                                        entry.path().file_stem().and_then(|s| s.to_str())
+                                    {
                                         graphs.push(name.to_owned());
                                     }
                                 }
@@ -1359,19 +1379,25 @@ impl KgMcpServer {
                                 format!("Available graphs:\n  {}", graphs.join("\n  "))
                             };
                             output.push_str(&text);
-                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_graphs", "ok": true }));
+                            steps.push(
+                                json!({ "cmd": trimmed, "kind": "scl_list_graphs", "ok": true }),
+                            );
                         }
                         kg::scl::CanonicalLine::ListNodes => {
                             let text = "Use `find . --limit N` to search nodes, or `stats` for node type counts.\n\
                                         For a full list, use KQL: `MATCH (n) RETURN n`.";
                             output.push_str(text);
-                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_nodes", "ok": true }));
+                            steps.push(
+                                json!({ "cmd": trimmed, "kind": "scl_list_nodes", "ok": true }),
+                            );
                         }
                         kg::scl::CanonicalLine::ListEdges => {
                             let text = "Use `stats` or KQL queries to explore edges.\n\
                                         For a full list, use KQL: `MATCH (n)-[r]->(m) RETURN r`.";
                             output.push_str(text);
-                            steps.push(json!({ "cmd": trimmed, "kind": "scl_list_edges", "ok": true }));
+                            steps.push(
+                                json!({ "cmd": trimmed, "kind": "scl_list_edges", "ok": true }),
+                            );
                         }
                         kg::scl::CanonicalLine::Feedback { uid, verdict, pick } => {
                             let action = verdict.to_ascii_uppercase();
@@ -1385,13 +1411,20 @@ impl KgMcpServer {
                         _ => {
                             // NodeFind/NodeGet/NodeAdd/NodeModify/NodeRemove/EdgeAdd/EdgeRemove/Stats
                             let os_args = canonical.to_args(&scl_ctx);
-                            let args: Vec<String> = os_args.iter()
+                            let args: Vec<String> = os_args
+                                .iter()
                                 .map(|os| os.to_string_lossy().to_string())
                                 .collect();
                             match self.execute_kg_for("kg", args, request_debug) {
                                 Ok(tool_result) => {
                                     let stdout = Self::render_text_content(&tool_result);
-                                    push_command_step(&mut output, &mut steps, trimmed, &stdout, None);
+                                    push_command_step(
+                                        &mut output,
+                                        &mut steps,
+                                        trimmed,
+                                        &stdout,
+                                        None,
+                                    );
                                 }
                                 Err(err) => {
                                     if mode == "strict" {

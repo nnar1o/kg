@@ -33,11 +33,11 @@ mod kql;
 mod ops;
 pub mod output;
 mod schema;
+pub mod scl;
 mod scoring;
 mod storage;
 mod text_norm;
 mod time_util;
-pub mod scl;
 mod validate;
 mod vectors;
 
