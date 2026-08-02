@@ -1,3 +1,21 @@
+# kg v0.2.24
+
+Patch release: aligns MCP/SCL prompts and documentation with the current three-tool surface, correcting retrospective, importance, and provenance guidance.
+
+## Highlights
+
+- document the three-tool MCP/SCL surface: `kg`, `kg_help`, and `kg_schema`
+- correct feedback-retrospective prompt commands and normalize importance guidance to `0.0..1.0`
+- document generated-node provenance with `G`
+
+## Installation
+
+```sh
+curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
+```
+
+## Previous: v0.2.23
+
 # kg v0.2.23
 
 Patch release: fixes `cargo fmt` formatting violations that caused CI failures in v0.2.22. No behavioral changes.

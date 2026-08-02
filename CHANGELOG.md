@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.24] - 2026-08-02
+
+### Fixed
+- align MCP/SCL prompts and documentation with the three-tool surface (`kg`, `kg_help`, `kg_schema`)
+- correct feedback-retrospective prompt commands and normalize importance guidance to `0.0..1.0`
+- document generated-node provenance guidance with `G`
+
 ## [0.2.23] - 2026-07-24
 
 ### Fixed

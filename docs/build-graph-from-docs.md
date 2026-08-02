@@ -53,9 +53,9 @@ Start from nodes that anchor the domain:
 Example:
 
 ```sh
-kg graph <graph-name> node add concept:checkout --type Concept --name "Checkout" --description "Order finalization flow" --importance 5
-kg graph <graph-name> node add process:authorize_payment --type Process --name "Authorize payment" --importance 6
-kg graph <graph-name> node add datastore:orders_db --type DataStore --name "Orders DB" --importance 5
+kg graph <graph-name> node add concept:checkout --type Concept --name "Checkout" --description "Order finalization flow" --importance 0.8
+kg graph <graph-name> node add process:authorize_payment --type Process --name "Authorize payment" --importance 1.0
+kg graph <graph-name> node add datastore:orders_db --type DataStore --name "Orders DB" --importance 0.8
 ```
 
 ## 5) Connect nodes with semantic relations

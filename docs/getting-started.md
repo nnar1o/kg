@@ -49,7 +49,7 @@ Add nodes:
 
 ```sh
 kg graph fridge node add concept:refrigerator --type Concept --name "Refrigerator"
-kg graph fridge node add process:defrost --type Process --name "Defrost cycle" --importance 5
+kg graph fridge node add process:defrost --type Process --name "Defrost cycle" --importance 0.8
 ```
 
 Connect nodes:

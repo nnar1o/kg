@@ -1,10 +1,11 @@
-# kg-mcp Simple Command Language (SCL) — Project & Fix Plan
+# kg-mcp Simple Command Language (SCL) — Reference
 
 > Goal: let LLM agents operate the kg graph via short English commands
 > (`find fridge`, `add edge x HAS y`, `create concept:foo ...`) instead of the
 > verbose, error-prone `graph node find ... --limit N --mode hybrid` CLI.
 > SCL is a thin translation layer on top of the existing CLI; it does **not**
-> replace it.
+> replace it. SCL is used through the single `kg` MCP tool — there are no
+> separate typed tools for each operation.
 
 ---
 
@@ -18,22 +19,22 @@ Root causes observed in `src/bin/kg-mcp.rs` and `src/cli.rs`:
 | 2 | Graph name must be the first token (`fridge node ...`) | LLM omits it or guesses wrong graph |
 | 3 | ID format `<type_code>:snake_case` is strict | LLM emits `Fridge`, `fridge_1`, `"concept:foo bar"` |
 | 4 | `node add` requires `--source "<TYPE> <LINK>"` with restricted TYPE set | LLM writes free-form source strings → validation error |
-| 5 | `provenance` must be single letter `U|D|A` | LLM sends `"user"`, `"derived"` |
+| 5 | `provenance` must be single letter `U|D|A|G` | LLM sends `"user"`, `"derived"` |
 | 6 | Edge relations are constrained per source/target type | LLM picks any relation → `validate_edge` rejects |
-| 7 | Two parallel surfaces: typed MCP tools (`kg_node_find`, `kg_edge_add_batch`, ...) and free-text `kg` script | LLM mixes them, calls `kg_node_find` with a script string |
+| 7 | Two parallel surfaces: typed MCP tools (`kg_node_find`, `kg_edge_add_batch`, ...) and free-text `kg` script | **Resolved:** typed tools removed; only `kg`, `kg_help`, `kg_schema` exist |
 | 8 | Error messages point to internal validators, not to what the LLM should type | No actionable hint |
 
 SCL fixes #1, #2, #3, #5, #8 directly and softens #4/#6 via smart defaults
-and helpful errors. #7 is addressed by making `kg` the single entry tool and
-documenting the typed tools as "advanced only".
+and helpful errors. #7 was addressed by removing the typed tools — only `kg`,
+`kg_help`, and `kg_schema` exist.
 
 ---
 
 ## 2. Design principles
 
 1. **One entry tool.** `kg` accepts a script of one or more SCL lines
-   separated by `;` or newline. Typed MCP tools (`kg_node_find`, etc.) stay
-   available but are marked advanced.
+   separated by `;` or newline. There are no separate typed tools — `kg`
+   is the single entry point for all operations.
 2. **Graph is implicit.** SCL never requires the graph name as the first
    token. The MCP server resolves it from the active graph context
    (server config / session). A `use <graph>` line overrides for the script.
@@ -118,7 +119,7 @@ get <nodeid> [--full]
 ### 4.3 `add` / `create`
 ```
 add <nodeid> [as <type>] [--name "..."] [--desc "..."] [--domain "..."]
-            [--importance 0.8] [--confidence 0.9] [--provenance U|D|A]
+            [--importance 0.8] [--confidence 0.9] [--provenance U|D|A|G]
             [--source "URL https://..."] [--fact "..."] [--alias "..."]
 ```
 - `add concept:fridge --name "Refrigerator" --desc "kitchen appliance"`
@@ -206,7 +207,7 @@ Place at script start for strict mode throughout.
 | `find fridge` | `<g> node find "fridge"` |
 | `search fridge --limit 5` | `<g> node find "fridge" --limit 5` |
 | `get concept:fridge` | `<g> node get concept:fridge` |
-| `add concept:fridge --name "Fridge"` | `<g> node add concept:fridge --type Concept --name "Fridge" --provenance A --confidence 0.7 --importance 0.5 --source "OTHER scl:concept:fridge" --created-at <now>` |
+| `add concept:fridge --name "Fridge"` | `<g> node add concept:fridge --type Concept --name "Fridge" --provenance A --confidence 0.7 --importance 0.5 --source "OTHER scl:concept:fridge"` |
 | `create bug:leak --name "Leak"` | as above with `--type Bug` |
 | `modify concept:fridge --importance 0.9` | `<g> node modify concept:fridge --importance 0.9` |
 | `remove concept:fridge` | `<g> node remove concept:fridge` |
@@ -305,7 +306,7 @@ Cover every row in §5 plus edge cases:
 
 ### 8.6 Migration / rollout
 1. Ship SCL as opt-in (first-token-is-verb detection).
-2. Keep typed MCP tools but mark descriptions as "advanced; prefer `kg` with SCL".
+2. SCL is the primary interface — the three tools (`kg`, `kg_help`, `kg_schema`) are the only surface.
 3. No breaking change to existing CLI scripts.
 
 ---

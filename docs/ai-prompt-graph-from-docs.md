@@ -28,7 +28,7 @@ Hard rules:
    - type
    - name
    - description
-   - importance (1..6)
+   - importance (0.0..1.0)
    - at least one source file reference when available
 8) Use notes for assumptions or temporary interpretation, not as hard facts.
 9) At the end, run strict validation once:

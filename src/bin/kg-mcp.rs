@@ -1864,11 +1864,11 @@ Example question for missing facts:
 
 WORKFLOW:
 1. Run `kg {} feedback-summary --limit 30` to summarize feedback signals
-2. Run `kg_gap_summary` for the same graph to discover quality gaps
+2. Run `kg {} gap-summary` for the same graph to discover quality gaps
 3. Identify the top NIL queries and repeated NO responses; treat them as missing nodes or missing relations
 4. Ask the user ONE targeted question at a time to fill the gap (description, facts, missing edges)
-5. Apply updates with kg_node_add / kg_node_modify / kg_edge_add using --source "user-input"
-6. Verify with kg_node_get and finish with kg_check
+5. Apply updates with `kg {} node add`, `kg {} node modify`, `kg {} edge add` using --source "user-input"
+6. Verify with `kg {} node get` and finish with `kg {} check`
 
 RULES:
 - Keep the conversation in Polish
@@ -1878,7 +1878,15 @@ RULES:
 Example question:
 "Widzę brak dla zapytania '{{query}}'. Czy to powinien być nowy węzeł? Jeśli tak, podaj nazwę i 1-2 fakty."
 "#,
-            args.graph, args.goal, args.graph
+            args.graph,
+            args.goal,
+            args.graph,
+            args.graph,
+            args.graph,
+            args.graph,
+            args.graph,
+            args.graph,
+            args.graph
         );
         Ok(GetPromptResult {
             description: Some("Feedback-driven retrospective session".to_owned()),
@@ -1907,7 +1915,7 @@ impl ServerHandler for KgMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Use typed tools for common operations or kg_command for full CLI coverage."
+                "Use the kg tool for all commands and full CLI coverage. Use kg_schema to discover the graph schema and kg_help for command syntax."
                     .to_owned(),
             ),
         }

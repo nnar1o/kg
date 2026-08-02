@@ -80,7 +80,7 @@ Typical fixes:
 
 - missing required node fields (`type`, `name`)
 - unsupported relation for a source/target type pair
-- `importance` outside `1..=6`
+- `importance` outside `0.0..=1.0`
 
 For stricter format checks:
 

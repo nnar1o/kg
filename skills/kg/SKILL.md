@@ -36,7 +36,7 @@ Node type dictionary: `Concept`, `Process`, `DataStore`, `Interface`, `Rule`, `F
 
 Edge relation dictionary: `HAS`, `STORED_IN`, `TRIGGERS`, `CREATED_BY`, `AFFECTED_BY`, `AVAILABLE_IN`, `DOCUMENTED_IN`, `DEPENDS_ON`, `TRANSITIONS`, `DECIDED_BY`, `GOVERNED_BY`, `USES`, `READS_FROM`.
 
-Provenance dictionary: `U` = User input, `D` = Documentation scan, `A` = AI deduction.
+Provenance dictionary: `U` = User input, `D` = Documentation scan, `A` = AI deduction, `G` = Generated (system/auto-created nodes).
 
 Source type dictionary: `URL`, `SVN`, `SOURCECODE`, `WIKI`, `CONFLUENCE`, `CONVERSATION`, `GIT_COMMIT`, `PULL_REQUEST`, `ISSUE`, `DOC`, `LOG`, `OTHER`.
 
@@ -75,7 +75,7 @@ Use these as reference patterns for high-quality, traceable graph data. All oper
 {
   "tool": "kg",
   "arguments": {
-    "script": "fridge node add concept:fridge_energy_profile --type Concept --name \"Fridge Energy Profile\" --description \"Model of daily and seasonal refrigerator energy behavior.\" --domain-area kitchen_iot --provenance D --confidence 0.93 --importance 0.88 --created-at 2026-02-14T09:10:00Z --fact \"Average daily consumption is tracked per cooling mode.\" --fact \"Door-open frequency strongly impacts compressor cycles.\" --alias \"energy profile\" --alias \"fridge power model\" --source \"CONFLUENCE https://confluence.abc/display/FRIDGE/energy-model v3\" --source \"LOG telemetry/fridge-eu-17.log 2026-02-01..2026-02-07\" --source \"CONVERSATION 2026-02-12 ai chat with maintenance lead\""
+    "script": "fridge node add concept:fridge_energy_profile --type Concept --name \"Fridge Energy Profile\" --description \"Model of daily and seasonal refrigerator energy behavior.\" --domain-area kitchen_iot --provenance D --confidence 0.93 --importance 0.88 --fact \"Average daily consumption is tracked per cooling mode.\" --fact \"Door-open frequency strongly impacts compressor cycles.\" --alias \"energy profile\" --alias \"fridge power model\" --source \"CONFLUENCE https://confluence.abc/display/FRIDGE/energy-model v3\" --source \"LOG telemetry/fridge-eu-17.log 2026-02-01..2026-02-07\" --source \"CONVERSATION 2026-02-12 ai chat with maintenance lead\""
   }
 }
 ```
@@ -97,7 +97,7 @@ Use these as reference patterns for high-quality, traceable graph data. All oper
 {
   "tool": "kg",
   "arguments": {
-    "script": "fridge node find \"energy profile compressor defrost\" \"kitchen_iot\" --full --output-size 1200 --skip-feedback"
+    "script": "fridge node find \"energy profile compressor defrost\" \"kitchen_iot\" --full --output-size 1200"
   }
 }
 ```

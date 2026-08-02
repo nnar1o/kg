@@ -115,14 +115,20 @@ kg(script="fridge node find 'compressor'") → execute
 
 ## Resources
 
+Static resources (fixed URIs):
 - `kg://cwd` — current working directory
 - `kg://graphs` — discovered graph files
-- `kg://graph/{name}` — graph stats summary
+
+Resource template (parameterized URI):
+- `kg://graph/{name}` — graph stats summary for a given graph
 
 ## Prompts
 
-- `kg_workflow_prompt` — template for planning safe multi-step edits
-- Ready-to-copy ingestion prompt: [`docs/ai-prompt-graph-from-docs.md`](ai-prompt-graph-from-docs.md)
+- `kg_workflow_prompt` — template for planning safe multi-step edits (discover → mutate → verify)
+- `kg_collaborative_prompt` — collaborative graph improvement session: analyzes gaps and works with the user to fill them
+- `kg_feedback_retrospective_prompt` — retrospective session using feedback signals + quality gaps to improve the graph
+
+Ready-to-copy ingestion prompt: [`docs/ai-prompt-graph-from-docs.md`](ai-prompt-graph-from-docs.md)
 
 ## Common issues
 
