@@ -2,6 +2,29 @@
 
 kg-mcp is an MCP interface for the kg knowledge graph, enabling structured read/write operations on nodes and edges.
 
+## Graph scoping for MCP
+
+For graph-scoped commands, pass the graph explicitly as the `kg` tool
+argument. This is the preferred form:
+
+```text
+kg(graph: "fridge", script: "node find refrigerator")
+```
+
+If the `graph` argument is omitted, a graph-scoped operation must instead use
+`use <graph>` or an explicit canonical graph prefix. Without one of those
+three selections (`graph`, `use <graph>`, or a canonical prefix), the
+operation is rejected; do not rely on an implicit default graph. For example:
+
+```text
+kg(script: "use fridge\nnode find refrigerator\nnode get concept:refrigerator")
+kg(script: "graph fridge node find refrigerator")
+```
+
+`use <graph>` persists over later lines in the same script, so the first
+example scopes both operations to `fridge`. A bare `find refrigerator` or
+`node find refrigerator` without graph selection is rejected.
+
 # 2. Node and Edge Structure
 
 ### Node Fields
@@ -75,7 +98,8 @@ Use these as reference patterns for high-quality, traceable graph data. All oper
 {
   "tool": "kg",
   "arguments": {
-    "script": "fridge node add concept:fridge_energy_profile --type Concept --name \"Fridge Energy Profile\" --description \"Model of daily and seasonal refrigerator energy behavior.\" --domain-area kitchen_iot --provenance D --confidence 0.93 --importance 0.88 --fact \"Average daily consumption is tracked per cooling mode.\" --fact \"Door-open frequency strongly impacts compressor cycles.\" --alias \"energy profile\" --alias \"fridge power model\" --source \"CONFLUENCE https://confluence.abc/display/FRIDGE/energy-model v3\" --source \"LOG telemetry/fridge-eu-17.log 2026-02-01..2026-02-07\" --source \"CONVERSATION 2026-02-12 ai chat with maintenance lead\""
+    "graph": "fridge",
+    "script": "node add concept:fridge_energy_profile --type Concept --name \"Fridge Energy Profile\" --description \"Model of daily and seasonal refrigerator energy behavior.\" --domain-area kitchen_iot --provenance D --confidence 0.93 --importance 0.88 --fact \"Average daily consumption is tracked per cooling mode.\" --fact \"Door-open frequency strongly impacts compressor cycles.\" --alias \"energy profile\" --alias \"fridge power model\" --source \"CONFLUENCE https://confluence.abc/display/FRIDGE/energy-model v3\" --source \"LOG telemetry/fridge-eu-17.log 2026-02-01..2026-02-07\" --source \"CONVERSATION 2026-02-12 ai chat with maintenance lead\""
   }
 }
 ```
@@ -86,7 +110,8 @@ Use these as reference patterns for high-quality, traceable graph data. All oper
 {
   "tool": "kg",
   "arguments": {
-    "script": "fridge edge add process:compressor_control_loop TRIGGERS process:auto_defrost_scheduler --detail \"Defrost scheduler is triggered after compressor runtime threshold is exceeded.\""
+    "graph": "fridge",
+    "script": "edge add process:compressor_control_loop TRIGGERS process:auto_defrost_scheduler --detail \"Defrost scheduler is triggered after compressor runtime threshold is exceeded.\""
   }
 }
 ```
@@ -97,7 +122,8 @@ Use these as reference patterns for high-quality, traceable graph data. All oper
 {
   "tool": "kg",
   "arguments": {
-    "script": "fridge node find \"energy profile compressor defrost\" \"kitchen_iot\" --full --output-size 1200"
+    "graph": "fridge",
+    "script": "node find \"energy profile compressor defrost\" \"kitchen_iot\" --full --output-size 1200"
   }
 }
 ```
@@ -106,7 +132,8 @@ Use these as reference patterns for high-quality, traceable graph data. All oper
 {
   "tool": "kg",
   "arguments": {
-    "script": "fridge node get concept:fridge_energy_profile --full --output-size 1200"
+    "graph": "fridge",
+    "script": "node get concept:fridge_energy_profile --full --output-size 1200"
   }
 }
 ```
@@ -121,11 +148,11 @@ Use these as reference patterns for high-quality, traceable graph data. All oper
 
 # 3. Tools (3)
 
-All kg operations are exposed through 3 MCP tools. Call `kg_help <domain>` for detailed syntax and examples before unfamiliar operations.
+All kg operations are exposed through 3 MCP tools. Call `kg_help <domain>` for detailed syntax and examples before unfamiliar operations. For graph-scoped calls, prefer the explicit `graph: "<name>"` argument on `kg`.
 
 | Tool | Purpose | Parameters |
 | --- | --- | --- |
-| `kg` | Execute one or more kg commands: find/get nodes, CRUD nodes/edges, graph create/stats, audit, feedback. | `script` (string), `mode?` (`best_effort`\|`strict`), `debug?` (bool) |
+| `kg` | Execute one or more kg commands: find/get nodes, CRUD nodes/edges, graph create/stats, audit, feedback. | `graph?` (string, preferred graph selector), `script` (string), `mode?` (`best_effort`\|`strict`), `debug?` (bool) |
 | `kg_help` | Return detailed manual with examples for a domain. | `domain` (string): `node`, `edge`, `graph`, `schema`, `kql`, `feedback`, `batch`, `script`, `all` |
 | `kg_schema` | Return valid node types, relations, ID prefixes, and edge rules. | (none) |
 
@@ -133,5 +160,5 @@ All kg operations are exposed through 3 MCP tools. Call `kg_help <domain>` for d
 
 - Start with `kg_schema()` to discover valid types/relations.
 - Call `kg_help(domain="node")` or `kg_help(domain="edge")` before unfamiliar operations.
-- Use `kg` for all execution. Multi-step flows (find → feedback → get) go in one script call.
+- Use `kg` for all execution and pass `graph: "<name>"` for graph-scoped scripts. Multi-step flows (find → feedback → get) go in one script call.
 - Inspect `structured_content.requires_feedback` after `node find`/`node get`; submit feedback via `uid=...` lines in the next `kg` call.

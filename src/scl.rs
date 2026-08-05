@@ -1,4 +1,7 @@
 #![allow(clippy::too_many_arguments)]
+// `SclError` intentionally carries structured diagnostics in public results,
+// so its size is part of the deliberate error API design.
+#![allow(clippy::result_large_err)]
 
 //! Simple Command Language (SCL) — a thin translation layer over the kg CLI.
 //!
@@ -1331,7 +1334,7 @@ fn parse_connect(tokens: &[String], input: &str) -> Result<CanonicalLine, SclErr
     if tokens.len() < offset + 3 {
         return Err(SclError::new(
             category::UNKNOWN_VERB,
-            format!("expected source, relation, and target"),
+            "expected source, relation, and target".to_owned(),
             input.to_owned(),
             "connect <src> <relation> <tgt> [--detail \"..\"]",
             "connect concept:fridge USES process:comp",

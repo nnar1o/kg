@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0] - 2026-08-05
+
+### Added
+- add explicit top-level MCP `graph` scope for graph-scoped scripts
+
+### Changed
+- persist `use <graph>` selection across later lines in the same MCP script
+- improve canonical CLI and SCL grammar handling, including option and graph-prefix parsing
+- preserve MCP feedback-required, buffered, and passive feedback behavior across the new scoping flow
+
+### Fixed
+- reject graph-scoped operations without an explicit `graph`, `use <graph>`, or canonical graph prefix instead of silently selecting a default graph
+
 ## [0.2.24] - 2026-08-02
 
 ### Fixed

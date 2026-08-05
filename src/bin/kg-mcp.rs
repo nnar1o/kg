@@ -55,6 +55,11 @@ struct KgScriptArgs {
         Fallback: canonical CLI syntax (kg <graph> node find ...) also works."
     )]
     script: String,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional graph name used as the active graph for the entire script. Supply this for graph-scoped commands unless the script uses `use <graph>`; canonical commands may include the graph explicitly."
+    )]
+    graph: Option<String>,
     /// best_effort (default) or strict
     #[serde(default)]
     mode: Option<String>,
@@ -78,6 +83,7 @@ struct KgHelpArgs {
 struct NodeFindArgs {
     graph: String,
     queries: Vec<String>,
+    options_terminated: bool,
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
@@ -98,6 +104,7 @@ struct NodeFindArgs {
 struct NodeGetArgs {
     graph: String,
     id: String,
+    options_terminated: bool,
     #[serde(default)]
     output_size: Option<usize>,
     #[serde(default)]
@@ -218,7 +225,7 @@ struct PendingFindFeedback {
 fn scl_cheat_sheet() -> String {
     let mut s = String::new();
     s.push_str("# SCL — Simple Command Language (verb-first, short English)\n");
-    s.push_str("# Use natural short commands. The active graph is set automatically.\n\n");
+    s.push_str("# Use natural short commands. For MCP, prefer the top-level `graph` argument; `use <graph>` also sets it for the rest of the script.\n\n");
     s.push_str("## Core verbs\n");
     s.push_str("  find <query>                    search nodes by text\n");
     s.push_str("  get <id>                         fetch one node by id\n");
@@ -235,7 +242,7 @@ fn scl_cheat_sheet() -> String {
     s.push_str("  use <graph>                       switch active graph\n");
     s.push_str("  strict                            disable defaults for following lines\n");
     s.push_str("  feedback <uid> yes|no|nil|pick <n>\n");
-    s.push_str("\n");
+    s.push('\n');
     s.push_str("## Quick examples\n");
     s.push_str("  find compressor\n");
     s.push_str("  find \"defrost cycle\"\n");
@@ -248,15 +255,15 @@ fn scl_cheat_sheet() -> String {
     s.push_str("  list nodes\n");
     s.push_str("  stats\n");
     s.push_str("  use fridge\n");
-    s.push_str("\n");
+    s.push('\n');
     s.push_str("## IDs\n");
     s.push_str("  Format: <type>:snake_case   e.g. concept:fridge, bug:door_seal\n");
-    s.push_str("\n");
+    s.push('\n');
     s.push_str("## Relations\n");
     s.push_str("  HAS USES STORED_IN TRIGGERS CREATED_BY AFFECTED_BY\n");
     s.push_str("  AVAILABLE_IN DOCUMENTED_IN DEPENDS_ON TRANSITIONS\n");
     s.push_str("  DECIDED_BY GOVERNED_BY READS_FROM\n");
-    s.push_str("\n");
+    s.push('\n');
     s.push_str("## Tips\n");
     s.push_str("  - Flags go after positional args. Quote multiword values.\n");
     s.push_str("  - Separate commands with ';' or newlines.\n");
@@ -333,7 +340,7 @@ fn get_help(domain: &str) -> String {
             "After `find` or `get`, check `structured_content.requires_feedback`.\n\n",
             "## Feedback Lines\n  `uid=<uid> YES` — confirm node is relevant\n  `uid=<uid> NO` — confirm node is NOT relevant\n  `uid=<uid> NIL` — explicitly decline feedback\n  `uid=<uid> PICK <n>` — pick Nth candidate as most relevant (1-indexed)\n\n",
             "Usage in kg script:\n",
-            &cmd("find \"compressor\" --output-size 1200; uid=abc123 YES\n"),
+            cmd("find \"compressor\" --output-size 1200; uid=abc123 YES\n"),
             "\n",
             "Passive feedback: When `get` follows `find` in same script, PICK is auto-resolved.\n\n",
         ),
@@ -343,7 +350,7 @@ fn get_help(domain: &str) -> String {
             "## Node Batch\n  `kg <graph> node add-batch <json-array> [--on-conflict skip] [--mode atomic|best_effort]`\n\n",
             "## Edge Batch\n  `kg <graph> edge add-batch <json-array> [--dry-run] [--mode atomic|best_effort]`\n\n",
             "## Feedback Batch\n  Inline in kg script:\n",
-            &cmd("find \"x\"; uid=a1 YES; uid=a2 PICK 1; uid=a3 NO\n"),
+            cmd("find \"x\"; uid=a1 YES; uid=a2 PICK 1; uid=a3 NO\n"),
             "\n",
             "Modes:\n  `atomic` (default) — all or nothing\n  `best_effort` — apply valid items, skip failures\n\n",
         ),
@@ -351,11 +358,11 @@ fn get_help(domain: &str) -> String {
             "{}{}{}{}{}{}{}{}{}{}",
             header("Script Syntax"),
             "Commands separated by `;` or newlines. Lines starting with `#` are comments.\n\n",
-            "SCL (short verb-first) commands:\n",
-            &cmd("find \"query\"; get concept:fridge; uid=xxx YES\n"),
+            "SCL (short verb-first) commands; for MCP, pass the graph separately as the top-level argument, e.g. `{ graph: \"my_graph\", script: \"find ...\" }`:\n",
+            cmd("find \"query\"; get concept:fridge; uid=xxx YES\n"),
             "\n",
             "Canonical CLI also works (the `kg ` prefix is stripped automatically):\n",
-            &cmd("<graph> node find \"query\"; <graph> node get <id>; uid=xxx PICK 1\n"),
+            cmd("<graph> node find \"query\"; <graph> node get <id>; uid=xxx PICK 1\n"),
             "\n",
             "Feedback lines are buffered and flushed before each non-feedback command.\n",
             "Mode: `best_effort` (default) or `strict` (fail on first error).\n",
@@ -961,12 +968,16 @@ impl KgMcpServer {
         Ok(FeedbackBatchRun { ok, failed, items })
     }
 
-    fn handle_node_find(&self, args: NodeFindArgs) -> Result<CallToolResult, McpError> {
+    fn handle_node_find(
+        &self,
+        args: NodeFindArgs,
+        global_options: &[String],
+        graph_options: &[String],
+    ) -> Result<CallToolResult, McpError> {
         let graph = args.graph.clone();
         let queries = args.queries.clone();
         let mut skip_feedback = args.skip_feedback;
         let mut cmd = vec![args.graph, "node".to_owned(), "find".to_owned()];
-        cmd.extend(args.queries);
         if let Some(limit) = args.limit {
             cmd.push("--limit".to_owned());
             cmd.push(limit.to_string());
@@ -982,10 +993,12 @@ impl KgMcpServer {
         if args.full {
             cmd.push("--full".to_owned());
         }
+        if args.options_terminated {
+            cmd.push("--".to_owned());
+        }
+        cmd.extend(args.queries);
 
-        let mut os_args = Vec::with_capacity(cmd.len() + 1);
-        os_args.push(OsString::from("kg"));
-        os_args.extend(cmd.into_iter().map(OsString::from));
+        let os_args = graph_cli_args(global_options, graph_options, cmd);
         let rendered = self.run_kg(os_args, "kg_node_find", "node find", args.debug)?;
 
         let total = parse_find_total_results(&rendered).unwrap_or(0);
@@ -1128,10 +1141,15 @@ impl KgMcpServer {
         })
     }
 
-    fn handle_node_get(&self, args: NodeGetArgs) -> Result<CallToolResult, McpError> {
+    fn handle_node_get(
+        &self,
+        args: NodeGetArgs,
+        global_options: &[String],
+        graph_options: &[String],
+    ) -> Result<CallToolResult, McpError> {
         let graph = args.graph.clone();
         let node_id = args.id.clone();
-        let mut cmd = vec![args.graph, "node".to_owned(), "get".to_owned(), args.id];
+        let mut cmd = vec![args.graph, "node".to_owned(), "get".to_owned()];
         if let Some(output_size) = args.output_size {
             cmd.push("--output-size".to_owned());
             cmd.push(output_size.to_string());
@@ -1139,10 +1157,12 @@ impl KgMcpServer {
         if args.full {
             cmd.push("--full".to_owned());
         }
+        if args.options_terminated {
+            cmd.push("--".to_owned());
+        }
+        cmd.push(args.id);
 
-        let mut os_args = Vec::with_capacity(cmd.len() + 1);
-        os_args.push(OsString::from("kg"));
-        os_args.extend(cmd.into_iter().map(OsString::from));
+        let os_args = graph_cli_args(global_options, graph_options, cmd);
         let rendered = self.run_kg(os_args, "kg_node_get", "node get", args.debug)?;
 
         let uid = self.next_uid()?;
@@ -1205,14 +1225,127 @@ impl KgMcpServer {
         })
     }
 
+    /// Appends a find result while coordinating the shared output, step, feedback,
+    /// and pending-feedback accumulators used by the script runner.
+    #[allow(clippy::too_many_arguments)]
+    fn append_node_find_result(
+        result: Result<CallToolResult, McpError>,
+        command: &str,
+        graph: &str,
+        mode: &str,
+        output: &mut String,
+        steps: &mut Vec<Value>,
+        requires_feedback: &mut Vec<Value>,
+        pending_find_feedback: &mut HashMap<String, PendingFindFeedback>,
+    ) -> Result<(), McpError> {
+        match result {
+            Ok(tool_result) => {
+                let stdout = Self::render_text_content(&tool_result);
+                let req = tool_result
+                    .structured_content
+                    .as_ref()
+                    .and_then(|v| v.get("requires_feedback"))
+                    .cloned();
+                push_command_step(output, steps, command, &stdout, req.clone());
+                if let Some(req) = req {
+                    if req
+                        .get("mode")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|mode| mode == "pick")
+                    {
+                        if let Some(uid) =
+                            req.get("uid").and_then(|v| v.as_str()).map(str::to_owned)
+                        {
+                            let candidate_ids = parse_find_candidate_ids(&stdout);
+                            if !candidate_ids.is_empty() {
+                                pending_find_feedback.insert(
+                                    graph.to_owned(),
+                                    PendingFindFeedback { uid, candidate_ids },
+                                );
+                            }
+                        }
+                    }
+                    requires_feedback.push(req);
+                }
+                Ok(())
+            }
+            Err(err) => {
+                if mode == "strict" {
+                    return Err(err);
+                }
+                let msg = err.to_string();
+                output.push_str("> ");
+                output.push_str(command);
+                output.push('\n');
+                output.push_str(&format!("ERROR: {msg}\n"));
+                steps.push(json!({
+                    "cmd": command,
+                    "kind": "kg",
+                    "ok": false,
+                    "error": msg,
+                }));
+                Ok(())
+            }
+        }
+    }
+
+    fn append_node_get_result(
+        result: Result<CallToolResult, McpError>,
+        command: &str,
+        mode: &str,
+        output: &mut String,
+        steps: &mut Vec<Value>,
+        requires_feedback: &mut Vec<Value>,
+    ) -> Result<(), McpError> {
+        match result {
+            Ok(tool_result) => {
+                let stdout = Self::render_text_content(&tool_result);
+                let req = tool_result
+                    .structured_content
+                    .as_ref()
+                    .and_then(|v| v.get("requires_feedback"))
+                    .cloned();
+                push_command_step(output, steps, command, &stdout, req.clone());
+                if let Some(req) = req {
+                    requires_feedback.push(req);
+                }
+                Ok(())
+            }
+            Err(err) => {
+                if mode == "strict" {
+                    return Err(err);
+                }
+                let msg = err.to_string();
+                output.push_str("> ");
+                output.push_str(command);
+                output.push('\n');
+                output.push_str(&format!("ERROR: {msg}\n"));
+                steps.push(json!({
+                    "cmd": command,
+                    "kind": "kg",
+                    "ok": false,
+                    "error": msg,
+                }));
+                Ok(())
+            }
+        }
+    }
+
     #[tool(
         name = "kg",
-        description = "Run one or more kg commands: find/get nodes, CRUD nodes/edges, graph create/stats, feedback. Use `kg_help <domain>` for usage."
+        description = "Run one or more kg commands. For graph-scoped SCL commands, supply the top-level `graph` argument or use `use <graph>`; canonical `kg <graph> ...` syntax is also supported. Use `kg_help <domain>` for usage."
     )]
     fn kg(&self, Parameters(args): Parameters<KgScriptArgs>) -> Result<CallToolResult, McpError> {
         let request_debug = args.debug;
         let mode = self.parse_mode(args.mode)?;
         let commands = kg::scl::split_script(&args.script);
+        let mut selected_graph = args
+            .graph
+            .as_deref()
+            .map(str::trim)
+            .filter(|graph| !graph.is_empty())
+            .map(str::to_owned);
+        let mut scl_ctx = kg::scl::Ctx::new(selected_graph.clone().unwrap_or_default(), false);
         let mut output = String::new();
         let mut steps: Vec<serde_json::Value> = Vec::new();
         let mut requires_feedback: Vec<serde_json::Value> = Vec::new();
@@ -1280,11 +1413,7 @@ impl KgMcpServer {
             flush_feedback(self, &mut steps, &mut output, &mut feedback_buffer)?;
 
             // ---- SCL dispatch: try parsing as SCL before falling through to CLI ----
-            let mut scl_ctx = kg::scl::Ctx {
-                graph: kg::resolve_default_graph(&self.cwd).unwrap_or_else(|| "default".to_owned()),
-                strict: false,
-            };
-            // Handle `strict` and `use <graph>` directives (normally handled by parse_script)
+            // Keep this context outside the loop so `use <graph>` follows SCL semantics.
             if trimmed == "strict" {
                 scl_ctx.strict = true;
                 output.push_str("> strict mode enabled for subsequent lines\n");
@@ -1295,16 +1424,31 @@ impl KgMcpServer {
                 let g = graph_name.trim();
                 if !g.is_empty() && !g.contains(char::is_whitespace) {
                     scl_ctx.graph = g.to_owned();
+                    selected_graph = Some(g.to_owned());
                     output.push_str(&format!("> using graph: {}\n", g));
                     steps.push(json!({ "cmd": trimmed, "kind": "scl_directive", "ok": true }));
                     continue;
                 }
             }
             let mut scl_handled = false;
+            let mut optimized_scl: Option<kg::scl::CanonicalLine> = None;
             match kg::scl::parse_line(trimmed, &scl_ctx) {
                 Ok(Some(canonical)) => {
-                    scl_handled = true;
+                    if scl_requires_graph(&canonical) && selected_graph.is_none() {
+                        push_graph_required_error(&mode, trimmed, &mut output, &mut steps)?;
+                        continue;
+                    }
+                    let is_optimized_scl = matches!(
+                        &canonical,
+                        kg::scl::CanonicalLine::NodeFind { .. }
+                            | kg::scl::CanonicalLine::NodeGet { .. }
+                    );
+                    scl_handled = !is_optimized_scl;
                     match &canonical {
+                        kg::scl::CanonicalLine::NodeFind { .. }
+                        | kg::scl::CanonicalLine::NodeGet { .. } => {
+                            optimized_scl = Some(canonical.clone());
+                        }
                         kg::scl::CanonicalLine::Help { topic } => {
                             let help_text = match topic {
                                 Some(t) if t == "scl" => scl_cheat_sheet(),
@@ -1478,6 +1622,89 @@ impl KgMcpServer {
                     }));
                 }
             }
+            if let Some(canonical) = optimized_scl {
+                match canonical {
+                    kg::scl::CanonicalLine::NodeFind {
+                        query,
+                        limit,
+                        mode: find_mode,
+                        full,
+                        output_size,
+                    } => {
+                        let graph = scl_ctx.graph.clone();
+                        let find_args = NodeFindArgs {
+                            graph: graph.clone(),
+                            queries: vec![query],
+                            options_terminated: false,
+                            limit,
+                            output_size,
+                            mode: find_mode,
+                            full,
+                            skip_feedback: false,
+                            with_feedback: false,
+                            debug: request_debug,
+                        };
+                        let result = self.handle_node_find(find_args, &[], &[]);
+                        Self::append_node_find_result(
+                            result,
+                            trimmed,
+                            &graph,
+                            &mode,
+                            &mut output,
+                            &mut steps,
+                            &mut requires_feedback,
+                            &mut pending_find_feedback,
+                        )?;
+                    }
+                    kg::scl::CanonicalLine::NodeGet {
+                        id,
+                        full,
+                        output_size,
+                    } => {
+                        let graph = scl_ctx.graph.clone();
+                        if let Some(pending) = pending_find_feedback.get(&graph) {
+                            if let Some(index) = pending
+                                .candidate_ids
+                                .iter()
+                                .position(|candidate_id| candidate_id == &id)
+                            {
+                                let passive_line =
+                                    format!("uid={} PICK {} passive=1", pending.uid, index + 1);
+                                feedback_buffer.push(passive_line.clone());
+                                auto_resolved_feedback_uids.insert(pending.uid.clone());
+                                steps.push(json!({
+                                    "cmd": trimmed,
+                                    "kind": "passive_feedback",
+                                    "ok": true,
+                                    "source": "node_get_after_find",
+                                    "line": passive_line,
+                                }));
+                            }
+                        }
+                        pending_find_feedback.remove(&graph);
+                        flush_feedback(self, &mut steps, &mut output, &mut feedback_buffer)?;
+                        let get_args = NodeGetArgs {
+                            graph,
+                            id,
+                            options_terminated: false,
+                            output_size,
+                            full,
+                            debug: request_debug,
+                        };
+                        let result = self.handle_node_get(get_args, &[], &[]);
+                        Self::append_node_get_result(
+                            result,
+                            trimmed,
+                            &mode,
+                            &mut output,
+                            &mut steps,
+                            &mut requires_feedback,
+                        )?;
+                    }
+                    _ => unreachable!("only optimized SCL node commands are routed here"),
+                }
+                continue;
+            }
             if scl_handled {
                 continue;
             }
@@ -1510,15 +1737,34 @@ impl KgMcpServer {
                 continue;
             }
 
-            let mut args = tokens;
-            while args.first().map(|v| v == "kg").unwrap_or(false) {
-                args.remove(0);
-            }
-            if args.first().map(|v| v == "graph").unwrap_or(false) {
-                args.remove(0);
-            }
+            let normalized = normalize_canonical_args(tokens);
+            let mut args = normalized.args;
+            let global_options = normalized.global_options;
+            let graph_options = normalized.graph_options;
+            let has_graph_wrapper = normalized.has_graph_wrapper;
             if args.is_empty() {
                 continue;
+            }
+
+            let canonical_scope = classify_canonical_scope(&args, has_graph_wrapper);
+            if matches!(
+                canonical_scope,
+                CanonicalScope::GraphScoped | CanonicalScope::InvalidGraphFragment
+            ) {
+                match selected_graph.as_ref() {
+                    Some(graph) => {
+                        if canonical_scope == CanonicalScope::GraphScoped {
+                            let mut scoped_args = Vec::with_capacity(args.len() + 1);
+                            scoped_args.push(graph.clone());
+                            scoped_args.extend(args);
+                            args = scoped_args;
+                        }
+                    }
+                    None => {
+                        push_graph_required_error(&mode, trimmed, &mut output, &mut steps)?;
+                        continue;
+                    }
+                }
             }
 
             let mut handled = false;
@@ -1527,7 +1773,7 @@ impl KgMcpServer {
                 let result = match find_args {
                     Ok(mut find_args) => {
                         find_args.debug = request_debug;
-                        self.handle_node_find(find_args)
+                        self.handle_node_find(find_args, &global_options, &graph_options)
                     }
                     Err(err) => Err(McpError::invalid_params(
                         "invalid node find command",
@@ -1617,7 +1863,7 @@ impl KgMcpServer {
                             pending_find_feedback.remove(&get_args.graph);
                             flush_feedback(self, &mut steps, &mut output, &mut feedback_buffer)?;
                             get_args.debug = request_debug;
-                            self.handle_node_get(get_args)
+                            self.handle_node_get(get_args, &global_options, &graph_options)
                         }
                         Err(err) => Err(McpError::invalid_params(
                             "invalid node get command",
@@ -1669,7 +1915,20 @@ impl KgMcpServer {
                 continue;
             }
 
-            match self.execute_kg_for("kg", args.clone(), request_debug) {
+            let mut execution_args = global_options;
+            if matches!(
+                canonical_scope,
+                CanonicalScope::GraphScoped | CanonicalScope::ExplicitGraph
+            ) && (!execution_args.is_empty() || !graph_options.is_empty())
+            {
+                execution_args.push("graph".to_owned());
+                execution_args.extend(graph_options);
+            } else {
+                execution_args.extend(graph_options);
+            }
+            execution_args.extend(args.clone());
+
+            match self.execute_kg_for("kg", execution_args, request_debug) {
                 Ok(tool_result) => {
                     let stdout = Self::render_text_content(&tool_result);
                     push_command_step(&mut output, &mut steps, trimmed, &stdout, None);
@@ -2039,6 +2298,339 @@ fn default_graph_root(cwd: &Path) -> PathBuf {
     }
 }
 
+fn scl_requires_graph(line: &kg::scl::CanonicalLine) -> bool {
+    match line {
+        kg::scl::CanonicalLine::NodeFind { .. }
+        | kg::scl::CanonicalLine::NodeGet { .. }
+        | kg::scl::CanonicalLine::NodeAdd { .. }
+        | kg::scl::CanonicalLine::NodeModify { .. }
+        | kg::scl::CanonicalLine::NodeRemove { .. }
+        | kg::scl::CanonicalLine::EdgeAdd { .. }
+        | kg::scl::CanonicalLine::EdgeRemove { .. }
+        | kg::scl::CanonicalLine::ListNodes
+        | kg::scl::CanonicalLine::ListEdges => true,
+        kg::scl::CanonicalLine::Stats { graph: None } => true,
+        kg::scl::CanonicalLine::ListTypes
+        | kg::scl::CanonicalLine::ListRelations
+        | kg::scl::CanonicalLine::ListGraphs
+        | kg::scl::CanonicalLine::Help { .. }
+        | kg::scl::CanonicalLine::Feedback { .. }
+        | kg::scl::CanonicalLine::Stats { graph: Some(_) } => false,
+    }
+}
+
+fn graph_required_message() -> &'static str {
+    "graph is required: supply the top-level `graph` argument, add `use <graph>`, or prefix canonical syntax with `kg <graph> ...`"
+}
+
+fn push_graph_required_error(
+    mode: &str,
+    command: &str,
+    output: &mut String,
+    steps: &mut Vec<Value>,
+) -> Result<(), McpError> {
+    let message = graph_required_message();
+    if mode == "strict" {
+        return Err(McpError::invalid_params(
+            message,
+            Some(json!({
+                "command": command,
+                "error": "graph_required",
+                "message": message,
+            })),
+        ));
+    }
+
+    output.push_str("> ");
+    output.push_str(command);
+    output.push('\n');
+    output.push_str("ERROR: ");
+    output.push_str(message);
+    output.push('\n');
+    steps.push(json!({
+        "cmd": command,
+        "kind": "validation",
+        "ok": false,
+        "error": message,
+    }));
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanonicalScope {
+    Global,
+    GraphScoped,
+    InvalidGraphFragment,
+    ExplicitGraph,
+    Passthrough,
+}
+
+// This is the auditable MCP-side mirror of cli::GraphCommand. Keeping the
+// command names together makes the canonical-fragment boundary explicit,
+// including commands that also have a top-level CLI form (vectors and
+// feedback-summary).
+const GRAPH_SCOPED_CANONICAL_COMMANDS: &[&str] = &[
+    "node",
+    "edge",
+    "note",
+    "stats",
+    "schema",
+    "list",
+    "check",
+    "audit",
+    "quality",
+    "missing-descriptions",
+    "missing-facts",
+    "duplicates",
+    "edge-gaps",
+    "clusters",
+    "export-html",
+    "access-log",
+    "access-stats",
+    "access-paths",
+    "import-csv",
+    "import-md",
+    "kql",
+    "annotate",
+    "facts",
+    "export-json",
+    "import-json",
+    "export-dot",
+    "export-mermaid",
+    "export-graphml",
+    "export-md",
+    "split",
+    "vectors",
+    "as-of",
+    "history",
+    "timeline",
+    "diff-as-of",
+    "feedback-summary",
+    "baseline",
+    "score-all",
+    "update",
+];
+
+// These are the true top-level commands that do not select a graph. The
+// `graph` wrapper is removed before this classification, so `graph create`
+// remains a valid graph-admin operation.
+const GLOBAL_CANONICAL_COMMANDS: &[&str] =
+    &["init", "create", "diff", "merge", "list", "feedback-log"];
+
+struct NormalizedCanonicalArgs {
+    args: Vec<String>,
+    global_options: Vec<String>,
+    graph_options: Vec<String>,
+    has_graph_wrapper: bool,
+}
+
+fn graph_cli_args(
+    global_options: &[String],
+    graph_options: &[String],
+    command_args: Vec<String>,
+) -> Vec<OsString> {
+    let mut args =
+        Vec::with_capacity(command_args.len() + global_options.len() + graph_options.len() + 2);
+    args.push(OsString::from("kg"));
+    args.extend(global_options.iter().cloned().map(OsString::from));
+    if !global_options.is_empty() || !graph_options.is_empty() {
+        // The shorthand graph normalization cannot run before a global flag;
+        // make the graph subcommand explicit for clap.
+        args.push(OsString::from("graph"));
+        args.extend(graph_options.iter().cloned().map(OsString::from));
+    }
+    args.extend(command_args.into_iter().map(OsString::from));
+    args
+}
+
+// Root and graph-level options mirror the grammar in src/cli.rs. Arity is
+// explicit so normalization can extract options without treating their
+// values as graph or command arguments.
+#[derive(Debug, Clone, Copy)]
+struct CliOption {
+    name: &'static str,
+    arity: usize,
+    scope: CliOptionScope,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CliOptionScope {
+    Root,
+    Graph,
+}
+
+const CLI_OPTIONS: &[CliOption] = &[
+    CliOption {
+        name: "--event-log",
+        arity: 0,
+        scope: CliOptionScope::Root,
+    },
+    CliOption {
+        name: "--legacy",
+        arity: 0,
+        scope: CliOptionScope::Graph,
+    },
+];
+
+fn cli_option(value: &str) -> Option<(CliOption, bool)> {
+    CLI_OPTIONS.iter().copied().find_map(|option| {
+        if value == option.name {
+            Some((option, false))
+        } else if value.starts_with(option.name)
+            && value.as_bytes().get(option.name.len()) == Some(&b'=')
+        {
+            Some((option, true))
+        } else {
+            None
+        }
+    })
+}
+
+fn normalize_canonical_args(mut tokens: Vec<String>) -> NormalizedCanonicalArgs {
+    while tokens.first().is_some_and(|token| token == "kg") {
+        tokens.remove(0);
+    }
+
+    let mut global_options = Vec::new();
+    let mut args = Vec::with_capacity(tokens.len());
+    let mut index = 0;
+    let mut options_terminated = false;
+    while index < tokens.len() {
+        if !options_terminated && tokens[index] == "--" {
+            args.push(tokens[index].clone());
+            options_terminated = true;
+            index += 1;
+            continue;
+        }
+        if !options_terminated {
+            if let Some((option, has_attached_value)) = cli_option(&tokens[index])
+                .filter(|(option, _)| matches!(option.scope, CliOptionScope::Root))
+            {
+                global_options.push(tokens[index].clone());
+                index += 1;
+                if !has_attached_value {
+                    for _ in 0..option.arity {
+                        if let Some(value) = tokens.get(index) {
+                            global_options.push(value.clone());
+                            index += 1;
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+        args.push(tokens[index].clone());
+        index += 1;
+    }
+
+    let has_graph_wrapper = args.first().is_some_and(|token| token == "graph");
+    if has_graph_wrapper {
+        args.remove(0);
+        let graph_options = extract_graph_wrapper_options(&mut args);
+        return NormalizedCanonicalArgs {
+            args,
+            global_options,
+            graph_options,
+            has_graph_wrapper,
+        };
+    }
+
+    NormalizedCanonicalArgs {
+        args,
+        global_options,
+        graph_options: Vec::new(),
+        has_graph_wrapper,
+    }
+}
+
+fn extract_graph_wrapper_options(args: &mut Vec<String>) -> Vec<String> {
+    let original = args.clone();
+    let mut graph_options = Vec::new();
+
+    if args.first().is_some_and(|token| token == "--") {
+        return graph_options;
+    }
+
+    while args.first().is_some_and(|token| token == "--legacy") {
+        graph_options.push(args.remove(0));
+    }
+
+    let Some(graph_name) = (!args.is_empty()).then(|| args.remove(0)) else {
+        *args = original;
+        return Vec::new();
+    };
+
+    while args.first().is_some_and(|token| token == "--legacy") {
+        graph_options.push(args.remove(0));
+    }
+
+    let mut normalized = vec![graph_name];
+    normalized.append(args);
+    *args = normalized;
+    graph_options
+}
+
+fn is_graph_scoped_canonical_command(value: &str) -> bool {
+    GRAPH_SCOPED_CANONICAL_COMMANDS.contains(&value)
+}
+
+fn is_global_canonical_command(args: &[String]) -> bool {
+    let Some(value) = args.first() else {
+        return false;
+    };
+    if value == "list" {
+        // `kg list` is global graph administration; graph list uses the
+        // graph-specific filters exposed by GraphCommand::List, including
+        // their short and equals-value forms.
+        return !args.iter().skip(1).any(|arg| is_graph_list_option(arg));
+    }
+    GLOBAL_CANONICAL_COMMANDS.contains(&value.as_str())
+}
+
+fn is_graph_list_option(arg: &str) -> bool {
+    matches!(
+        arg,
+        "--type" | "--since" | "--limit" | "--fields" | "-s" | "-l"
+    ) || ["--type=", "--since=", "--limit=", "--fields=", "-s=", "-l="]
+        .iter()
+        .any(|prefix| arg.starts_with(prefix))
+        || arg
+            .strip_prefix("-s")
+            .is_some_and(|value| !value.is_empty())
+        || arg
+            .strip_prefix("-l")
+            .is_some_and(|value| !value.is_empty())
+}
+
+/// Classify the already-normalized canonical CLI shape. A raw `kg`/`graph`
+/// prefix is explicit syntax; otherwise a known GraphCommand at position zero
+/// is a graph-scoped fragment that should use the MCP graph context.
+fn classify_canonical_scope(args: &[String], has_explicit_prefix: bool) -> CanonicalScope {
+    let Some(first) = args.first() else {
+        return CanonicalScope::Passthrough;
+    };
+
+    if is_global_canonical_command(args) {
+        return CanonicalScope::Global;
+    }
+    if has_explicit_prefix {
+        return CanonicalScope::ExplicitGraph;
+    }
+    if cli_option(first).is_some_and(|(option, _)| matches!(option.scope, CliOptionScope::Graph)) {
+        return CanonicalScope::InvalidGraphFragment;
+    }
+    if is_graph_scoped_canonical_command(first) {
+        return CanonicalScope::GraphScoped;
+    }
+    if args
+        .get(1)
+        .is_some_and(|command| is_graph_scoped_canonical_command(command))
+    {
+        return CanonicalScope::ExplicitGraph;
+    }
+    CanonicalScope::Passthrough
+}
+
 fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>> {
     if args.len() < 3 {
         return None;
@@ -2052,6 +2644,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
 
     let graph = args[0].clone();
     let mut queries = Vec::new();
+    let mut options_terminated = false;
     let mut limit = None;
     let mut output_size = None;
     let mut mode = None;
@@ -2061,6 +2654,16 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
     let mut i = 3;
     while i < args.len() {
         let token = &args[i];
+        if options_terminated {
+            queries.push(token.clone());
+            i += 1;
+            continue;
+        }
+        if token == "--" {
+            options_terminated = true;
+            i += 1;
+            continue;
+        }
         if token == "--limit" {
             i += 1;
             if i >= args.len() {
@@ -2124,6 +2727,7 @@ fn parse_node_find_args(args: &[String]) -> Option<Result<NodeFindArgs, String>>
     Some(Ok(NodeFindArgs {
         graph,
         queries,
+        options_terminated,
         limit,
         output_size,
         mode,
@@ -2143,7 +2747,16 @@ fn parse_node_get_args(args: &[String]) -> Option<Result<NodeGetArgs, String>> {
     }
 
     let graph = args[0].clone();
-    let id = args[3].clone();
+    let mut options_terminated = false;
+    let (id, mut i) = if args[3] == "--" {
+        options_terminated = true;
+        if args.len() < 5 {
+            return Some(Err("missing node id after --".to_owned()));
+        }
+        (args[4].clone(), 5)
+    } else {
+        (args[3].clone(), 4)
+    };
     if id.is_empty() {
         return Some(Err("missing node id".to_owned()));
     }
@@ -2151,9 +2764,16 @@ fn parse_node_get_args(args: &[String]) -> Option<Result<NodeGetArgs, String>> {
     let mut output_size = None;
     let mut full = false;
 
-    let mut i = 4;
     while i < args.len() {
         let token = &args[i];
+        if token == "--" {
+            options_terminated = true;
+            i += 1;
+            continue;
+        }
+        if options_terminated {
+            return Some(Err(format!("unexpected argument: {token}")));
+        }
         if token == "--output-size" {
             i += 1;
             if i >= args.len() {
@@ -2183,6 +2803,7 @@ fn parse_node_get_args(args: &[String]) -> Option<Result<NodeGetArgs, String>> {
     Some(Ok(NodeGetArgs {
         graph,
         id,
+        options_terminated,
         output_size,
         full,
         debug: false,
@@ -2515,8 +3136,14 @@ fn is_read_only_tool(tool_name: &str) -> bool {
 fn parse_top_score(rendered: &str) -> i64 {
     rendered
         .lines()
-        .filter(|line| line.starts_with("# "))
         .find_map(|line| {
+            let line = line.trim();
+            if let Some(score) = line.strip_prefix("score:") {
+                return score.trim().parse::<i64>().ok();
+            }
+            if !line.starts_with("# ") {
+                return None;
+            }
             let open = line.rfind('(')?;
             let close = line.rfind(')')?;
             line[open + 1..close].parse::<i64>().ok()
@@ -2695,9 +3322,46 @@ mod tests {
     }
 
     #[test]
+    fn parse_node_find_args_preserves_option_terminator_query() {
+        let args = vec![
+            "fridge".to_owned(),
+            "node".to_owned(),
+            "find".to_owned(),
+            "--".to_owned(),
+            "--event-log".to_owned(),
+        ];
+        let parsed = parse_node_find_args(&args).expect("match").expect("ok");
+        assert!(parsed.options_terminated);
+        assert_eq!(parsed.queries, vec!["--event-log"]);
+    }
+
+    #[test]
+    fn normalize_canonical_args_separates_root_and_graph_options() {
+        let normalized = normalize_canonical_args(
+            ["kg", "graph", "--event-log", "--legacy", "fridge", "stats"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        );
+        assert!(normalized.has_graph_wrapper);
+        assert_eq!(normalized.global_options, vec!["--event-log"]);
+        assert_eq!(normalized.graph_options, vec!["--legacy"]);
+        assert_eq!(normalized.args, vec!["fridge", "stats"]);
+    }
+
+    #[test]
     fn parse_find_total_results_supports_shown_total_headers() {
         let rendered = "? lodowka (2/11)\n# concept:refrigerator | Lodowka [Concept]\n\n? api (1)\n# interface:smart_api | Smart API [Interface]\n";
         assert_eq!(parse_find_total_results(rendered), Some(12));
+    }
+
+    #[test]
+    fn parse_top_score_supports_current_and_legacy_formats() {
+        assert_eq!(
+            parse_top_score("? query (2)\nscore: 1053\n# node | Name [Concept]"),
+            1053
+        );
+        assert_eq!(parse_top_score("# node | Name (914)"), 914);
     }
 
     #[test]
@@ -2856,6 +3520,7 @@ mod tests {
         let result = server
             .kg(Parameters(KgScriptArgs {
                 script: "fridge edge add process:defrost AVAILABLE_IN interface:smart_api --detail \"Proces rozmrazania dostepny z API\"".to_owned(),
+                graph: None,
                 mode: None,
                 debug: false,
             }))
@@ -2885,6 +3550,7 @@ mod tests {
         let result = server
             .kg(Parameters(KgScriptArgs {
                 script: "fridge node get".to_owned(),
+                graph: None,
                 mode: Some("best_effort".to_owned()),
                 debug: false,
             }))

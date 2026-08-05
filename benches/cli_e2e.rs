@@ -118,12 +118,28 @@ fn write_json(path: &Path, graph: &GraphFile) {
 }
 
 fn run_kg(cwd: &Path, args: &[OsString]) -> Vec<u8> {
-    let out = Command::new(kg_bin())
-        .current_dir(cwd)
-        .args(args)
-        .output()
-        .expect("run kg");
-    assert!(out.status.success(), "kg failed: status={}", out.status);
+    let mut command = Command::new(kg_bin());
+    command.current_dir(cwd).env("HOME", cwd);
+    #[cfg(windows)]
+    command.env("USERPROFILE", cwd);
+
+    let out = command.args(args).output().unwrap_or_else(|err| {
+        panic!(
+            "failed to run kg: executable={:?}, cwd={}, args={args:?}: {err}",
+            kg_bin(),
+            cwd.display()
+        )
+    });
+    assert!(
+        out.status.success(),
+        "kg failed\nexecutable: {:?}\ncwd: {}\nargs: {:?}\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        kg_bin(),
+        cwd.display(),
+        args,
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
     out.stdout
 }
 

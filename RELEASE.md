@@ -1,3 +1,22 @@
+# kg v0.3.0
+
+Feature release: makes MCP graph scope explicit, tightens canonical/SCL script handling, and preserves feedback workflows.
+
+## Highlights
+
+- add the top-level MCP `graph` argument as the preferred graph selector
+- persist `use <graph>` over later lines in the same script
+- reject graph-scoped operations without `graph`, `use <graph>`, or an explicit canonical graph prefix instead of silently choosing a default
+- improve canonical CLI/SCL grammar handling while preserving feedback-required and passive feedback behavior
+
+## Installation
+
+```sh
+curl -sSL https://raw.githubusercontent.com/nnar1o/kg/master/install.sh | sh
+```
+
+## Previous: v0.2.24
+
 # kg v0.2.24
 
 Patch release: aligns MCP/SCL prompts and documentation with the current three-tool surface, correcting retrospective, importance, and provenance guidance.

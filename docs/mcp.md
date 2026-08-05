@@ -13,10 +13,10 @@ If you are new to MCP, start with `kg-mcp` as a local stdio process (no network 
 
 Start with `kg_schema` so you can see valid relations, allowed source/target types, and ID prefixes before mutating the graph. Call `kg_help <domain>` (domains: `node`, `edge`, `graph`, `schema`, `kql`, `feedback`, `batch`, `script`, `all`) for detailed syntax and examples.
 
-Example first command through MCP shell tool:
+Example first command through MCP tool (the explicit `graph` argument is preferred):
 
 ```text
-graph fridge node find refrigerator
+kg(graph: "fridge", script: "node find refrigerator")
 ```
 
 ## Running
@@ -75,10 +75,38 @@ All kg operations are exposed through **3 tools**. The `kg` script runner handle
 
 Execute one or more kg commands separated by `;` or newlines. Lines starting with `#` are comments. Feedback lines (`uid=...`) are buffered and flushed before the next non-feedback command.
 
-Parameters: `script` (string), `mode` (`best_effort`|`strict`, default `best_effort`), `debug` (bool, optional).
+Parameters: `graph` (string, optional and preferred for graph-scoped scripts), `script` (string), `mode` (`best_effort`|`strict`, default `best_effort`), `debug` (bool, optional).
+
+#### Graph scoping
+
+Pass `graph: "<name>"` explicitly to `kg` for graph-scoped commands. The
+argument is the preferred way to select a graph and applies to graph-scoped
+lines in the script:
 
 ```text
-graph fridge node find refrigerator --output-size 1200; uid=abc123 YES; graph fridge node get concept:refrigerator --full
+kg(graph: "fridge", script: "node find refrigerator --output-size 1200; node get concept:refrigerator --full")
+```
+
+If `graph` is not supplied, every graph-scoped operation must select its graph
+in the script with `use <graph>` or with an explicit canonical graph prefix.
+Otherwise the operation is rejected; there is no implicit fallback graph.
+For example, these are valid alternatives:
+
+```text
+kg(script: "use fridge; node find refrigerator; node get concept:refrigerator")
+kg(script: "graph fridge node find refrigerator")
+```
+
+`use <graph>` persists for all later lines in the same script, so one `use`
+line can scope multiple operations. A bare graph-scoped command such as
+`kg(script: "node find refrigerator")` is rejected when none of these three
+selection mechanisms is present.
+
+For example, a feedback flow can use the same explicit graph argument for
+every graph-scoped line:
+
+```text
+kg(graph: "fridge", script: "node find refrigerator --output-size 1200; uid=abc123 YES; node get concept:refrigerator --full")
 ```
 
 The shell tool passes normal CLI flags through unchanged. For read/search flows it mirrors the CLI surface for `node find`, `node get`, and `kql`, including `--output-size`, `--limit`, `--mode`, and `--full`.
@@ -110,7 +138,7 @@ Returns valid node types, relations, ID prefixes, and edge rules. No parameters.
 ```
 kg_schema()                              → discover valid types/relations
 kg_help(domain="node")                   → learn node CRUD with examples
-kg(script="fridge node find 'compressor'") → execute
+kg(graph="fridge", script="node find 'compressor'") → execute
 ```
 
 ## Resources

@@ -239,6 +239,11 @@ fn run_kg(client: &mut McpClient, script: &str) -> Value {
     client.call_tool("kg", json!({ "script": script }))
 }
 
+/// Run a `kg` tool script with an explicit top-level graph argument.
+fn run_kg_with_graph(client: &mut McpClient, graph: &str, script: &str) -> Value {
+    client.call_tool("kg", json!({ "graph": graph, "script": script }))
+}
+
 /// Run a `kg` tool script and return the text output.
 fn run_kg_text(client: &mut McpClient, script: &str) -> String {
     let resp = run_kg(client, script);
@@ -267,6 +272,233 @@ fn mcp_lists_exactly_3_tools() {
     names.sort();
 
     assert_eq!(names, vec!["kg", "kg_help", "kg_schema"]);
+
+    let kg_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "kg")
+        .expect("kg tool");
+    assert!(kg_tool["inputSchema"]["properties"]["graph"].is_object());
+    let graph_description = kg_tool["inputSchema"]["properties"]["graph"]["description"]
+        .as_str()
+        .expect("graph description");
+    assert!(graph_description.contains("active graph"));
+}
+
+#[test]
+fn mcp_kg_rejects_graph_scoped_scl_without_graph() {
+    let (_dir, mut client) = setup();
+
+    let response = run_kg(&mut client, "find refrigerator");
+
+    assert!(McpClient::tool_is_error(&response));
+    let text = McpClient::tool_text(&response);
+    assert!(text.contains("top-level `graph` argument"), "{}", text);
+    assert!(text.contains("use <graph>"), "{}", text);
+    assert!(text.contains("kg <graph>"), "{}", text);
+}
+
+#[test]
+fn mcp_kg_rejects_graphless_canonical_commands() {
+    let (_dir, mut client) = setup();
+
+    for script in [
+        "kg --event-log vectors stats",
+        "kg --event-log feedback-summary",
+        "--legacy node find query",
+    ] {
+        let response = run_kg(&mut client, script);
+        assert!(McpClient::tool_is_error(&response), "script: {script}");
+        let text = McpClient::tool_text(&response);
+        assert!(text.contains("top-level `graph` argument"), "{}", text);
+        assert!(text.contains("use <graph>"), "{}", text);
+        assert!(text.contains("kg <graph>"), "{}", text);
+    }
+}
+
+#[test]
+fn mcp_kg_preserves_global_graph_admin_commands_without_graph() {
+    let (_dir, mut client) = setup();
+
+    for script in ["list", "kg list", "kg --event-log list"] {
+        let response = run_kg(&mut client, script);
+        assert!(!McpClient::tool_is_error(&response), "script: {script}");
+    }
+}
+
+#[test]
+fn mcp_kg_accepts_graph_wrapper_around_global_options() {
+    let (_dir, mut client) = setup();
+    let output = run_kg_text(&mut client, "kg graph create wrapper_graph");
+    assert!(output.contains("created"), "graph creation: {}", output);
+
+    for script in [
+        "kg --event-log graph wrapper_graph stats",
+        "kg graph --event-log wrapper_graph stats",
+        "kg graph --legacy wrapper_graph stats",
+        "kg graph wrapper_graph --legacy stats",
+    ] {
+        let response = run_kg(&mut client, script);
+        assert!(!McpClient::tool_is_error(&response), "script: {script}");
+        assert!(McpClient::tool_text(&response).contains("stats"));
+    }
+}
+
+#[test]
+fn mcp_kg_scopes_canonical_list_options() {
+    let (_dir, mut client) = setup();
+    let output = run_kg_text(&mut client, "kg graph create list_graph");
+    assert!(output.contains("created"), "graph creation: {}", output);
+
+    for script in [
+        "list -l 5",
+        "list -s 2026-01-01",
+        "list --limit=5",
+        "list -l5",
+        "list -s2026-01-01",
+    ] {
+        let response = run_kg(&mut client, script);
+        assert!(McpClient::tool_is_error(&response), "script: {script}");
+        assert!(McpClient::tool_text(&response).contains("graph is required"));
+
+        let response = run_kg_with_graph(&mut client, "list_graph", script);
+        assert!(!McpClient::tool_is_error(&response), "script: {script}");
+    }
+}
+
+#[test]
+fn mcp_kg_graph_argument_scopes_scl_script() {
+    let (_dir, mut client) = setup();
+    let output = run_kg_text(&mut client, "kg graph create scoped_graph");
+    assert!(output.contains("created"), "graph creation: {}", output);
+
+    let response = run_kg_with_graph(
+        &mut client,
+        "scoped_graph",
+        "add concept:scoped_node --name Scoped",
+    );
+    assert!(!McpClient::tool_is_error(&response));
+    let output = run_kg_text(&mut client, "kg scoped_graph node get concept:scoped_node");
+    assert!(output.contains("Scoped"), "scoped graph output: {}", output);
+
+    let response = run_kg_with_graph(&mut client, "scoped_graph", "node find Scoped");
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("scoped_node"));
+
+    let response = run_kg_with_graph(&mut client, "scoped_graph", "kg node find Scoped");
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("scoped_node"));
+
+    let response = run_kg_with_graph(&mut client, "scoped_graph", "find Scoped");
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("scoped_node"));
+
+    for script in [
+        "--legacy node find Scoped",
+        "use scoped_graph; --legacy node find Scoped",
+    ] {
+        let response = if script.starts_with("use ") {
+            run_kg(&mut client, script)
+        } else {
+            run_kg_with_graph(&mut client, "scoped_graph", script)
+        };
+        assert!(McpClient::tool_is_error(&response), "script: {script}");
+    }
+
+    for script in [
+        "kg scoped_graph node find Scoped --legacy",
+        "kg scoped_graph node --legacy find Scoped",
+    ] {
+        let response = run_kg(&mut client, script);
+        assert!(McpClient::tool_is_error(&response), "script: {script}");
+    }
+
+    let response = run_kg_with_graph(&mut client, "scoped_graph", "get concept:scoped_node");
+    assert!(!McpClient::tool_is_error(&response));
+    let structured = response["result"]
+        .get("structuredContent")
+        .or_else(|| response["result"].get("structured_content"))
+        .expect("structured content for SCL get");
+    assert!(
+        structured["requires_feedback"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    );
+
+    for script in [
+        "kg scoped_graph node find Scoped --event-log",
+        "kg scoped_graph --event-log node find Scoped",
+    ] {
+        let response = run_kg(&mut client, script);
+        assert!(!McpClient::tool_is_error(&response), "script: {script}");
+        assert!(McpClient::tool_text(&response).contains("scoped_node"));
+    }
+
+    let response = run_kg(&mut client, "kg scoped_graph node find -- --event-log");
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("--event-log"));
+
+    let response = run_kg_with_graph(
+        &mut client,
+        "scoped_graph",
+        "kg --event-log node find Scoped",
+    );
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("scoped_node"));
+
+    let response = run_kg_with_graph(
+        &mut client,
+        "scoped_graph",
+        "kg scoped_graph node get concept:scoped_node",
+    );
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("Scoped"));
+
+    let response = run_kg_with_graph(
+        &mut client,
+        "other_graph",
+        "kg scoped_graph node find Scoped",
+    );
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("scoped_node"));
+
+    let response = run_kg_with_graph(
+        &mut client,
+        "other_graph",
+        "kg --event-log scoped_graph node find Scoped",
+    );
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("scoped_node"));
+}
+
+#[test]
+fn mcp_kg_use_persists_across_script_commands() {
+    let (_dir, mut client) = setup();
+    for graph in ["first_graph", "second_graph"] {
+        let output = run_kg_text(&mut client, &format!("kg graph create {graph}"));
+        assert!(output.contains("created"), "graph creation: {}", output);
+    }
+
+    let response = run_kg(
+        &mut client,
+        "use first_graph; add concept:first_node --name First\nuse second_graph; add concept:second_node --name Second",
+    );
+    assert!(!McpClient::tool_is_error(&response));
+
+    let response = run_kg(
+        &mut client,
+        "use first_graph; kg --event-log node find First",
+    );
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("first_node"));
+
+    let response = run_kg(&mut client, "use first_graph; find First");
+    assert!(!McpClient::tool_is_error(&response));
+    assert!(McpClient::tool_text(&response).contains("first_node"));
+
+    let first = run_kg_text(&mut client, "kg first_graph node get concept:first_node");
+    assert!(first.contains("First"), "first graph output: {}", first);
+    let second = run_kg_text(&mut client, "kg second_graph node get concept:second_node");
+    assert!(second.contains("Second"), "second graph output: {}", second);
 }
 
 #[test]
@@ -471,7 +703,7 @@ fn mcp_feedback_auto_skip_on_high_score() {
     // The exact match should produce a high BM25 score (>= 800 threshold)
     let output = run_kg_text(
         &mut client,
-        r#"kg feedback_graph node find "ultra_specific_thing_xyz_123""#,
+        r#"kg --event-log feedback_graph node find "ultra_specific_thing_xyz_123""#,
     );
 
     // When feedback is auto-skipped (top_score >= 800), no NUDGE line should appear
@@ -486,5 +718,38 @@ fn mcp_feedback_auto_skip_on_high_score() {
         output.contains("very_specific"),
         "find should return our specific node, got:\n{}",
         output
+    );
+}
+
+#[test]
+fn mcp_event_log_preserves_feedback_and_passive_resolution() {
+    let (_dir, mut client) = setup();
+
+    let output = run_kg_text(&mut client, "kg graph create event_feedback_graph");
+    assert!(output.contains("created"), "graph creation: {}", output);
+    for (id, name) in [
+        ("concept:event_first", "event_first_match"),
+        ("concept:event_second", "event_second_match"),
+    ] {
+        let script = format!(
+            "kg event_feedback_graph node add {id} --type Concept --name \"{name}\" --description \"event feedback test\" --domain-area testing --provenance U --confidence 0.9 --importance 0.8 --created-at \"2026-06-26T12:00:00Z\" --source \"test\""
+        );
+        let output = run_kg_text(&mut client, &script);
+        assert!(!output.contains("ERROR"), "node add: {}", output);
+    }
+
+    let response = run_kg(
+        &mut client,
+        "kg --event-log event_feedback_graph node find event --with-feedback; kg --event-log event_feedback_graph node get concept:event_first",
+    );
+    assert!(!McpClient::tool_is_error(&response));
+    let structured = response["result"]
+        .get("structuredContent")
+        .or_else(|| response["result"].get("structured_content"))
+        .expect("structured content");
+    assert!(
+        structured["steps"]
+            .as_array()
+            .is_some_and(|steps| { steps.iter().any(|step| step["kind"] == "passive_feedback") })
     );
 }
